@@ -1,0 +1,26 @@
+{
+  "name": "nifty-options-engine",
+  "version": "0.1.0",
+  "description": "Feature engine + Phase 1 signal engine + backtest harness for the Nifty options project",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/features/__tests__/*.test.ts src/backtest/__tests__/*.test.ts src/forecast/__tests__/*.test.ts",
+    "features": "tsx src/index.ts features",
+    "signal": "tsx src/index.ts signal",
+    "backtest": "tsx src/index.ts backtest",
+    "construct": "tsx src/index.ts construct",
+    "backtest-construction": "tsx src/index.ts backtest-construction",
+    "forecast": "tsx src/index.ts forecast"
+  },
+  "dependencies": {
+    "pg": "^8.11.5",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
