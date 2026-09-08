@@ -41,5 +41,20 @@ services:
         condition: service_healthy
     profiles: ["engine"]
 
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      API_PORT: 4100
+    ports:
+      - "${API_PORT:-4100}:4100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   nifty-db:

@@ -11,3 +11,4 @@ db/data/
 db/postgres.log
 releases/*.tar.gz
 releases/SHA256SUMS
+.run/
