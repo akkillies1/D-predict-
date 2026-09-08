@@ -1,0 +1,1 @@
+Generated release archives belong here for local testing. Keep production releases in the repository hosting service's Releases area and publish SHA256SUMS beside each archive. Do not commit generated archives or secrets.

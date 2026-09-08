@@ -7,3 +7,7 @@ venv/
 .DS_Store
 node_modules/
 dist/
+db/data/
+db/postgres.log
+releases/*.tar.gz
+releases/SHA256SUMS

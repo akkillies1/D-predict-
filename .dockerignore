@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+venv
+node_modules
+dist
+__pycache__
+*.pyc
+db/data
+db/postgres.log
+*.zip
