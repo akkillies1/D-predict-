@@ -87,6 +87,42 @@ app.get("/api/options/chain", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 
+app.get("/api/forecast", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = String(req.query.symbol ?? "NIFTY").toUpperCase();
+  const horizonDays = Math.min(10, Math.max(1, Number(req.query.horizon ?? 5)));
+  try {
+    const result = await pool.query(`select date(pb.market_timestamp at time zone 'Asia/Kolkata') as trading_day, (array_agg(pb.close order by pb.market_timestamp desc))[1] as close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 group by 1 order by 1 desc limit 60`, [symbol]);
+    const closes = result.rows.reverse().map(row => Number(row.close)).filter(Number.isFinite);
+    if (closes.length < 5) return res.status(404).json({ ok: false, error: "INSUFFICIENT_HISTORY", daysOfHistoryUsed: closes.length, required: 5 });
+    const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index]));
+    const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+    const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, returns.length - 1);
+    const dailyVolatility = Math.sqrt(variance);
+    const spot = closes[closes.length - 1];
+    const paths = 1000;
+    const bands = [{ day: 0, p10: spot, p25: spot, median: spot, p75: spot, p90: spot }];
+    let terminalPrices: number[] = [];
+    const quantile = (values: number[], probability: number) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(probability * (sorted.length - 1)))]; };
+    for (let day = 1; day <= horizonDays; day += 1) {
+      const prices = Array.from({ length: paths }, () => {
+        let price = spot;
+        for (let step = 0; step < day; step += 1) {
+          const u = Math.max(Number.EPSILON, Math.random());
+          const v = Math.max(Number.EPSILON, Math.random());
+          const gaussian = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+          price *= Math.exp(dailyVolatility * gaussian);
+        }
+        return price;
+      });
+      terminalPrices = prices;
+      bands.push({ day, p10: quantile(prices, 0.1), p25: quantile(prices, 0.25), median: quantile(prices, 0.5), p75: quantile(prices, 0.75), p90: quantile(prices, 0.9) });
+    }
+    const above = terminalPrices.filter(price => price > spot).length / terminalPrices.length;
+    return res.json({ ok: true, symbol, spot, dailyVolatility, daysOfHistoryUsed: closes.length, horizonDays, paths, probabilityAboveSpot: above, probabilityBelowSpot: 1 - above, bands });
+  } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
+});
+
 const server = app.listen(port, "127.0.0.1", () => console.log(`D-predict local API listening on 127.0.0.1:${port}`));
 const shutdown = async () => { server.close(); await pool?.end(); };
 process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);

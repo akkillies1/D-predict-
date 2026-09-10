@@ -4,6 +4,10 @@ export type LocalHealth = { ok: boolean; database?: string; time?: string };
 export type MarketOverview = { ok: true; symbol: string; timestamp: string; open: number; high: number; low: number; close: number; volume: number | null };
 export type Instrument = { symbol: string; exchange: string; lotSize: number; isActive: boolean };
 export type PriceBar = { timestamp: string; open: number; high: number; low: number; close: number; volume: number | null };
+export type Signal = { id: string; symbol: string; timestamp: string; strategyVersion: string; modelVersion: string; direction: "BULLISH" | "BEARISH" | "NEUTRAL"; confidence: number; regime: string | null; reasonCodes: string[]; parameters: Record<string, unknown> };
+export type OptionRow = { expiry_date: string; strike: number; option_type: "CE" | "PE"; timestamp: string; ltp: number | null; bid: number | null; ask: number | null; oi: number | null; oiChange: number | null; iv: number | null };
+export type ForecastBand = { day: number; p10: number; p25: number; median: number; p75: number; p90: number };
+export type Forecast = { symbol: string; spot: number; dailyVolatility: number; daysOfHistoryUsed: number; horizonDays: number; paths: number; probabilityAboveSpot: number; probabilityBelowSpot: number; bands: ForecastBand[] };
 
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> {
   const response = await fetch(`${API_BASE}/health`, { signal });
@@ -38,4 +42,24 @@ export async function getMarketHistory(symbol: string, signal?: AbortSignal): Pr
   if (!response.ok) throw new Error(`History API returned ${response.status}`);
   const payload = await response.json() as { rows: PriceBar[] };
   return payload.rows;
+}
+
+export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal> {
+  const response = await fetch(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal });
+  if (!response.ok) throw new Error(`Signal API returned ${response.status}`);
+  const payload = await response.json() as { signal: Signal };
+  return payload.signal;
+}
+
+export async function getOptionChain(symbol: string, signal?: AbortSignal): Promise<OptionRow[]> {
+  const response = await fetch(`${API_BASE}/api/options/chain?symbol=${encodeURIComponent(symbol)}`, { signal });
+  if (!response.ok) throw new Error(`Option API returned ${response.status}`);
+  const payload = await response.json() as { rows: OptionRow[] };
+  return payload.rows;
+}
+
+export async function getForecast(symbol: string, signal?: AbortSignal): Promise<Forecast> {
+  const response = await fetch(`${API_BASE}/api/forecast?symbol=${encodeURIComponent(symbol)}&horizon=5`, { signal });
+  if (!response.ok) throw new Error(`Forecast API returned ${response.status}`);
+  return response.json() as Promise<Forecast>;
 }
