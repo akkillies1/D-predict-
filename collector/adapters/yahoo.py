@@ -19,9 +19,7 @@ class YahooAdapter:
     def fetch_price_bars(
         self, symbol: str, period: str = "1d", interval: str = "1m"
     ) -> list[CanonicalPriceBar]:
-        yahoo_symbol = config.yahoo_symbol_map.get(symbol)
-        if not yahoo_symbol:
-            raise ValueError(f"No Yahoo symbol mapping for {symbol}")
+        yahoo_symbol = config.yahoo_symbol_map.get(symbol, symbol)
 
         df = yf.download(
             yahoo_symbol, period=period, interval=interval, progress=False

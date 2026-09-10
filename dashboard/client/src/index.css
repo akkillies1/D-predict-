@@ -1,0 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: 'Manrope', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --font-display: 'Space Grotesk', sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.8rem;
+  --background: #07100f;
+  --foreground: #e9eee6;
+  --card: #0d1917;
+  --card-foreground: #e9eee6;
+  --popover: #101f1c;
+  --popover-foreground: #e9eee6;
+  --primary: #c8f169;
+  --primary-foreground: #12200c;
+  --secondary: #152622;
+  --secondary-foreground: #b9c5bd;
+  --muted: #12201d;
+  --muted-foreground: #80908a;
+  --accent: #19332c;
+  --accent-foreground: #dbf5b2;
+  --destructive: #f0776b;
+  --destructive-foreground: #fff5f2;
+  --border: #1e332f;
+  --input: #223b35;
+  --ring: #c8f169;
+  --sidebar: #091412;
+  --sidebar-foreground: #dce6df;
+  --sidebar-primary: #c8f169;
+  --sidebar-primary-foreground: #12200c;
+  --sidebar-accent: #142a25;
+  --sidebar-accent-foreground: #c8f169;
+  --sidebar-border: #152a26;
+  --sidebar-ring: #c8f169;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Manrope', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+button, a { -webkit-tap-highlight-color: transparent; }
+button:active { transform: scale(.985); }
+::selection { background: rgba(200,241,105,.24); color: #f4ffd9; }
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]), a[href], select:not(:disabled) { @apply cursor-pointer; }
+}
+
+@layer utilities {
+  .font-display { font-family: 'Space Grotesk', sans-serif; }
+  .font-mono-ui { font-family: 'DM Mono', monospace; }
+  .text-balance { text-wrap: balance; }
+}
+
+.cockpit-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 72% -12%, rgba(117, 184, 83, .14), transparent 29rem),
+    radial-gradient(circle at 15% 18%, rgba(38, 105, 91, .12), transparent 28rem),
+    #07100f;
+}
+.cockpit-grid {
+  background-image: linear-gradient(rgba(145, 190, 158, .035) 1px, transparent 1px), linear-gradient(90deg, rgba(145, 190, 158, .035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 75%);
+  pointer-events: none;
+}
+.glass-panel {
+  background: linear-gradient(135deg, rgba(19, 38, 33, .92), rgba(9, 22, 19, .95));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .16), inset 0 1px 0 rgba(221, 255, 208, .035);
+}
+.glow-lime { box-shadow: 0 0 0 1px rgba(200,241,105,.2), 0 0 28px rgba(200,241,105,.08); }
+.fade-up { animation: fade-up .5s cubic-bezier(.23,1,.32,1) both; }
+.fade-up-1 { animation-delay: 60ms; }
+.fade-up-2 { animation-delay: 120ms; }
+.fade-up-3 { animation-delay: 180ms; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .fade-up { animation: none; } }

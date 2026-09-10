@@ -78,6 +78,11 @@ class PostgresPersistence:
     def close(self) -> None:
         self._conn.close()
 
+    def active_symbols(self) -> list[str]:
+        with self._conn.cursor() as cur:
+            cur.execute("select symbol from instruments where is_active = true order by symbol")
+            return [row[0] for row in cur.fetchall()]
+
     def save_price_bars(self, bars: list[CanonicalPriceBar], ingestion_run_id: uuid.UUID) -> None:
         with self._conn.cursor() as cur:
             for bar in bars:

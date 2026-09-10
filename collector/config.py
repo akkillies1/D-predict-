@@ -28,7 +28,8 @@ class Config:
     nse_request_timeout_seconds: int = 10
     nse_max_retries: int = 3
 
-    # Yahoo adapter
+    # Yahoo adapter. Add symbols as plain Yahoo tickers (for example
+    # RELIANCE.NS) or use the built-in index aliases below.
     yahoo_symbol_map: dict = None  # set in __post_init__
 
     def __post_init__(self):

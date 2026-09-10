@@ -28,6 +28,26 @@ app.get("/api/data-health", async (_req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 
+app.get("/api/instruments", async (_req, res) => {
+  if (!pool) return noDb(res);
+  try {
+    const result = await pool.query("select symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\" from instruments order by symbol limit 500");
+    return res.json({ ok: true, instruments: result.rows });
+  } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
+});
+
+app.post("/api/instruments", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = String(req.body?.symbol ?? "").trim().toUpperCase();
+  const exchange = String(req.body?.exchange ?? "NSE").trim().toUpperCase();
+  const lotSize = Math.max(1, Number(req.body?.lotSize ?? 1));
+  if (!/^[A-Z0-9._^:-]{1,32}$/.test(symbol) || !Number.isInteger(lotSize)) return res.status(400).json({ ok: false, error: "INVALID_INSTRUMENT" });
+  try {
+    const result = await pool.query("insert into instruments (symbol, exchange, lot_size) values ($1, $2, $3) on conflict (symbol) do update set is_active = true returning symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\"", [symbol, exchange, lotSize]);
+    return res.status(201).json({ ok: true, instrument: result.rows[0], message: "Added. The collector will discover this symbol on its next poll." });
+  } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
+});
+
 app.get("/api/market/:symbol/overview", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = req.params.symbol.toUpperCase();
@@ -35,6 +55,16 @@ app.get("/api/market/:symbol/overview", async (req, res) => {
     const result = await pool.query(`select i.symbol, pb.market_timestamp, pb.open, pb.high, pb.low, pb.close, pb.volume from instruments i left join lateral (select market_timestamp, open, high, low, close, volume from price_bars where instrument_id=i.instrument_id and timeframe='1m' order by market_timestamp desc limit 1) pb on true where i.symbol=$1 limit 1`, [symbol]);
     if (!result.rows.length || !result.rows[0].market_timestamp) return res.status(404).json({ ok: false, error: "NO_MARKET_DATA" });
     const row = result.rows[0]; return res.json({ ok: true, symbol: row.symbol, timestamp: iso(row.market_timestamp), open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: row.volume === null ? null : Number(row.volume) });
+  } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
+});
+
+app.get("/api/market/:symbol/history", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = req.params.symbol.toUpperCase();
+  const limit = Math.min(500, Math.max(10, Number(req.query.limit ?? 120)));
+  try {
+    const result = await pool.query(`select pb.market_timestamp, pb.open, pb.high, pb.low, pb.close, pb.volume from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 and pb.timeframe='1m' order by pb.market_timestamp desc limit $2`, [symbol, limit]);
+    return res.json({ ok: true, symbol, rows: result.rows.reverse().map(row => ({ timestamp: iso(row.market_timestamp), open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: row.volume === null ? null : Number(row.volume) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 

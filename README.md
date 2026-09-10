@@ -32,6 +32,8 @@ cd D-predict-
 
 The `dp` command installs Python, engine, and backend dependencies, creates `.env`, initializes the private local PostgreSQL cluster, and starts the local API. The API listens on `http://127.0.0.1:4100` by default.
 
+After the first initialization, the normal one-command workflow is `./dp start`. It starts the private PostgreSQL database, local API, bundled dashboard, and collector. Open `http://127.0.0.1:3000`. The collector uses Yahoo Finance for price bars and NSE for NIFTY/BANKNIFTY option chains; it does not invent values. If no row has been collected, the UI shows `NO DATA` rather than a fabricated price.
+
 ### Path B: Download without Git
 
 Download a versioned release archive from the repository Releases page, extract it, and run:
@@ -81,7 +83,11 @@ Docker keeps PostgreSQL data in a named volume and is the most reproducible path
 ./dp update     Pull Git changes and re-run initialization
 ```
 
-The dashboard should use `http://127.0.0.1:4100` as its local API base URL. The API exposes `/health`, `/api/data-health`, `/api/market/NIFTY/overview`, `/api/signals/latest`, and `/api/options/chain`. The collector remains explicit (`./dp collect`) so users can confirm data-provider and database settings before polling.
+The dashboard should use `http://127.0.0.1:4100` as its local API base URL. The API exposes `/health`, `/api/data-health`, `/api/instruments`, `/api/market/:symbol/overview`, `/api/market/:symbol/history`, `/api/signals/latest`, and `/api/options/chain`.
+
+## Analyze an individual script
+
+The UI ticker selector reads the local `instruments` table. Add any Yahoo symbol from the UI, for example `RELIANCE.NS`, `TCS.NS`, or `^NSEI`, and the collector will fetch its price bars on the next cycle. NIFTY and BANKNIFTY receive NSE option-chain collection; ordinary equities receive price data and are not incorrectly shown as having options data.
 
 ## Optional AI providers
 

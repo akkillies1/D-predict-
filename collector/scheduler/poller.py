@@ -25,7 +25,10 @@ class Poller:
 
     def run_option_chain_poll(self) -> None:
         run_id = uuid.uuid4()
-        for symbol in config.instruments:
+        for symbol in self._db.active_symbols():
+            if symbol not in {"NIFTY", "BANKNIFTY"}:
+                logger.info("skipping NSE option chain for non-index symbol %s", symbol)
+                continue
             try:
                 snapshots = self._nse.fetch_option_chain(symbol)
             except Exception:
@@ -50,7 +53,7 @@ class Poller:
 
     def run_price_bar_poll(self) -> None:
         run_id = uuid.uuid4()
-        for symbol in config.instruments:
+        for symbol in self._db.active_symbols():
             try:
                 bars = self._yahoo.fetch_price_bars(symbol)
             except Exception:
@@ -72,6 +75,9 @@ class Poller:
                 "price_bar_poll symbol=%s run=%s saved=%d dropped=%d",
                 symbol, run_id, len(valid), dropped,
             )
+
+    def _symbols(self) -> list[str]:
+        return self._db.active_symbols()
 
     def run_forever(self) -> None:
         """Simple blocking loop for a first version. Swap for a proper

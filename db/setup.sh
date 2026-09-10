@@ -37,7 +37,7 @@ done
 
 createdb -h localhost -p "$PORT" -U postgres nifty
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/schema.sql"
-psql -h localhost -p "$PORT" -U postgres -d nifty -c "insert into instruments (symbol, lot_size) values ('NIFTY', 75);"
+psql -h localhost -p "$PORT" -U postgres -d nifty -c "insert into instruments (symbol, lot_size) values ('NIFTY', 75), ('BANKNIFTY', 30);"
 
 pg_ctl -D "$DATA_DIR" stop
 
