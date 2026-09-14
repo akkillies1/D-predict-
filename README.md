@@ -22,13 +22,13 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Causal MarketState layer separate from BUY/SELL.
 - [x] Causal benchmark/sector context primitives and tests.
 - [x] Active position lifecycle ledger and exposure-release tests.
+- [x] Deterministic signal-quality / `NO_TRADE` primitive and tests.
 
 ### Next gates
 
-- [ ] Integrate context features into versioned OOS datasets.
-- [ ] Signal-quality and explicit `NO_TRADE` decision layer.
+- [ ] Integrate context/state/quality into versioned OOS datasets.
 - [ ] Wire active-position ledger into backtest/shadow engines.
-- [ ] Active rather than cumulative exposure accounting in portfolio simulation.
+- [ ] Replace cumulative exposure with active-position exposure.
 - [ ] Deterministic forecast seed/version provenance.
 - [ ] Cross-stock validation harness and report.
 - [ ] Approved-model live prediction runner.
@@ -38,42 +38,31 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 
 ## MarketState
 
-`training/market_state.py` provides descriptive causal states:
-
-`TREND_UP`, `TREND_DOWN`, `RANGE`, `RECOVERY`, `BREAKDOWN`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `OVERSOLD_TREND`, `OVERBOUGHT_TREND`, `REVERSAL_ATTEMPT`, `INSUFFICIENT_DATA`.
+`training/market_state.py` provides descriptive causal states: `TREND_UP`, `TREND_DOWN`, `RANGE`, `RECOVERY`, `BREAKDOWN`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `OVERSOLD_TREND`, `OVERBOUGHT_TREND`, `REVERSAL_ATTEMPT`, `INSUFFICIENT_DATA`.
 
 MarketState is **not** a trade signal. Oversold/overbought are structural modifiers, not automatic reversal instructions.
 
-```text
-MARKET STATE
-  → trend strength / volatility regime / regime confidence
-  → MODEL DIRECTION + FORECAST CONFIDENCE
-  → SIGNAL QUALITY / NO TRADE
-  → EXECUTABLE POSITION
-```
-
 ## Point-in-time context
 
-`training/context_features.py` computes benchmark and sector context using only observations at or before timestamp `T`:
+`training/context_features.py` computes benchmark and sector context using only observations at or before timestamp `T`: benchmark return 1/5/20, sector return 1/5/20, stock-vs-benchmark relative strength 1/5/20, 60-row stock return context and stock-vs-sector relative strength.
 
-- benchmark return 1/5/20;
-- sector return 1/5/20;
-- stock-vs-benchmark relative strength 1/5/20;
-- 60-row stock return context;
-- stock-vs-sector relative strength;
-- benchmark/sector provenance.
+These primitives are **not yet wired into production training**. They must first pass cross-stock leakage and OOS validation. No news, analyst opinions or observed September-2026 outcomes are used.
 
-The primitives are **not yet wired into the production training dataset**. They must first pass cross-stock leakage and OOS validation. No news, analyst opinions, or observed September-2026 outcomes are used.
+## Signal quality / NO_TRADE
+
+`training/signal_quality.py` separates model probability from signal quality. It considers forecast confidence, regime confidence, trend strength, optional relative strength/sector alignment and market-data freshness. Stale/offline data, FLAT predictions and low confidence become explicit `NO_TRADE` decisions.
+
+This is intentionally deterministic and is not tuned against future returns.
 
 ## Active position lifecycle
 
-`training/position_ledger.py` now models portfolio state explicitly:
+`training/position_ledger.py` models portfolio state explicitly:
 
 ```text
 OPEN → CLOSED
 ```
 
-Each position records symbol, direction, entry/exit timestamps and prices, planned exit, weight, allocated capital, status and realized P&L. By default a symbol cannot have overlapping active positions. Closing a position releases its exposure and allocated capital. This is a simulation ledger, not a broker interface.
+Each position records symbol, direction, entry/exit timestamps and prices, planned exit, weight, allocated capital, status and realized P&L. By default a symbol cannot have overlapping active positions. Closing a position releases exposure and allocated capital. This is a simulation ledger, not a broker interface.
 
 ## Economic-event invariant
 
@@ -123,6 +112,7 @@ MARKET DATA
 - `training/build_dataset.py` — existing 1d/3d/5d technical features/labels.
 - `training/market_state.py` — causal market-state classification.
 - `training/context_features.py` — causal benchmark/sector context.
+- `training/signal_quality.py` — deterministic quality / no-trade decisions.
 - `training/position_ledger.py` — active position lifecycle and exposure release.
 - `training/train_baseline.py` — classical classifier/regressor.
 - `training/walk_forward.py` — expanding-window OOS predictions.
@@ -152,12 +142,12 @@ The new layers are not considered production-validated until the full suite and 
 
 - [x] Causal MarketState layer.
 - [x] Causal benchmark/sector context primitives.
+- [x] Signal-quality / `NO_TRADE` primitive.
 - [x] Active position lifecycle primitive.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
-- [ ] Context integration into OOS datasets.
+- [ ] Context/state/quality integration into OOS datasets.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Signal-quality / `NO_TRADE`.
 - [ ] Executable-outcome confidence calibration.
 - [ ] Cross-stock harness: SBI, HDFC BANK, RELIANCE, ONGC, LT, ADANIPORTS.
 - [ ] Human + machine research report.
@@ -171,7 +161,7 @@ The new layers are not considered production-validated until the full suite and 
 - [x] Unified prediction/trade window.
 - [x] Active-position ledger primitive.
 - [ ] Integrate active positions into backtest/shadow.
-- [ ] Active exposure accounting in portfolio simulation.
+- [ ] Active exposure accounting.
 - [ ] Deterministic forecast provenance.
 - [ ] Approved live prediction runner.
 - [ ] Human-vs-model game.
