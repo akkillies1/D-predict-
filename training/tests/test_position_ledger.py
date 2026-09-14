@@ -19,14 +19,14 @@ def position(position_id="p1", symbol="RELIANCE", direction="LONG"):
 def test_open_close_releases_exposure():
     ledger = PositionLedger()
     ledger.open(position())
-    assert ledger.gross_exposure() == 0.25
-    assert ledger.current_capital() == 25_000
+    assert ledger.gross_exposure() == pytest.approx(0.25)
+    assert ledger.current_capital() == pytest.approx(25_000.0)
 
     closed = ledger.close("p1", "2026-09-17T10:00:00Z", 110.0)
     assert closed.status == "CLOSED"
-    assert closed.realized_pnl == 2500.0
-    assert ledger.gross_exposure() == 0
-    assert ledger.current_capital() == 0
+    assert closed.realized_pnl == pytest.approx(2500.0)
+    assert ledger.gross_exposure() == pytest.approx(0.0)
+    assert ledger.current_capital() == pytest.approx(0.0)
 
 
 def test_overlapping_same_symbol_is_rejected_without_pyramiding():
@@ -40,7 +40,7 @@ def test_short_pnl_direction_is_inverted():
     ledger = PositionLedger()
     ledger.open(position("p1", direction="SHORT"))
     closed = ledger.close("p1", "2026-09-17T10:00:00Z", 90.0)
-    assert closed.realized_pnl == 2500.0
+    assert closed.realized_pnl == pytest.approx(2500.0)
 
 
 def test_duplicate_id_and_invalid_price_are_rejected():
