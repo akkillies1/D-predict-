@@ -1,6 +1,6 @@
 # D-predict
 
-D-predict is a local research and market-analysis cockpit for Indian equities and NIFTY/BANKNIFTY derivatives.
+D-predict is a local-first research and market-analysis cockpit for Indian equities and NIFTY/BANKNIFTY derivatives.
 
 It is designed around one principle: **do not turn a headline into a trade without checking the evidence around it, testing the idea against history, and measuring the model out of sample.**
 
@@ -28,6 +28,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Production favicon added and linked from the dashboard HTML.
 - [x] Vercel root build/output configuration added for the monorepo dashboard.
 - [x] `main` is the canonical development/deployment branch.
+- [x] One-command Windows local launcher starts the database, market API, collector and dashboard, performs health checks and opens the browser.
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Add reproducible dataset manifests and dataset fingerprints.
@@ -36,6 +37,17 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
 
 ## Future improvement checklist
+
+### Local-first runtime
+
+- [x] One-command Windows launcher for the local stack.
+- [x] Background startup for PostgreSQL, market API and collector through Docker Compose.
+- [x] Automatic dashboard startup and browser launch.
+- [x] Local health-check gate before opening the UI.
+- [ ] Add a polished cross-platform launcher for macOS/Linux.
+- [ ] Add graceful process supervision/restart for failed local services.
+- [ ] Add a desktop-style tray/stop experience after the local runtime is stable.
+- [ ] Package an optional Windows executable/installer.
 
 ### Data foundation
 
@@ -72,7 +84,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 
 - [ ] Reliable live ticker suggestions with exchange/company-name resolution.
 - [ ] Research terminal showing data provenance and freshness beside every key value.
-- [ ] Reproducible local setup and one-command health checks.
+- [x] Reproducible local setup and one-command health checks.
 - [ ] CI coverage for Python tests and dashboard typecheck/build.
 - [ ] Observability for collector/API/research failures.
 - [ ] No automated live order execution until research, backtest and paper-trading gates are satisfied.
@@ -83,6 +95,58 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Complex deep-learning models only after strong classical baselines are beaten out of sample.
 - [ ] LLM-assisted research workflows with evidence citations and strict source separation.
 - [ ] Advanced options strategy research after reliable historical options data is available.
+
+## Local-first startup
+
+The primary product target is a **single-command local application**, not a Vercel-hosted full stack.
+
+From the repository root on Windows:
+
+```powershell
+.\d-predict.cmd
+```
+
+or:
+
+```powershell
+.\d-predict.ps1
+```
+
+The launcher:
+
+1. checks that Docker Desktop is running;
+2. creates `.env` from `.env.example` when needed;
+3. starts PostgreSQL, the market API and collector in the background through Docker Compose;
+4. waits for `/health` on the market API;
+5. installs the dashboard dependencies from the committed `dashboard/pnpm-lock.yaml`;
+6. starts the dashboard in a background PowerShell process;
+7. detects the actual dashboard port if `3000` is already occupied;
+8. opens the dashboard automatically in the browser.
+
+The normal local experience should therefore become:
+
+```text
+Terminal
+   │
+   └── d-predict.cmd
+          │
+          ├── PostgreSQL :5433
+          ├── Market API :4100
+          ├── Collector
+          ├── Research/data services
+          └── Dashboard :3000+
+                    │
+                    ▼
+                 Browser UI
+```
+
+Stop the local runtime with:
+
+```powershell
+.\stop-d-predict.ps1
+```
+
+The launcher currently targets Windows because that is the first supported development environment. The underlying services remain containerized so the architecture can later be packaged for other operating systems.
 
 ## What the system does
 
@@ -158,9 +222,9 @@ The baseline is deliberately simple so that it becomes a measurable benchmark. I
 
 ## Deployment
 
-The repository is a monorepo. The production dashboard lives under `dashboard/` and builds the Vite client into `dashboard/dist/public`. A root `vercel.json` explicitly configures Vercel to install dependencies and run the dashboard build from that directory, so a Vercel project connected to the repository can deploy from `main` without relying on an implicit monorepo root.
+The repository is a monorepo. The production dashboard lives under `dashboard/` and builds the Vite client into `dashboard/dist/public`. A root `vercel.json` explicitly configures Vercel to install dependencies and run the dashboard build from that directory.
 
-Vercel hosts the frontend only. The local PostgreSQL database, collector, market API and research API are not automatically made public by a frontend deployment. Production data APIs should be hosted separately and connected through the appropriate `VITE_API_BASE_URL` / `VITE_RESEARCH_BASE_URL` environment variables.
+Vercel is **frontend-only and optional** for the current product. The primary runtime is local: PostgreSQL, collector, market API and research services run on the developer machine, with the browser dashboard connecting to localhost. A Vercel deployment does not automatically provide those backend services. If a separately hosted API is added later, it can be connected through `VITE_API_BASE_URL` / `VITE_RESEARCH_BASE_URL`.
 
 ## Windows training flow
 
