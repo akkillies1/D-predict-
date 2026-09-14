@@ -121,7 +121,8 @@ The launcher:
 5. installs the dashboard dependencies from the committed `dashboard/pnpm-lock.yaml`;
 6. starts the dashboard in a background PowerShell process;
 7. detects the actual dashboard port if `3000` is already occupied;
-8. opens the dashboard automatically in the browser.
+8. opens the dashboard automatically in the browser;
+9. writes dashboard startup output to `dashboard-local.log` for troubleshooting.
 
 The normal local experience should therefore become:
 
