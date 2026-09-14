@@ -41,7 +41,13 @@ export async function addInstrument(instrument: Pick<Instrument, "symbol" | "exc
 }
 
 export async function getMarketHistory(symbol: string, signal?: AbortSignal): Promise<PriceBar[]> { const payload = await json<{ rows: PriceBar[] }>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/history?limit=120`, { signal }); return payload.rows; }
-export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal> { const payload = await json<{ signal: Signal }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.signal; }
+export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal> {
+  const payload = await json<{ signal: Signal }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal });
+  const signalRow = payload.signal;
+  const parameters = signalRow.parameters ?? {};
+  const embedded = parameters.tradeThesis ?? parameters.trade_thesis;
+  return { ...signalRow, tradeThesis: signalRow.tradeThesis ?? (embedded as TradeThesis | null | undefined) ?? null };
+}
 export async function getOptionChain(symbol: string, signal?: AbortSignal): Promise<OptionRow[]> { const payload = await json<{ rows: OptionRow[] }>(`${API_BASE}/api/options/chain?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.rows; }
 export async function getForecast(symbol: string, signal?: AbortSignal): Promise<Forecast> { return json<Forecast>(`${API_BASE}/api/forecast?symbol=${encodeURIComponent(symbol)}&horizon=5`, { signal }); }
 export async function getResearch(symbol: string, signal?: AbortSignal): Promise<ResearchResult> { const payload = await json<{ research: ResearchResult }>(`${RESEARCH_BASE}/api/research/${encodeURIComponent(symbol)}`, { signal }); return payload.research; }
