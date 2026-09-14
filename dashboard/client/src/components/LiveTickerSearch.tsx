@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, Loader2, X } from "lucide-react";
-import { addInstrument } from "@/lib/localApi";
-import { searchInstruments } from "@/lib/instrumentSearch";
+import { addInstrument, searchInstruments } from "@/lib/localApi";
 import type { Instrument } from "@/lib/localApi";
 import { toast } from "sonner";
 
@@ -24,8 +23,8 @@ export default function LiveTickerSearch({ value, onChange }: Props) {
     const timer = window.setTimeout(async () => {
       setLoading(true);
       try { setResults(await searchInstruments(text, controller.signal)); setOpen(true); }
-      catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) setResults([]); }
-      finally { setLoading(false); }
+      catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) { setResults([]); setOpen(true); } }
+      finally { if (!controller.signal.aborted) setLoading(false); }
     }, 180);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query]);
@@ -38,7 +37,7 @@ export default function LiveTickerSearch({ value, onChange }: Props) {
   const select = async (item: Instrument) => {
     setSelecting(true); setOpen(false);
     try {
-      await addInstrument(item.symbol);
+      await addInstrument(item);
       onChange(item.symbol);
       setQuery(item.symbol);
       localStorage.setItem(STORAGE_KEY, item.symbol);
