@@ -1,9 +1,9 @@
-"""Causal V1 portfolio backtest with risk budgeting and drawdown throttling.
+"""Causal V1 portfolio backtest with risk budgeting and trade-thesis exits.
 
-A prediction at T is executed at the next available historical close. Position
-weight is derived only from historical OHLC available at T, then throttled by
-the portfolio drawdown observed before the trade. Trades do not overlap.
-This is an evaluation tool, not an order-execution engine.
+A prediction at T is executed at the next available historical close. When a
+calibrated return distribution is present, its target/stop levels are used for
+the same economic event that produces realized P&L, MAE and MFE. Otherwise the
+legacy fixed-horizon close exit remains available for older ledgers.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from training.return_distribution import ReturnDistributionConfig, construct_trade_thesis
 from training.risk import RiskConfig, construct_risk_budget
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,10 @@ PRED_DIR = ROOT / "data" / "predictions"
 
 HORIZON_ROWS = {"1d": 1, "3d": 3, "5d": 5}
 VALID_CLASSES = {"DOWN", "FLAT", "UP"}
+DISTRIBUTION_COLUMNS = {
+    "distribution_status", "return_p15", "return_p25", "return_p35", "return_p45",
+    "return_p55", "return_p65", "return_p75", "return_p85",
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,10 @@ def load_inputs(prediction_path: Path, history_path: Path) -> tuple[pd.DataFrame
         raise ValueError("Prediction classes must be DOWN, FLAT or UP")
     if not predictions["horizon"].isin(HORIZON_ROWS).all():
         raise ValueError("Unsupported horizon; use 1d, 3d or 5d")
+    if "distribution_status" in predictions.columns:
+        present = DISTRIBUTION_COLUMNS & set(predictions.columns)
+        if "distribution_status" not in present:
+            raise ValueError("distribution_status must be accompanied by distribution quantiles")
 
     return predictions.sort_values(["timestamp"] + (["symbol"] if "symbol" in predictions.columns else [])), history.sort_values("timestamp")
 
@@ -95,6 +104,83 @@ def _net_return(direction: str, entry: float, exit_price: float, cost_bps: float
     else:
         raise ValueError(f"Cannot backtest direction {direction}")
     return gross - friction
+
+
+def _trade_event(
+    row: object,
+    entry_idx: int,
+    history: pd.DataFrame,
+    entry_price: float,
+    horizon_rows: int,
+    cost_bps: float,
+    slippage_bps: float,
+) -> dict:
+    """Resolve one entry-to-exit economic event without future leakage."""
+    direction = str(row.prediction)
+    signal = row._asdict() if hasattr(row, "_asdict") else dict(row)
+    distribution_present = signal.get("distribution_status") == "CALIBRATED"
+    thesis = construct_trade_thesis(pd.Series(signal), entry_price, ReturnDistributionConfig()) if distribution_present else None
+
+    end_idx = entry_idx + horizon_rows
+    if end_idx >= len(history):
+        raise IndexError("not enough future bars for requested horizon")
+
+    target_price = None
+    stop_price = None
+    if thesis and thesis.get("decision") == "EXECUTABLE":
+        target_price = float(thesis["targets"][0]["price"])
+        stop_price = float(thesis["stop"]["price"])
+
+    max_favorable = 0.0
+    max_adverse = 0.0
+    exit_idx = end_idx
+    exit_reason = "HORIZON_CLOSE"
+    exit_price = float(history.iloc[end_idx]["close"])
+    target_hit = False
+    stop_hit = False
+
+    for idx in range(entry_idx + 1, end_idx + 1):
+        bar = history.iloc[idx]
+        high = float(bar["high"])
+        low = float(bar["low"])
+        close = float(bar["close"])
+        if direction == "UP":
+            favorable = high / entry_price - 1.0
+            adverse = low / entry_price - 1.0
+            max_favorable = max(max_favorable, favorable)
+            max_adverse = min(max_adverse, adverse)
+            # Conservative same-bar ambiguity: stop wins if both levels print.
+            if stop_price is not None and low <= stop_price:
+                exit_idx, exit_price, exit_reason, stop_hit = idx, stop_price, "STOP", True
+                break
+            if target_price is not None and high >= target_price:
+                exit_idx, exit_price, exit_reason, target_hit = idx, target_price, "TARGET_1", True
+                break
+        else:
+            favorable = entry_price / low - 1.0
+            adverse = entry_price / high - 1.0
+            max_favorable = max(max_favorable, favorable)
+            max_adverse = min(max_adverse, adverse)
+            if stop_price is not None and high >= stop_price:
+                exit_idx, exit_price, exit_reason, stop_hit = idx, stop_price, "STOP", True
+                break
+            if target_price is not None and low <= target_price:
+                exit_idx, exit_price, exit_reason, target_hit = idx, target_price, "TARGET_1", True
+                break
+        exit_price = close
+
+    return {
+        "exit_idx": exit_idx,
+        "exit_price": float(exit_price),
+        "exit_reason": exit_reason,
+        "target_1_price": target_price,
+        "stop_price": stop_price,
+        "target_1_hit": target_hit,
+        "stop_hit": stop_hit,
+        "mae": float(max_adverse),
+        "mfe": float(max_favorable),
+        "thesis": thesis,
+    }
 
 
 def backtest(
@@ -134,20 +220,22 @@ def backtest(
             continue
         entry_idx = int(entry_positions)
         horizon_rows = HORIZON_ROWS[row.horizon]
-        exit_idx = entry_idx + horizon_rows
-        if exit_idx >= len(history_times):
+        if entry_idx + horizon_rows >= len(history_times):
             continue
 
         entry_time = history_times.iloc[entry_idx]
-        exit_time = history_times.iloc[exit_idx]
         entry_price = float(history.iloc[entry_idx]["close"])
-        exit_price = float(history.iloc[exit_idx]["close"])
 
         risk_row = construct_risk_budget(pd.DataFrame([row._asdict()]), history, risk_config).iloc[0]
         base_weight = float(risk_row["position_weight"])
         current_drawdown = equity / equity_peak - 1.0
         throttle = drawdown_multiplier(-current_drawdown, drawdown_config)
         position_weight = base_weight * throttle
+
+        event = _trade_event(row, entry_idx, history, entry_price, horizon_rows, cost_bps, slippage_bps)
+        exit_idx = event["exit_idx"]
+        exit_time = history_times.iloc[exit_idx]
+        exit_price = event["exit_price"]
 
         if position_weight <= 0:
             trades.append({
@@ -159,6 +247,13 @@ def backtest(
                 "direction": row.prediction,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
+                "exit_reason": event["exit_reason"],
+                "target_1_price": event["target_1_price"],
+                "stop_price": event["stop_price"],
+                "target_1_hit": event["target_1_hit"],
+                "stop_hit": event["stop_hit"],
+                "mae": event["mae"],
+                "mfe": event["mfe"],
                 "base_position_weight": base_weight,
                 "drawdown": current_drawdown,
                 "drawdown_multiplier": throttle,
@@ -185,6 +280,13 @@ def backtest(
             "direction": row.prediction,
             "entry_price": entry_price,
             "exit_price": exit_price,
+            "exit_reason": event["exit_reason"],
+            "target_1_price": event["target_1_price"],
+            "stop_price": event["stop_price"],
+            "target_1_hit": event["target_1_hit"],
+            "stop_hit": event["stop_hit"],
+            "mae": event["mae"],
+            "mfe": event["mfe"],
             "base_position_weight": base_weight,
             "drawdown": current_drawdown,
             "drawdown_multiplier": throttle,
@@ -231,6 +333,10 @@ def backtest(
         "losses": losses,
         "win_rate": round(wins / len(trade_frame), 6),
         "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else None,
+        "target_1_hit_rate": round(float(trade_frame["target_1_hit"].mean()), 6),
+        "stop_hit_rate": round(float(trade_frame["stop_hit"].mean()), 6),
+        "mean_mae": round(float(trade_frame["mae"].mean()), 6),
+        "mean_mfe": round(float(trade_frame["mfe"].mean()), 6),
         "cost_bps_per_side": cost_bps,
         "slippage_bps_per_side": slippage_bps,
         "risk_config": risk_config.__dict__,
