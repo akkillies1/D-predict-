@@ -25,6 +25,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
 - [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
 - [x] Reproducible dataset manifests and SHA-256 content fingerprints emitted by dataset builds.
+- [x] Prediction-ledger accuracy scoring: accuracy, balanced accuracy, directional accuracy, probability quality, majority baseline and per-class precision/recall/F1.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
 - [x] Production favicon added and linked from the dashboard HTML.
 - [x] Vercel root build/output configuration added for the monorepo dashboard.
@@ -33,7 +34,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
-- [ ] Add prediction-ledger outcome scoring.
+- [ ] Add prediction-ledger outcome scoring for realized 1d/3d/5d outcomes and prediction aging.
 - [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
 
 ## Future improvement checklist
@@ -70,7 +71,9 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] True Meta Model combining model outputs rather than simply calibrating one source.
 - [ ] Probability calibration and calibration drift monitoring.
 - [ ] Regime-specific performance evaluation.
-- [ ] Prediction ledger with automatic 1d/3d/5d outcome scoring.
+- [x] Prediction-ledger scoring for out-of-sample accuracy and probability quality.
+- [ ] Prediction ledger with automatic 1d/3d/5d realized outcome scoring.
+- [ ] Accuracy gates for model promotion, including minimum OOS sample size and improvement over baseline.
 
 ### Backtesting and risk
 
@@ -199,6 +202,14 @@ The research layer is intentionally **public-information only**. It does not acc
 
 ## Accuracy philosophy
 
+Accuracy is a **promotion gate**, not a cosmetic dashboard number.
+
+The prediction ledger must preserve every out-of-sample prediction together with its timestamp, symbol, horizon, fold, training cutoff, purge information, predicted class and full probability vector. Accuracy is evaluated only after the corresponding future outcome is known.
+
+We will not accept a model merely because its headline accuracy is high. Every evaluation compares it against a majority-class baseline and reports balanced accuracy, directional accuracy, probability quality through log loss and Brier score, directional coverage, and per-class precision/recall/F1. This prevents a model from looking good simply because one class dominates or because it makes very few directional calls.
+
+The next accuracy gate will add realized 1d/3d/5d outcome scoring, confidence-bucket analysis, calibration curves, fold stability, regime stability and minimum out-of-sample sample requirements before a model can be promoted.
+
 The objective is not to display a confident-looking number. The objective is to make the confidence reflect evidence quality and historical performance.
 
 The current research score considers freshness, source diversity, source agreement/disagreement, higher weight for official exchange/regulatory sources, bullish versus bearish evidence, and explicit governance/regulatory risk themes.
@@ -218,6 +229,7 @@ The repository includes a repeatable baseline training pipeline under `training/
 - `build_dataset.py` creates point-in-time market features and future-return labels for 1-day, 3-day and 5-day horizons, persists purge-aware split assignments and writes a manifest beside each dataset.
 - `train_baseline.py` trains a market classifier and return regressor from the formal dataset contract.
 - `walk_forward.py` produces strictly out-of-sample predictions using expanding windows with horizon-aware purging.
+- `score_prediction_ledger.py` scores OOS accuracy, directional accuracy, majority-baseline lift, log loss, Brier score and per-class precision/recall/F1.
 - `train_meta.py` learns a conservative calibration layer over available model probabilities.
 - `embed_events.py` stores and searches research-document vectors.
 
@@ -245,6 +257,7 @@ The equivalent manual sequence is:
 .\collector\.venv\Scripts\python.exe -m training.build_dataset --symbols NIFTY BANKNIFTY
 .\collector\.venv\Scripts\python.exe -m training.train_baseline --symbols NIFTY BANKNIFTY
 .\collector\.venv\Scripts\python.exe -m training.walk_forward --symbols NIFTY BANKNIFTY
+.\collector\.venv\Scripts\python.exe -m training.score_prediction_ledger data\predictions\nifty_1d_walk_forward.csv
 .\collector\.venv\Scripts\python.exe -m training.train_meta --symbols NIFTY BANKNIFTY
 ```
 
