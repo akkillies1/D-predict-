@@ -7,10 +7,32 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 ## Status
 
 - Primary branch: `main`
-- Sprint: Sprint 1 — Local Research Terminal & Data Foundation
+- Active roadmap: Sprint 1 — Local Research Terminal & Data Foundation, followed by accuracy/trade-thesis and shadow-promotion gates.
 - Execution: research/evaluation/simulation only; no broker orders.
 
-### Completed
+## Sprint completion policy
+
+A sprint is only considered **implemented** when its code path, tests and documentation exist. A sprint is only considered **validated** when its real historical artifacts have been executed and the resulting OOS report passes the applicable promotion gates. This prevents the repository from claiming model accuracy merely because the implementation exists.
+
+### Sprint 1 — Local Research Terminal & Data Foundation
+
+**Engineering scope: implemented.** The repository contains canonical instruments, market-data freshness, historical validation, point-in-time datasets, purge-aware walk-forward evaluation, prediction/realized-outcome scoring, risk/backtest, shadow simulation, MarketState, context primitives, signal quality, active-position primitives and the six-stock validation harness.
+
+**Validation scope: data-dependent.** The six-stock OOS run, model comparison and final promotion decision still require the user's real local historical/prediction artifacts. CI validates the code and tests, not market performance.
+
+### Sprint 2 — Accuracy & Trade Thesis
+
+**Engineering scope: implemented primitives.** The repository now contains bounded model comparison, OOS return forecasts, leakage-free return distributions, distribution-derived targets/stops, independent target/stop calibration scoring and deterministic trade-thesis construction.
+
+**Validation scope: data-dependent.** No candidate model, target probability or trade thesis is promoted until independent OOS results prove the improvement.
+
+### Sprint 3 — Risk, Shadow & Promotion
+
+**Engineering scope: implemented primitives.** Risk budgeting, drawdown throttling, correlation limits, position lifecycle, historical shadow and restart-safe live shadow are present.
+
+**Promotion scope: intentionally gated.** Active-position integration, sustained-shadow evidence, deterministic forecast provenance and an approved live prediction runner remain promotion gates. Automated broker execution remains out of scope until those gates pass.
+
+## Completed
 
 - [x] Canonical instruments, market freshness and historical OHLCV validation.
 - [x] Point-in-time datasets, purge-aware splits and deterministic manifests.
@@ -18,6 +40,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Walk-forward OOS ledger now includes an independent `predicted_return` forecast and return MAE/RMSE/bias.
 - [x] Leakage-free prior-OOS residual distribution primitive with explicit `UNCALIBRATED`/`CALIBRATED` status.
 - [x] Deterministic distribution-derived target/stop and trade-thesis primitive; not yet promoted as calibrated until independent OOS hit-rate tests pass.
+- [x] Independent target/stop calibration scoring primitive; it scores fixed probabilities without tuning them from the same outcomes.
 - [x] Leakage/adversarial tests proving the current outcome cannot calibrate its own distribution.
 - [x] Prediction/realized-outcome scoring and stability promotion gates.
 - [x] Causal risk-weighted backtest, drawdown and correlation limits.
@@ -30,23 +53,6 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Cross-stock point-in-time validation harness and confidence/regime report generation.
 - [x] Hardened CI tests for the portfolio confidence boundary and floating-point position P&L assertions.
 - [x] Lightweight purge-aware OOS model comparison diagnostic.
-
-### Next gates
-
-- [ ] Establish the current OOS baseline across the six-stock harness before selecting any new model.
-- [ ] Compare lightweight classical candidates on identical walk-forward folds and horizons.
-- [ ] Select a candidate only through an independent promotion protocol; comparison results alone never promote a model.
-- [ ] Integrate distribution/thesis into the OOS prediction pipeline without using future outcomes.
-- [ ] Validate target/stop probability calibration independently OOS.
-- [ ] Measure return-distribution coverage, interval width and conditional calibration by horizon/regime/confidence.
-- [ ] Wire active-position ledger into backtest/shadow engines.
-- [ ] Replace cumulative exposure with active-position exposure.
-- [ ] Deterministic forecast seed/version provenance.
-- [ ] Run the six-stock harness on the user's local historical/prediction artifacts and review failures.
-- [ ] Approved-model live prediction runner.
-- [ ] Human-vs-model game mode.
-- [ ] Sustained-shadow promotion gate.
-- [ ] Automated execution only after all gates pass.
 
 ## Accuracy-first model comparison
 
@@ -67,7 +73,36 @@ Example:
 
 The output is written to `data/reports/*_model_comparison.json`.
 
-**Important:** this is an OOS diagnostic, not an automatic model selector. Choosing the best candidate after looking at the same OOS results would contaminate the evaluation. A later promotion step must use an independent selection/holdout protocol and must compare the complete trade thesis, not just classifier accuracy.
+**Important:** this is an OOS diagnostic, not an automatic model selector. Choosing the best candidate after looking at the same OOS results would contaminate the evaluation. Candidate promotion requires an untouched temporal holdout and comparison of the complete trade thesis, not just classifier accuracy.
+
+## Independent target/stop calibration
+
+`training/target_calibration.py` scores target and stop probabilities against an already-realized executable-event ledger. It reports hit rate, mean predicted probability, Brier score and calibration gap for T1/T2/T3 and the stop.
+
+The evaluator requires `entry_time > prediction_time` and never retunes target probabilities from the evaluated outcomes. Therefore a result such as `T1 predicted 65%, realized 42%` is reported as a calibration failure rather than silently changing the probability to 42%.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.target_calibration data\reports\target_events.csv --output data\reports\target_calibration.json
+```
+
+## Next promotion gates
+
+- [ ] Establish the current OOS baseline across the six-stock harness before selecting any new model.
+- [ ] Compare lightweight classical candidates on identical walk-forward folds and horizons using real local artifacts.
+- [ ] Select a candidate only through an independent temporal holdout protocol.
+- [ ] Integrate distribution/thesis into the OOS prediction pipeline without using future outcomes.
+- [ ] Validate target/stop probabilities independently OOS.
+- [ ] Measure return-distribution coverage, interval width and conditional calibration by horizon/regime/confidence.
+- [ ] Wire active-position ledger into backtest/shadow engines.
+- [ ] Replace cumulative exposure with active-position exposure.
+- [ ] Deterministic forecast seed/version provenance.
+- [ ] Run the six-stock harness on the user's local historical/prediction artifacts and review failures.
+- [ ] Approved-model live prediction runner.
+- [ ] Human-vs-model game mode.
+- [ ] Sustained-shadow promotion gate.
+- [ ] Automated execution only after all gates pass.
 
 ## MarketState
 
@@ -213,6 +248,7 @@ MARKET DATA
 - `training/walk_forward.py` — expanding-window OOS direction and return forecasts.
 - `training/model_compare.py` — bounded classical model comparison on identical purge-aware OOS folds.
 - `training/return_distribution.py` — leakage-free OOS residual distribution and thesis construction.
+- `training/target_calibration.py` — independent target/stop probability scoring.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
 - `training/score_realized_outcomes.py` — independent realized outcomes.
 - `training/analyze_prediction_stability.py` — calibration/fold/regime analysis.
@@ -225,7 +261,7 @@ MARKET DATA
 
 ## Verification
 
-The GitHub implementation has **not** been executed in the user's Windows environment in this session. The repository now has CI coverage for backend tests, dashboard tests/typecheck/build, collector compilation, and the full Python training test suite. CI is the authoritative remote execution check when a new `main` commit runs successfully.
+The GitHub implementation has **not** been executed in the user's Windows environment in this session. The repository has CI coverage for backend tests, dashboard tests/typecheck/build, collector compilation, and the full Python training test suite. CI is the authoritative remote execution check when a new `main` commit runs successfully.
 
 Local verification remains:
 
@@ -254,12 +290,13 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [x] Leakage-free return-distribution primitive.
 - [x] Leakage/adversarial distribution tests.
 - [x] Lightweight purge-aware model comparison diagnostic.
+- [x] Independent target/stop calibration scoring primitive.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
 - [ ] Native sector-index histories rather than peer proxies.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Independent target/stop probability calibration.
+- [ ] Independent target/stop probability validation on real untouched OOS events.
 - [ ] Distribution coverage and interval-width validation.
 - [ ] Complete production Trade Thesis integration.
 - [ ] Executable-outcome confidence calibration.
