@@ -38,11 +38,11 @@ def test_risk_budget_is_volatility_aware_and_capped():
 
 def test_risk_never_uses_future_history():
     result = construct_risk_budget(
-        predictions(p_row("2026-01-10")),
+        predictions(p_row("2026-01-20")),
         history(h_rows(30)),
         RiskConfig(),
     )
-    assert result.iloc[0]["volatility_timestamp"] == "2026-01-10T00:00:00+00:00"
+    assert result.iloc[0]["volatility_timestamp"] == "2026-01-20T00:00:00+00:00"
 
 
 def test_missing_volatility_is_explicit_no_trade():
