@@ -35,6 +35,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Restart-safe live shadow session state and delayed outcome resolver.
 - [x] Live market connector into the persistent shadow session.
 - [x] Rolling shadow accuracy/calibration metrics.
+- [x] Unified prediction-scoring and executable trade window in historical/live shadow.
 - [ ] Live prediction runner using the approved model.
 - [ ] Interactive human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
@@ -91,16 +92,46 @@ The risk stack includes point-in-time ATR/stop-distance budgeting, confidence-ed
 
 Default friction is 10 bps transaction cost + 5 bps slippage per side. These are conservative engineering defaults, not claims of optimality.
 
+## Economic-event invariant
+
+Prediction accuracy and simulated trade P&L must measure the **same executable economic event**.
+
+For the current shadow contract:
+
+```text
+Prediction generated at T
+        ↓
+Entry at next available bar T+1
+        ↓
+Hold for requested horizon rows
+        ↓
+Exit at T+1+horizon
+        ↓
+Realized return / class
+        ├── prediction accuracy
+        ├── directional accuracy
+        ├── game score
+        └── simulated trade P&L
+```
+
+The old failure mode was to score accuracy from `T → T+horizon` while calculating P&L from `T+1 → T+1+horizon`. That allowed a prediction to be marked correct while its corresponding simulated trade lost money. `training/shadow.py` and `training/live_shadow.py` now use the same entry/exit prices for realized classification and trade P&L.
+
+This invariant is protected by adversarial tests where `T → T+1` is positive but the executable `T+1 → T+2` trade is negative. Such a case must be scored as a wrong prediction for an UP call and a losing UP trade.
+
+This does **not** mean that every research label must use the execution window. The model-training label and the trading contract must be explicitly distinguished. The shadow/paper trading layer must never silently compare one window for accuracy with another for P&L.
+
 ## Paper / shadow trading as a game and training system
 
-`training/shadow.py` provides historical replay. It sends zero broker orders and reports `live_orders_sent = 0`. Predictions become virtual decisions, wait for future bars, then receive a realized outcome and confidence-weighted game score.
+`training/shadow.py` provides historical replay. It sends zero broker orders and reports `live_orders_sent = 0`. Predictions become virtual decisions, wait for the executable future window, then receive a realized outcome and confidence-weighted game score.
 
 ```text
 MODEL PREDICTION
       ↓
 VIRTUAL DECISION
       ↓
-WAIT FOR FUTURE BAR
+EXECUTABLE ENTRY
+      ↓
+WAIT FOR EXIT
       ↓
 REALIZED OUTCOME
       ↓
@@ -117,9 +148,9 @@ The game is not a replacement for OOS validation. It is a controlled training en
 
 ## Live shadow mode
 
-`training/live_shadow.py` is the persistent session engine. It accepts real timestamped market observations and validated model predictions, persists them atomically, and resolves predictions only after the required future observations exist. It has no broker client and no order-placement path.
+`training/live_shadow.py` is the persistent session engine. It accepts real timestamped market observations and validated model predictions, persists them atomically, and resolves predictions only after the required executable entry/exit window exists. It has no broker client and no order-placement path.
 
-`training/live_shadow_feed.py` is now the market connector. It polls the existing local market API (`/api/market/:symbol/live`) and writes the returned real quote timestamps/closes into the persistent shadow session. It can also ingest an append-only JSONL prediction stream. **It never derives probabilities from a direction/confidence signal and never manufactures market prices.**
+`training/live_shadow_feed.py` is the market connector. It polls the existing local market API (`/api/market/:symbol/live`) and writes the returned real quote timestamps/closes into the persistent shadow session. It can also ingest an append-only JSONL prediction stream. **It never derives probabilities from a direction/confidence signal and never manufactures market prices.**
 
 Example live shadow feed:
 
@@ -239,6 +270,9 @@ Vercel is optional frontend/demo infrastructure, not the primary research runtim
 - [x] Restart-safe live shadow session engine.
 - [x] Live market connector.
 - [x] Rolling accuracy/calibration monitor.
+- [x] Unified prediction/trade economic-event window.
+- [ ] Active-position ledger with explicit open/entry/exit/closed lifecycle.
+- [ ] Active rather than cumulative exposure accounting.
 - [ ] Live prediction runner using the approved model.
 - [ ] Interactive dashboard/game mode.
 - [ ] Human-vs-model scorecards.
