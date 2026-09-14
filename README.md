@@ -28,10 +28,10 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] V1 non-overlapping portfolio backtest with transaction costs and slippage.
 - [x] Deterministic portfolio construction with confidence-aware sizing and gross-exposure limits.
 - [x] Point-in-time volatility/ATR-aware risk budgeting with explicit missing-risk-data handling.
+- [x] Causal drawdown-aware throttling integrated into the risk-weighted backtest.
 - [ ] Complete research-terminal workflow: search → activation → validation → dataset → prediction.
 - [ ] Formal point-in-time Regime Model.
 - [ ] Cross-instrument portfolio risk attribution and correlation-aware limits.
-- [ ] Drawdown-aware portfolio throttle.
 - [ ] Paper/shadow trading.
 
 ## Future improvement checklist
@@ -64,8 +64,8 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Transaction-cost and slippage-aware V1 backtest.
 - [x] Deterministic portfolio sizing with per-position and total gross-exposure caps.
 - [x] Volatility/stop-distance-aware risk budgeting using point-in-time historical OHLC.
+- [x] Drawdown-aware portfolio throttle.
 - [ ] Portfolio risk limits and exposure attribution across instruments.
-- [ ] Drawdown-aware portfolio throttle.
 - [ ] Paper-trading/shadow mode before any live capital.
 - [ ] No automated live execution until research, backtest and paper-trading gates pass.
 
@@ -88,32 +88,6 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [ ] Complex deep learning only after classical baselines are beaten out of sample.
 - [ ] LLM-assisted research with evidence citations and strict source separation.
 - [ ] Advanced options research after reliable historical options data exists.
-
-## Local-first startup
-
-The primary product target is a **single-command local application**, not a Vercel-hosted full stack.
-
-Windows:
-
-```powershell
-.\d-predict.cmd
-```
-
-or:
-
-```powershell
-.\d-predict.ps1
-```
-
-The launcher checks Docker, creates `.env` from `.env.example` when needed, starts PostgreSQL/market API/collector, waits for `/health`, starts the dashboard, detects an available dashboard port and opens the browser. The current launcher does **not** claim the research API as a running Compose service yet.
-
-Stop with:
-
-```powershell
-.\stop-d-predict.ps1
-```
-
-Vercel remains frontend-only and optional.
 
 ## Research architecture
 
@@ -146,8 +120,6 @@ Instrument → Calendar → Dataset → Feature definitions
 → Label definitions → Model → Prediction → Backtest → Evaluation
 ```
 
-The research layer is public-information only. Public exchange announcements, regulator records and disclosed insider transactions may be used as evidence; illegal material non-public information is not requested, inferred or traded on.
-
 ## Accuracy and promotion philosophy
 
 Accuracy is a **promotion gate**, not a cosmetic dashboard number. OOS predictions retain timestamp, symbol, horizon, fold, training cutoff, purge information, predicted class and the full probability vector.
@@ -162,7 +134,7 @@ These are engineering gates, **not profitability guarantees**. A model can pass 
 
 ## V1 portfolio backtest
 
-`training/backtest.py` is deliberately conservative and uses only the OOS prediction ledger plus historical closes.
+`training/backtest.py` is now a **causal risk-weighted evaluation engine**. It combines the OOS probability vector with the point-in-time ATR risk layer and a drawdown throttle.
 
 Rules:
 
@@ -171,15 +143,28 @@ Rules:
 3. The trade exits after the requested trading-row horizon: `1d` = 1 row, `3d` = 3 rows, `5d` = 5 rows.
 4. Trades cannot overlap; signals arriving while a position is open are skipped.
 5. Transaction cost and slippage are charged on both entry and exit.
-6. The engine compounds portfolio equity trade by trade and reports total return, CAGR, max drawdown, win rate, profit factor and an annualized per-trade Sharpe proxy.
-7. This is an evaluation engine, **not** an order-execution system.
+6. Base position weight is the minimum of confidence-edge sizing, ATR/stop-distance risk budget, per-position cap and remaining gross cap.
+7. The drawdown throttle is evaluated **before** each new position using only equity and the historical equity peak already known at that point.
+8. Drawdown at or below the soft threshold leaves risk unchanged. Between soft and hard thresholds, new risk is linearly reduced. At or beyond the hard threshold, new risk is blocked.
+9. Equity changes only after a trade is realized; future trades cannot affect the throttle applied to an earlier signal.
+10. The engine compounds only the fraction of equity represented by the position weight, leaving the remainder unexposed.
+11. Every trade records base weight, drawdown, throttle multiplier, final position weight, risk status, return and equity before/after the trade.
+12. This is an evaluation engine, **not** an order-execution system.
 
-Default friction is 10 bps transaction cost + 5 bps slippage per side. These values are CLI-configurable and must be replaced with evidence-backed assumptions before using the results for a promotion decision.
+Default friction is 10 bps transaction cost + 5 bps slippage per side. Default risk budget is 0.5% per trade, ATR period 14, 1.5× ATR stop distance, 50 bps minimum stop distance, 25% maximum position and 100% maximum gross exposure.
+
+Default drawdown controls are a 5% soft threshold and 10% hard threshold. These are conservative engineering defaults, not claims of optimality.
 
 Example:
 
 ```powershell
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
+```
+
+Optional controls:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --risk-per-trade 0.005 --atr-period 14 --stop-atr-multiplier 1.5 --soft-drawdown 0.05 --hard-drawdown 0.10 --output data\predictions\nifty_1d_backtest.json
 ```
 
 The generated backtest artifact should normally remain local and should not be committed as model evidence unless explicitly versioned for an audit.
@@ -188,26 +173,11 @@ The generated backtest artifact should normally remain local and should not be c
 
 `training/portfolio.py` converts the OOS probability vector into deterministic portfolio decisions without placing orders or inventing prices.
 
-The current V1 rules are deliberately simple:
+`training/risk.py` adds point-in-time volatility budgeting. For every prediction timestamp it calculates ATR percentage from historical OHLC bars with `history_timestamp <= prediction_timestamp`. The stop distance is `max(min_stop_distance_bps, ATR% × stop_atr_multiplier)`, and the risk budget is `risk_per_trade / stop_distance`. Missing ATR history produces explicit `RISK_DATA_UNAVAILABLE` rather than guessed volatility.
 
-1. `FLAT` predictions produce no position.
-2. `UP`/`DOWN` predictions must meet a configurable minimum class probability, default 55%.
-3. Position weight scales with the probability edge above the neutral 1/3 class prior.
-4. A hard per-position cap defaults to 25% of portfolio capital.
-5. A hard total gross-exposure cap defaults to 100%.
-6. Once the gross cap is consumed, later candidates receive zero additional exposure.
-7. Every decision records timestamp, symbol, horizon, prediction, confidence, requested limits and resulting gross exposure.
+`training/backtest.py` consumes that risk budget and applies a second, portfolio-level drawdown control. The drawdown peak is updated only after realized trades. No future equity, future volatility or future outcome is used to size an earlier trade.
 
-`training/risk.py` adds the next layer without inventing volatility. For every prediction timestamp it calculates ATR percentage from historical OHLC bars with `history_timestamp <= prediction_timestamp`. The stop distance is `max(min_stop_distance_bps, ATR% × stop_atr_multiplier)`, and the risk budget is `risk_per_trade / stop_distance`. Final weight is the minimum of the confidence-edge weight, volatility-derived risk budget, position cap and remaining gross exposure. If insufficient history exists for ATR, the result is an explicit `RISK_DATA_UNAVAILABLE` no-trade rather than a guessed volatility value.
-
-This remains an evaluation/risk layer. It does not place orders, use future bars, or claim that ATR is a complete portfolio risk model. Cross-instrument exposure attribution and drawdown-aware throttling are still pending.
-
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
-.\collector\.venv\Scripts\python.exe -m training.risk data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_risk.json
-```
+Cross-instrument exposure attribution and correlation-aware limits remain pending because the current V1 backtest is intentionally conservative and primarily validates the causal single-instrument risk path.
 
 ## Historical learning pipeline
 
@@ -225,9 +195,9 @@ The main training modules are:
 - `analyze_prediction_stability.py` — calibration/fold/regime analysis.
 - `stability_gate.py` — stability promotion checks.
 - `accuracy_gate.py` — raw-performance + required stability promotion gate.
-- `backtest.py` — V1 transaction-cost/slippage-aware portfolio accounting.
 - `portfolio.py` — deterministic confidence-aware sizing and gross-exposure controls.
 - `risk.py` — point-in-time ATR/stop-distance risk budgeting.
+- `backtest.py` — causal risk-weighted, drawdown-aware V1 portfolio accounting.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -245,15 +215,29 @@ The main training modules are:
 .\collector\.venv\Scripts\python.exe -m training.stability_gate data\predictions\nifty_1d_stability.json --output data\predictions\nifty_1d_stability_gate.json
 .\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv --stability-report data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
-.\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
-.\collector\.venv\Scripts\python.exe -m training.risk data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_risk.json
 ```
 
-Repeat the realized scoring, stability, backtest, portfolio and risk stages for 3d and 5d. Do not promote a model from one headline aggregate number.
+Repeat the realized scoring, stability and backtest stages for 3d and 5d. Do not promote a model from one headline aggregate number.
 
-## Environment
+## Local-first startup
 
-`.env.example` contains local defaults for PostgreSQL, market API, research API, dashboard API base URLs, collectors and research caching. Never commit API keys or private credentials.
+The primary product target is a **single-command local application**, not a Vercel-hosted full stack.
+
+Windows:
+
+```powershell
+.\d-predict.cmd
+```
+
+or:
+
+```powershell
+.\d-predict.ps1
+```
+
+The launcher checks Docker, creates `.env` from `.env.example` when needed, starts PostgreSQL/market API/collector, waits for `/health`, starts the dashboard, detects an available dashboard port and opens the browser. The current launcher does **not** claim the research API as a running Compose service yet.
+
+Vercel remains frontend-only and optional.
 
 ## Testing
 
@@ -262,6 +246,8 @@ The repository contains Python tests under `training/tests`. Recommended local v
 ```powershell
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
+
+The new backtest tests cover drawdown-throttle boundaries, invalid thresholds, causal risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking.
 
 No claim is made here that the local Windows test suite has passed unless it has actually been run in the user's environment or through CI.
 
