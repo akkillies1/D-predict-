@@ -25,7 +25,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
 - [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
-- [x] Production favicon added.
+- [x] Production favicon added and linked from the dashboard HTML.
 - [x] `main` is the canonical development/deployment branch.
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
@@ -86,6 +86,8 @@ It is designed around one principle: **do not turn a headline into a trade witho
 ## Deployment note
 
 The production dashboard is deployed at `https://dpredict.dcodeinteriors.com/`. The dashboard is expected to remain buildable by Vercel's TypeScript check. Live market fields such as `open`, `high` and `low` may legitimately be `null` when an upstream provider does not supply them; the UI must render those states explicitly rather than asserting that the values exist.
+
+The dashboard now declares `/favicon.svg` in `index.html`, eliminating the missing `/favicon.ico` request seen in production browsers.
 
 ## What the system does
 
