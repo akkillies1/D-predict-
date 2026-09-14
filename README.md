@@ -20,14 +20,15 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Historical and restart-safe live shadow simulation.
 - [x] Unified executable prediction/trade economic-event window.
 - [x] Causal MarketState layer separate from BUY/SELL.
-- [x] Causal benchmark/sector context primitives.
-- [x] MarketState and context point-in-time tests.
+- [x] Causal benchmark/sector context primitives and tests.
+- [x] Active position lifecycle ledger and exposure-release tests.
 
 ### Next gates
 
 - [ ] Integrate context features into versioned OOS datasets.
-- [ ] Signal-quality and explicit `NO_TRADE` layer.
-- [ ] Active-position ledger and active exposure accounting.
+- [ ] Signal-quality and explicit `NO_TRADE` decision layer.
+- [ ] Wire active-position ledger into backtest/shadow engines.
+- [ ] Active rather than cumulative exposure accounting in portfolio simulation.
 - [ ] Deterministic forecast seed/version provenance.
 - [ ] Cross-stock validation harness and report.
 - [ ] Approved-model live prediction runner.
@@ -64,6 +65,16 @@ MARKET STATE
 
 The primitives are **not yet wired into the production training dataset**. They must first pass cross-stock leakage and OOS validation. No news, analyst opinions, or observed September-2026 outcomes are used.
 
+## Active position lifecycle
+
+`training/position_ledger.py` now models portfolio state explicitly:
+
+```text
+OPEN → CLOSED
+```
+
+Each position records symbol, direction, entry/exit timestamps and prices, planned exit, weight, allocated capital, status and realized P&L. By default a symbol cannot have overlapping active positions. Closing a position releases its exposure and allocated capital. This is a simulation ledger, not a broker interface.
+
 ## Economic-event invariant
 
 Prediction correctness and trade P&L must describe the same executable event:
@@ -99,6 +110,7 @@ MARKET DATA
  → PREDICTION
  → SIGNAL QUALITY / NO TRADE
  → EXECUTABLE TRADE EVENT
+ → ACTIVE POSITIONS
  → RISK / EXPOSURE
  → BACKTEST
  → SHADOW
@@ -111,12 +123,13 @@ MARKET DATA
 - `training/build_dataset.py` — existing 1d/3d/5d technical features/labels.
 - `training/market_state.py` — causal market-state classification.
 - `training/context_features.py` — causal benchmark/sector context.
+- `training/position_ledger.py` — active position lifecycle and exposure release.
 - `training/train_baseline.py` — classical classifier/regressor.
 - `training/walk_forward.py` — expanding-window OOS predictions.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
 - `training/score_realized_outcomes.py` — independent realized outcomes.
 - `training/analyze_prediction_stability.py` — calibration/fold/regime analysis.
-- `training/accuracy_gate.py` / `stability_gate.py` — promotion gates.
+- `training/accuracy_gate.py` / `training/stability_gate.py` — promotion gates.
 - `training/risk.py` / `training/exposure.py` — causal risk/exposure.
 - `training/backtest.py` — executable causal backtest.
 - `training/shadow.py` / `training/live_shadow.py` — paper/live-shadow lifecycle.
@@ -131,7 +144,7 @@ The GitHub implementation has **not** been executed in the user's Windows enviro
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-The new context features are not considered production-validated until the full suite and the cross-stock OOS harness pass.
+The new layers are not considered production-validated until the full suite and the cross-stock OOS harness pass.
 
 ## Future improvement checklist
 
@@ -139,6 +152,7 @@ The new context features are not considered production-validated until the full 
 
 - [x] Causal MarketState layer.
 - [x] Causal benchmark/sector context primitives.
+- [x] Active position lifecycle primitive.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context integration into OOS datasets.
@@ -155,8 +169,9 @@ The new context features are not considered production-validated until the full 
 - [x] Live market connector.
 - [x] Rolling accuracy/calibration.
 - [x] Unified prediction/trade window.
-- [ ] Active-position ledger.
-- [ ] Active exposure accounting.
+- [x] Active-position ledger primitive.
+- [ ] Integrate active positions into backtest/shadow.
+- [ ] Active exposure accounting in portfolio simulation.
 - [ ] Deterministic forecast provenance.
 - [ ] Approved live prediction runner.
 - [ ] Human-vs-model game.
