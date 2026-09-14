@@ -1,21 +1,21 @@
-"""Cross-stock, point-in-time validation harness for D-Predict.
+"""Cross-stock point-in-time validation for D-Predict.
 
-This harness evaluates the existing walk-forward prediction ledgers without
-silently changing the production model. Context features are attached only
-from observations available at each prediction timestamp. Trade metrics use
-the executable next-bar entry window and therefore share the same economic
-event as shadow/backtest scoring.
+The harness evaluates existing walk-forward prediction ledgers without changing
+the production model. At every prediction timestamp, market state and benchmark
+/sector context are computed only from observations available at that timestamp.
+Trade metrics use the executable next-bar entry window.
 """
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from .build_dataset import make_features
 from .context_features import ContextSpec, build_context_row
 from .market_state import classify_market_state
 
@@ -41,7 +41,6 @@ class HarnessConfig:
     horizon: str = "1d"
     cost_bps_per_side: float = 10.0
     slippage_bps_per_side: float = 5.0
-    min_confidence: float = 0.55
 
 
 def _load_history(symbol: str) -> pd.DataFrame:
@@ -76,27 +75,26 @@ def _confidence(row: pd.Series) -> float:
 def _trade_event(history: pd.DataFrame, timestamp: pd.Timestamp, horizon: str, direction: str, cost_bps: float, slippage_bps: float) -> dict:
     days = {"1d": 1, "3d": 3, "5d": 5}[horizon]
     future = history.loc[history.index > timestamp]
+    if direction == "FLAT":
+        return {"status": "NO_TRADE"}
     if len(future) <= days:
         return {"status": "PENDING"}
     entry = future.iloc[0]
     exit_row = future.iloc[days]
     entry_px = float(entry["close"])
     exit_px = float(exit_row["close"])
-    gross = exit_px / entry_px - 1.0
-    if direction == "DOWN":
-        gross = -gross
-    elif direction != "UP":
-        return {"status": "NO_TRADE", "entry_timestamp": entry.name.isoformat(), "exit_timestamp": exit_row.name.isoformat()}
+    raw_return = exit_px / entry_px - 1.0
+    gross = raw_return if direction == "UP" else -raw_return
     friction = 2.0 * (cost_bps + slippage_bps) / 10000.0
     net = gross - friction
     path = future.loc[(future.index >= entry.name) & (future.index <= exit_row.name)]
     closes = pd.to_numeric(path["close"], errors="coerce")
     if direction == "UP":
-        adverse = closes.min() / entry_px - 1.0
-        favorable = closes.max() / entry_px - 1.0
+        mae = float(closes.min() / entry_px - 1.0)
+        mfe = float(closes.max() / entry_px - 1.0)
     else:
-        adverse = -(closes.max() / entry_px - 1.0)
-        favorable = -(closes.min() / entry_px - 1.0)
+        mae = float(-(closes.max() / entry_px - 1.0))
+        mfe = float(-(closes.min() / entry_px - 1.0))
     return {
         "status": "SCORED",
         "entry_timestamp": entry.name.isoformat(),
@@ -106,34 +104,25 @@ def _trade_event(history: pd.DataFrame, timestamp: pd.Timestamp, horizon: str, d
         "trade_return": float(net),
         "gross_return": float(gross),
         "transaction_cost_slippage": float(friction),
-        "mae": float(adverse),
-        "mfe": float(favorable),
+        "mae": mae,
+        "mfe": mfe,
+        "direction_correct": bool(gross > 0),
+        "profitable_after_friction": bool(net > 0),
     }
 
 
 def _market_state_row(history: pd.DataFrame, timestamp: pd.Timestamp) -> dict:
-    upto = history.loc[history.index <= timestamp].copy()
-    if len(upto) < 50:
-        return {"market_state": "INSUFFICIENT_DATA", "trend_strength": None, "volatility_regime": None, "regime_confidence": 0.0, "state_reason_codes": ["INSUFFICIENT_HISTORY"]}
-    # Reuse the causal feature vocabulary without introducing future labels.
-    close = pd.to_numeric(upto["close"], errors="coerce")
-    high = pd.to_numeric(upto["high"], errors="coerce")
-    low = pd.to_numeric(upto["low"], errors="coerce")
-    ret20 = float(close.iloc[-1] / close.iloc[-21] - 1.0)
-    sma20 = float(close.iloc[-20:].mean())
-    sma50 = float(close.iloc[-50:].mean())
-    tr = pd.concat([(high-low), (high-close.shift()).abs(), (low-close.shift()).abs()], axis=1).max(axis=1)
-    atr_pct = float(tr.iloc[-14:].mean() / close.iloc[-1])
-    vol20 = float(close.pct_change().iloc[-20:].std() * np.sqrt(252))
-    volatility = "HIGH_VOLATILITY" if vol20 >= 0.35 else "LOW_VOLATILITY" if vol20 <= 0.15 else "NORMAL"
-    trend = "TREND_UP" if ret20 > 0.03 and close.iloc[-1] > sma20 > sma50 else "TREND_DOWN" if ret20 < -0.03 and close.iloc[-1] < sma20 < sma50 else "RANGE"
-    rsi_delta = close.diff().iloc[-14:]
-    up = rsi_delta.clip(lower=0).mean()
-    down = (-rsi_delta.clip(upper=0)).mean()
-    rsi = 100 - 100 / (1 + up / down) if down > 0 else 100.0
-    state = "OVERSOLD_TREND" if trend == "TREND_DOWN" and rsi < 35 else "OVERBOUGHT_TREND" if trend == "TREND_UP" and rsi > 65 else trend
-    confidence = min(1.0, abs(ret20) / 0.10) if trend != "RANGE" else max(0.0, 1.0 - abs(ret20) / 0.03)
-    return {"market_state": state, "trend_strength": float(abs(ret20)), "volatility_regime": volatility, "regime_confidence": float(confidence), "state_reason_codes": [trend, volatility]}
+    upto = history.loc[history.index <= timestamp]
+    features = make_features(upto).iloc[-1].to_dict() if len(upto) else {}
+    result = classify_market_state(features)
+    values = result.to_dict()
+    return {
+        "market_state": values["state"],
+        "trend_strength": values["trend_strength"],
+        "volatility_regime": values["volatility_regime"],
+        "regime_confidence": values["regime_confidence"],
+        "state_reason_codes": json.dumps(values["reason_codes"]),
+    }
 
 
 def evaluate_symbol(symbol: str, config: HarnessConfig) -> tuple[pd.DataFrame, dict]:
@@ -141,40 +130,74 @@ def evaluate_symbol(symbol: str, config: HarnessConfig) -> tuple[pd.DataFrame, d
     predictions = _load_predictions(symbol, config.horizon)
     benchmark_name, sector = SECTORS.get(symbol, (DEFAULT_BENCHMARK, None))
     benchmark = _load_history(benchmark_name)
+
+    # Until native sector-index histories exist, use a clearly labelled peer proxy.
+    # It is still causal and never substitutes future stock outcomes into features.
     sector_frame = None
-    sector_symbol = None
-    for candidate, (candidate_benchmark, candidate_sector) in SECTORS.items():
+    sector_proxy_symbol = None
+    for candidate, (_, candidate_sector) in SECTORS.items():
         if candidate_sector == sector and candidate != symbol:
             candidate_path = HIST_DIR / f"{candidate.lower()}.csv"
             if candidate_path.exists():
-                sector_symbol = candidate
+                sector_proxy_symbol = candidate
                 sector_frame = _load_history(candidate)
                 break
+
     rows = []
     for _, pred in predictions.iterrows():
         ts = pd.Timestamp(pred["timestamp"])
         if ts not in history.index:
             continue
         state = _market_state_row(history, ts)
-        context = build_context_row(ts, history["close"], benchmark["close"], ContextSpec(benchmark_name, sector), sector_frame["close"] if sector_frame is not None else None).to_dict()
+        context = build_context_row(
+            ts,
+            history["close"],
+            benchmark["close"],
+            ContextSpec(benchmark_name, sector),
+            sector_frame["close"] if sector_frame is not None else None,
+        ).to_dict()
         direction = str(pred["prediction"])
         confidence = _confidence(pred)
         trade = _trade_event(history, ts, config.horizon, direction, config.cost_bps_per_side, config.slippage_bps_per_side)
-        realized = None if trade.get("status") != "SCORED" else trade["trade_return"]
-        rows.append({**pred.to_dict(), **state, **context, "sector_proxy_symbol": sector_symbol, "direction": direction, "forecast_confidence": confidence, "executable_trade_status": trade["status"], "direction_correct": None if trade.get("status") != "SCORED" else (trade["trade_return"] + 2*(config.cost_bps_per_side+config.slippage_bps_per_side)/10000 > 0), "realized_trade_return": realized, **trade})
+        rows.append({
+            **pred.to_dict(),
+            **state,
+            **context,
+            "sector_proxy_symbol": sector_proxy_symbol,
+            "direction": direction,
+            "forecast_confidence": confidence,
+            "executable_trade_status": trade["status"],
+            **trade,
+        })
+
     result = pd.DataFrame(rows)
     scored = result[result["executable_trade_status"] == "SCORED"] if not result.empty else result
-    summary = {"symbol": symbol, "horizon": config.horizon, "examples": int(len(result)), "scored_trades": int(len(scored)), "pending": int((result["executable_trade_status"] == "PENDING").sum()) if not result.empty else 0}
+    summary = {
+        "symbol": symbol,
+        "horizon": config.horizon,
+        "examples": int(len(result)),
+        "scored_trades": int(len(scored)),
+        "pending": int((result["executable_trade_status"] == "PENDING").sum()) if not result.empty else 0,
+        "sector_context": sector,
+        "sector_proxy_symbol": sector_proxy_symbol,
+    }
     if not scored.empty:
-        summary.update({"executable_trade_accuracy": float((scored["realized_trade_return"] > 0).mean()), "mean_trade_return": float(scored["realized_trade_return"].mean()), "median_trade_return": float(scored["realized_trade_return"].median()), "mae_mean": float(scored["mae"].mean()), "mfe_mean": float(scored["mfe"].mean())})
+        summary.update({
+            "directional_accuracy": float(scored["direction_correct"].mean()),
+            "executable_trade_accuracy": float(scored["profitable_after_friction"].mean()),
+            "mean_trade_return": float(scored["trade_return"].mean()),
+            "median_trade_return": float(scored["trade_return"].median()),
+            "mae_mean": float(scored["mae"].mean()),
+            "mfe_mean": float(scored["mfe"].mean()),
+        })
     else:
-        summary.update({"executable_trade_accuracy": None, "mean_trade_return": None, "median_trade_return": None, "mae_mean": None, "mfe_mean": None})
+        summary.update({"directional_accuracy": None, "executable_trade_accuracy": None, "mean_trade_return": None, "median_trade_return": None, "mae_mean": None, "mfe_mean": None})
     return result, summary
 
 
 def run(symbols: list[str], config: HarnessConfig) -> dict:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    all_rows = []
+    all_rows: list[pd.DataFrame] = []
     summaries = []
     failures = []
     for symbol in symbols:
@@ -184,10 +207,19 @@ def run(symbols: list[str], config: HarnessConfig) -> dict:
             summaries.append(summary)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             failures.append({"symbol": symbol.upper(), "error": str(exc)})
+
     details = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
     detail_path = REPORT_DIR / f"cross_stock_{config.horizon}_details.csv"
     details.to_csv(detail_path, index=False)
-    report = {"config": config.__dict__, "symbols": symbols, "summaries": summaries, "failures": failures, "detail_file": str(detail_path), "data_policy": "local point-in-time history only; no external outcomes or news"}
+    report = {
+        "config": asdict(config),
+        "symbols": symbols,
+        "summaries": summaries,
+        "failures": failures,
+        "detail_file": str(detail_path),
+        "data_policy": "local point-in-time history only; no external outcomes or news",
+        "sector_policy": "sector field is a causal peer proxy until native sector-index history is available",
+    }
     report_path = REPORT_DIR / f"cross_stock_{config.horizon}_report.json"
     report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     print(json.dumps(report, indent=2, default=str))
