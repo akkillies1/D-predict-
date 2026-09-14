@@ -29,6 +29,8 @@ export function normalizeQuote(input: {
   source?: string;
   status?: MarketDataStatus;
 }): MarketQuote {
+  const collectedAt = input.collectedAt ?? new Date().toISOString();
+  const timestamp = input.timestamp ?? collectedAt;
   const close = finite(input.close);
   const previousClose = finite(input.previousClose);
   const change = close !== null && previousClose !== null ? close - previousClose : null;
@@ -38,8 +40,8 @@ export function normalizeQuote(input: {
 
   return {
     symbol: input.symbol.trim().toUpperCase(),
-    timestamp: input.timestamp ?? new Date().toISOString(),
-    collectedAt: input.collectedAt ?? new Date().toISOString(),
+    timestamp,
+    collectedAt,
     open: finite(input.open),
     high: finite(input.high),
     low: finite(input.low),
@@ -49,13 +51,14 @@ export function normalizeQuote(input: {
     change,
     changePercent,
     source: input.source ?? "unknown",
-    status: input.status ?? "LIVE",
+    status: input.status ?? classifyFreshness(timestamp, Date.parse(collectedAt)),
   };
 }
 
 export function classifyFreshness(timestamp: string, now = Date.now()): MarketDataStatus {
-  const ageMs = now - Date.parse(timestamp);
-  if (!Number.isFinite(ageMs) || ageMs < 0) return "OFFLINE";
+  const timestampMs = Date.parse(timestamp);
+  const ageMs = now - timestampMs;
+  if (!Number.isFinite(timestampMs) || !Number.isFinite(ageMs) || ageMs < 0) return "OFFLINE";
   if (ageMs <= 60_000) return "LIVE";
   if (ageMs <= 5 * 60_000) return "CACHED";
   return "STALE";
