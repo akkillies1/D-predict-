@@ -1,7 +1,9 @@
 """Build point-in-time training examples from local PostgreSQL or CSV history.
 
 The feature side only uses data available at timestamp T. Targets are created
-from future prices and are never exposed to the model as features.
+from future prices and are never exposed to the model as features. Dataset
+segments are chronological and include a purge gap to prevent overlapping
+future-return labels from leaking across train/validation/test boundaries.
 """
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
+
+from training.dataset import DatasetSpec, PointInTimeDataset, make_segments
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "training"
@@ -62,8 +66,7 @@ def read_csv(symbol: str) -> pd.DataFrame | None:
     path = HIST_DIR / f"{symbol.lower()}.csv"
     if not path.exists():
         return None
-    df = pd.read_csv(path, parse_dates=["timestamp"], index_col="timestamp")
-    return df
+    return pd.read_csv(path, parse_dates=["timestamp"], index_col="timestamp")
 
 
 def read_postgres(symbol: str) -> pd.DataFrame | None:
@@ -103,6 +106,8 @@ def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         df = df.set_index("timestamp")
     elif not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index, utc=True)
+    else:
+        df.index = pd.DatetimeIndex(df.index).tz_localize("UTC") if df.index.tz is None else df.index.tz_convert("UTC")
     return df[[c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]].sort_index()
 
 
@@ -133,9 +138,35 @@ def build(symbol: str, min_rows: int = 500) -> None:
         data["feature_set_version"] = FEATURE_SET_VERSION
         data["source_cutoff"] = data.index
         data = data.dropna(subset=list(features.columns) + ["target_return"]).copy()
+        if data.empty:
+            raise RuntimeError(f"No usable point-in-time examples for {symbol} {horizon}")
+
+        spec = DatasetSpec(
+            instrument=symbol,
+            frequency="1d",
+            start=data.index[0],
+            end=data.index[-1] + (data.index[-1] - data.index[-2]),
+            feature_set_version=FEATURE_SET_VERSION,
+            label_horizon=horizon,
+        )
+        purge_rows = max(0, days)
+        segments = make_segments(data.index, purge_rows=purge_rows)
+        dataset = PointInTimeDataset(spec=spec, frame=data, segments=segments)
+        dataset.validate()
+
+        split_by_timestamp = pd.Series(index=data.index, dtype="object")
+        for segment in segments:
+            split_by_timestamp.loc[(data.index >= segment.start) & (data.index < segment.end)] = segment.name
+        data["dataset_split"] = split_by_timestamp.values
+        data = data.dropna(subset=["dataset_split"])
+
         path = DATA_DIR / f"{symbol.lower()}_{horizon}.csv"
         data.reset_index(names="timestamp").to_csv(path, index=False)
-        print(f"{symbol} {horizon}: {len(data):,} point-in-time examples -> {path}")
+        counts = data["dataset_split"].value_counts().to_dict()
+        print(
+            f"{symbol} {horizon}: {len(data):,} point-in-time examples -> {path} "
+            f"(train={counts.get('train', 0)}, validation={counts.get('validation', 0)}, test={counts.get('test', 0)}, purge={purge_rows})"
+        )
 
 
 def main() -> None:
