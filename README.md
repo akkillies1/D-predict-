@@ -59,6 +59,18 @@ Example:
 
 The holdout reports accuracy, balanced accuracy, majority-baseline lift, log loss and directional accuracy. `HOLDOUT_ONLY` means the artifact was evaluated under the holdout contract; it is not a claim that the model is profitable or ready for live trading.
 
+## OOS probability calibration
+
+`training/probability_calibration.py` calibrates class probabilities using **only observations strictly prior to each prediction**. The current row can never contribute to its own calibration model. Isotonic calibration is applied separately to DOWN, FLAT and UP probabilities and the calibrated vector is renormalized to sum to one.
+
+Rows without sufficient prior history remain explicitly `UNCALIBRATED`. The calibration report is evaluation-only: it reports log loss, multiclass Brier score, mean confidence, empirical accuracy and calibration gap. It does not retune thresholds from the same outcomes or claim that calibrated probabilities are accurate until independent future validation confirms them.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.probability_calibration data\predictions\realized.csv --min-history 100 --output data\reports\probability_calibration.json
+```
+
 ## Return distribution and trade thesis
 
 D-Predict does not use arbitrary fixed-percentage targets. `training/return_distribution.py` constructs an expanding residual distribution from strictly prior OOS return forecasts:
@@ -94,6 +106,8 @@ POINT-IN-TIME FEATURES
         ↓
 DIRECTION + RETURN FORECAST
         ↓
+OOS PROBABILITY CALIBRATION
+        ↓
 CALIBRATED DISTRIBUTION
         ↓
 TARGET / STOP / HORIZON
@@ -117,9 +131,10 @@ The economic event must remain consistent across forecast scoring, target/stop s
 
 ### Accuracy
 - [x] Untouched temporal holdout evaluator
+- [x] Leakage-safe OOS probability calibration primitive
+- [ ] Validate calibrated probabilities on an untouched future period
 - [ ] Use an untouched temporal holdout for final model selection on real historical artifacts
 - [ ] Compare candidates using trade-level and return-level metrics, not accuracy alone
-- [ ] Calibrate class probabilities on strictly OOS data
 - [ ] Conditional residual distributions by causal regime/volatility state
 - [ ] Relative-strength and sector-context integration into model training
 - [ ] Evaluate `NO_TRADE` as a first-class outcome
