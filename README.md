@@ -121,11 +121,17 @@ The timing engine reports median ETA (`p50`), probable ETA range (`p25`–`p75`)
 
 If the source data is daily, D-Predict cannot honestly claim minute/second precision. Minute/second ETA requires minute/second historical bars and sufficient first-passage observations. Insufficient evidence is explicitly reported rather than filled with a guess.
 
-## Dashboard trade-thesis integration
+## Live causal trade-thesis integration
 
-The local dashboard terminal is wired to display a persisted trade thesis from the latest signal payload, including entry, expected move, probability, horizon, T1/T2/T3 prices, target probabilities, median ETA, ETA p25–p75 range, stop, risk/reward and thesis version.
+The previous dashboard-only implementation has now been connected to the actual local API path.
 
-The dashboard deliberately displays **No persisted trade thesis** rather than inventing a target when the signal producer has not supplied one. The signal-producing path must persist the Python-generated thesis into `signal_decisions.parameters` for live/local signals to populate these fields.
+`backend/src/tradeThesis.ts` builds a thesis from the latest point-in-time `prediction_ledger` forecast, strictly prior realized-vs-forecast residuals, an expanding residual distribution, distribution-derived target/stop levels and historical 1-minute first-passage events.
+
+`GET /api/signals/latest?symbol=...` now enriches the latest stored signal with `tradeThesis` automatically. The result is cached briefly so the dashboard's frequent refresh does not repeatedly perform the full timing scan.
+
+The API refuses to invent a thesis: fewer than 60 prior realized residuals returns `NO_TRADE / RETURN_DISTRIBUTION_UNCALIBRATED`. Fewer than 20 historical first-passage events with 1-minute bars returns `INSUFFICIENT_HISTORY` for ETA.
+
+The terminal displays entry, expected move, probability, horizon, T1/T2/T3, target probabilities, ETA, ETA range, stop and risk/reward.
 
 ## Return distribution and trade thesis
 
@@ -142,6 +148,33 @@ Targets and stops are derived from the calibrated return distribution and remain
 `training/target_calibration.py` scores predicted target and stop probabilities without retuning them from the same outcomes. It reports examples, mean predicted probability, realized hit rate, Brier score and calibration gap for T1/T2/T3 and stop events.
 
 A calibration report never promotes or changes probabilities automatically. If a 65% target only hits 42% out of sample, the system records that failure rather than tuning the number until it looks correct.
+
+## IPO analysis
+
+D-Predict now includes a **Primary Market / IPO analyzer** in the dashboard.
+
+The API endpoint is:
+
+`POST /api/ipo/analyze`
+
+It accepts verified IPO/DRHP/prospectus inputs and calculates:
+
+- P/E
+- enterprise value
+- EV/EBITDA
+- EBITDA margin
+- profit margin
+- fresh-issue ratio
+- valuation score
+- business-quality score
+- issue-structure score
+- composite score
+- `ATTRACTIVE`, `WATCH` or `CAUTION` verdict
+- quantitative risk flags
+
+The migration `db/migrations/005_ipo_analysis.sql` persists the supplied inputs and generated analysis for reproducibility.
+
+The IPO analyzer does **not** fabricate missing information. It is a screening model, not an automatic investment recommendation. Grey-market premium, subscription demand, anchor allocation, peer valuation, promoter quality, litigation and prospectus-specific qualitative risks must be supplied from verified sources before they can influence the analysis.
 
 ## Multi-instrument and trade-event backtest integrity
 
@@ -179,8 +212,6 @@ INDEPENDENT VALIDATION
 PROMOTION GATE
 ```
 
-The economic event must remain consistent across forecast scoring, target/stop scoring, time-to-target scoring, executable trade accuracy, P&L, MAE and MFE.
-
 ## Future improvement checklist
 
 ### Accuracy
@@ -199,12 +230,22 @@ The economic event must remain consistent across forecast scoring, target/stop s
 - [x] Distribution-derived targets/stops integrated into executable backtest
 - [x] Empirical first-passage time-to-target estimator
 - [x] T1/T2/T3 ETA integration
+- [x] Live API trade-thesis integration
 - [x] Dashboard target/ETA presentation
 - [x] MAE/MFE and first-hit target/stop event recording
-- [ ] Persist deterministic forecast/model/dataset provenance
+- [ ] Persist deterministic forecast/model/dataset provenance end-to-end
 - [ ] Validate target probabilities on independent future periods
 - [ ] Validate time-to-target probabilities on independent future periods
 - [ ] Validate risk/reward after realistic friction
+
+### IPO
+- [x] IPO valuation/business/structure screening API
+- [x] IPO dashboard
+- [x] IPO analysis persistence schema
+- [ ] Add verified prospectus document ingestion
+- [ ] Add sourced peer-comparison engine
+- [ ] Add subscription/anchor/allocation evidence
+- [ ] Add independently sourced qualitative risk scoring
 
 ### Promotion
 - [ ] Sustained live-shadow evidence
