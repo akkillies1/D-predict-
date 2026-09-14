@@ -2,52 +2,53 @@
 
 D-predict is a local-first research and market-analysis cockpit for Indian equities and NIFTY/BANKNIFTY derivatives.
 
-**Principle:** do not turn a headline into a trade without checking evidence, testing against history, and measuring the model out of sample.
+**Principle:** point-in-time data, reproducible research, explicit uncertainty, executable trade validation, and no automated live orders until the research gates pass.
 
 ## Current engineering status
 
-- **Active sprint:** Sprint 1 — Local Research Terminal & Data Foundation
-- **Primary branch:** `main`
-- **Architecture:** Qlib-inspired research workflow implemented natively for D-predict.
-- **Execution boundary:** research, evaluation and simulation only. No automated live orders.
+- Primary branch: `main`
+- Active roadmap: Sprint 1 — Local Research Terminal & Data Foundation
+- Execution boundary: research, evaluation and simulation only.
+- No automated broker execution.
 
-### Sprint 1 checklist
+### Completed foundations
 
-- [x] Canonical instrument metadata and dashboard instrument discovery/activation.
-- [x] Explicit market-data freshness contract: `LIVE`, `CACHED`, `STALE`, `OFFLINE`.
+- [x] Canonical instrument metadata and discovery/activation.
+- [x] Market-data freshness contract: `LIVE`, `CACHED`, `STALE`, `OFFLINE`.
 - [x] No synthetic live OHLC values.
 - [x] Historical OHLCV validation.
-- [x] Point-in-time `DatasetSpec` / `PointInTimeDataset` contract with purge-aware segments.
-- [x] Deterministic dataset provenance/fingerprints.
-- [x] Baseline classifier/regressor.
-- [x] Expanding-window walk-forward validation.
+- [x] Point-in-time `DatasetSpec` / `PointInTimeDataset` with purge-aware segments.
+- [x] Deterministic dataset manifests/fingerprints.
+- [x] Baseline classifier/regressor and expanding-window walk-forward validation.
 - [x] Prediction-ledger accuracy/probability scoring.
 - [x] Independent realized-outcome scoring with `SCORED` / `PENDING` state.
-- [x] Raw-performance promotion gate.
-- [x] Calibration/fold-stability/evaluation-only regime analysis.
-- [x] Stability-aware promotion gate.
-- [x] V1 causal portfolio backtest with costs/slippage.
-- [x] Confidence-aware portfolio construction and gross-exposure limits.
-- [x] Point-in-time ATR/risk budgeting.
-- [x] Drawdown-aware risk throttling.
-- [x] Cross-instrument correlation-aware exposure limits.
-- [x] Historical paper/shadow replay with virtual capital and accuracy-game scoring.
-- [x] Restart-safe live shadow session state and delayed outcome resolver.
-- [x] Live market connector into the persistent shadow session.
+- [x] Calibration/fold/regime stability analysis and promotion gates.
+- [x] Causal risk-weighted backtest with friction, drawdown and correlation-aware limits.
+- [x] Historical paper/shadow replay and confidence-weighted accuracy game.
+- [x] Restart-safe live shadow session and real market connector.
 - [x] Rolling shadow accuracy/calibration metrics.
-- [x] Unified prediction-scoring and executable trade window in historical/live shadow.
-- [x] Explicit causal market-state classification separate from BUY/SELL prediction.
-- [ ] Point-in-time benchmark/sector relative-strength context.
-- [ ] Active-position ledger with explicit open/entry/exit/closed lifecycle.
+- [x] Unified prediction-scoring and executable trade window.
+- [x] Explicit causal MarketState layer separate from BUY/SELL prediction.
+- [x] Point-in-time benchmark/sector context feature primitives.
+
+### Still pending
+
+- [ ] Integrate context features into versioned training datasets after cross-stock leakage tests.
+- [ ] Signal-quality / explicit `NO_TRADE` decision layer.
+- [ ] Active-position ledger with open/entry/exit/closed lifecycle.
 - [ ] Active rather than cumulative exposure accounting.
-- [ ] Live prediction runner using the approved model.
+- [ ] Deterministic forecast configuration/seed provenance.
+- [ ] Cross-stock validation harness and human-readable research report.
+- [ ] Approved-model live prediction runner.
 - [ ] Interactive human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
-- [ ] Automated live execution only after all research/backtest/shadow gates pass.
+- [ ] Automated live execution only after all gates pass.
 
 ## Market-state architecture
 
-`training/market_state.py` introduces a deterministic descriptive state layer. It does **not** turn state into a trade direction. Current states include:
+`training/market_state.py` provides descriptive, causal state recognition. It deliberately does **not** mean BUY or SELL.
+
+Current states:
 
 - `TREND_UP`, `TREND_DOWN`
 - `RANGE`, `RECOVERY`, `BREAKDOWN`
@@ -56,278 +57,180 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - `REVERSAL_ATTEMPT`
 - `INSUFFICIENT_DATA`
 
-Oversold/overbought states are modifiers of an observed trend, not reversal signals. The classifier uses only features available at the observation timestamp and emits reason codes and regime confidence. Future returns are not accepted as inputs.
+Oversold/overbought are modifiers of observed structure, not reversal instructions. A stock can remain `OVERSOLD_TREND` while continuing down.
 
 The intended separation is:
 
 ```text
-MARKET STATE ≠ TRADE SIGNAL
-
-market_state
-trend_strength
-volatility_regime
-regime_confidence
-        ↓
+MARKET STATE
+  ├─ trend strength
+  ├─ volatility regime
+  └─ regime confidence
+          ↓
 MODEL PREDICTION
-        ↓
-direction + forecast confidence
-        ↓
+  ├─ direction
+  └─ forecast confidence
+          ↓
 SIGNAL QUALITY / NO TRADE
-        ↓
+          ↓
 EXECUTABLE POSITION
 ```
+
+## Point-in-time context
+
+`training/context_features.py` provides causal benchmark and sector context primitives. At timestamp `T`, benchmark/sector returns are computed only from observations `<= T`.
+
+It currently exposes:
+
+- benchmark return 1/5/20 rows;
+- sector return 1/5/20 rows;
+- stock-vs-benchmark relative-strength differences;
+- 60-row stock return context;
+- stock-vs-sector 5-row relative strength;
+- explicit benchmark and sector provenance.
+
+These primitives are **not yet automatically appended to the production training feature set**. They must first pass point-in-time cross-stock validation. No external news, analyst opinions or September-2026 outcomes are used by this layer.
 
 ## Research architecture
 
 ```text
-MARKET DATA + RESEARCH DATA
-        ↓
-POINT-IN-TIME DATA LAYER
-        ↓
-NUMERICAL + EVENT FEATURES
-        ↓
-MARKET STATE / REGIME CONTEXT
-        ↓
-MARKET MODEL + EVENT MODEL
-        ↓
-META MODEL
-        ↓
-PREDICTION LEDGER
-        ↓
-DECISION ENGINE
-        ↓
+MARKET DATA
+    ↓
+DATA QUALITY / FRESHNESS
+    ↓
+POINT-IN-TIME DATASET
+    ↓
+TECHNICAL FEATURES + MARKET STATE
+    ↓
+BENCHMARK / SECTOR CONTEXT
+    ↓
+MODEL
+    ↓
+PREDICTION
+    ↓
+SIGNAL QUALITY / NO TRADE
+    ↓
+EXECUTABLE TRADE EVENT
+    ↓
+RISK / EXPOSURE
+    ↓
 BACKTEST
-        ↓
-PAPER / SHADOW SIMULATION
-        ↓
-LIVE SHADOW MONITORING
-        ↓
-EVALUATION / PROMOTION GATE
-        ↓
-ONLY THEN: LIVE AUTOMATION
+    ↓
+PAPER / LIVE SHADOW
+    ↓
+CALIBRATION / REGIME EVALUATION
+    ↓
+PROMOTION GATE
 ```
-
-Intended research chain:
-
-```text
-Instrument → Calendar → Dataset → Feature definitions
-→ Label definitions → Market State → Model → Prediction
-→ Executable Trade Event → Backtest → Shadow → Evaluation
-```
-
-## Accuracy and promotion philosophy
-
-Accuracy is a promotion gate, not a cosmetic dashboard number. OOS predictions retain timestamp, symbol, horizon, fold, training cutoff, purge information, predicted class and the full probability vector.
-
-The independent realized-outcome scorer recomputes future outcomes from historical closes. Missing future closes remain `PENDING`. The raw gate requires, by default, at least 100 realized OOS examples, ≥2 percentage points accuracy lift over the majority baseline, log loss ≤1.05 and directional accuracy ≥52%.
-
-The stability gate adds calibration, fold and regime stability requirements. These are engineering gates, not profitability guarantees.
-
-## Backtest and risk boundary
-
-`training/backtest.py` is evaluation-only. A prediction at `T` cannot execute at `T`; entry uses the next available historical close. UP is long, DOWN is short, FLAT is ignored. Trades use requested trading-row horizons, cannot overlap, include entry/exit friction, and use causal risk information only.
-
-The risk stack includes point-in-time ATR/stop-distance budgeting, confidence-edge sizing, gross/per-position limits, drawdown throttling and cross-instrument correlation-aware exposure controls. Missing historical risk/exposure data creates explicit no-trade states rather than invented values.
-
-Default friction is 10 bps transaction cost + 5 bps slippage per side. These are conservative engineering defaults, not claims of optimality.
 
 ## Economic-event invariant
 
 Prediction accuracy and simulated trade P&L must measure the **same executable economic event**.
 
-For the current shadow contract:
-
 ```text
-Prediction generated at T
-        ↓
-Entry at next available bar T+1
-        ↓
-Hold for requested horizon rows
-        ↓
-Exit at T+1+horizon
-        ↓
-Realized return / class
-        ├── prediction accuracy
-        ├── directional accuracy
-        ├── game score
-        └── simulated trade P&L
+Prediction at T
+    ↓
+Entry at next available bar
+    ↓
+Hold for requested horizon
+    ↓
+Exit
+    ↓
+ONE realized event
+    ├─ directional correctness
+    ├─ executable trade accuracy
+    ├─ realized return / P&L
+    ├─ MAE / MFE
+    └─ game score
 ```
 
-The old failure mode was to score accuracy from `T → T+horizon` while calculating P&L from `T+1 → T+1+horizon`. That allowed a prediction to be marked correct while its corresponding simulated trade lost money. `training/shadow.py` and `training/live_shadow.py` now use the same entry/exit prices for realized classification and trade P&L.
+The previous failure mode was `T → T+horizon` scoring combined with `T+1 → T+1+horizon` P&L. The shadow implementations now use the executable entry/exit window for realized classification and P&L, with adversarial coverage for the case where `T → T+1` rises but `T+1 → T+2` falls.
 
-This invariant is protected by adversarial tests where `T → T+1` is positive but the executable `T+1 → T+2` trade is negative. Such a case must be scored as a wrong prediction for an UP call and a losing UP trade.
+## Risk and shadow boundary
 
-This does **not** mean that every research label must use the execution window. The model-training label and the trading contract must be explicitly distinguished. The shadow/paper trading layer must never silently compare one window for accuracy with another for P&L.
+The current risk stack includes point-in-time ATR/stop-distance sizing, confidence-edge sizing, gross/per-position limits, drawdown throttling and correlation-aware exposure controls. Missing risk data creates explicit no-trade states rather than invented values.
 
-## Paper / shadow trading as a game and training system
+Default friction is 10 bps transaction cost + 5 bps slippage per side. These are engineering defaults, not claims of optimality.
 
-`training/shadow.py` provides historical replay. It sends zero broker orders and reports `live_orders_sent = 0`. Predictions become virtual decisions, wait for the executable future window, then receive a realized outcome and confidence-weighted game score.
+The shadow engine sends zero broker orders and reports `live_orders_sent = 0`. Live market observations are persisted atomically; unresolved predictions remain pending until the executable future window exists.
 
-```text
-MODEL PREDICTION
-      ↓
-VIRTUAL DECISION
-      ↓
-EXECUTABLE ENTRY
-      ↓
-WAIT FOR EXIT
-      ↓
-REALIZED OUTCOME
-      ↓
-ACCURACY + CONFIDENCE SCORE
-      ↓
-VIRTUAL P&L / EQUITY / DRAWDOWN
-      ↓
-MODEL + HUMAN REVIEW
-```
+## Main modules
 
-The replay tracks accuracy after every resolved prediction, directional accuracy, confidence-weighted game score, pending outcomes, virtual equity/return, drawdown, position weight and entry/exit provenance.
+- `training/download_historical.py` — raw daily history acquisition.
+- `training/validate_history.py` — OHLCV validation.
+- `training/dataset.py` — point-in-time dataset contract.
+- `training/manifest.py` — deterministic provenance/fingerprints.
+- `training/build_dataset.py` — existing 1d/3d/5d technical features and labels.
+- `training/market_state.py` — causal market-state classification.
+- `training/context_features.py` — causal benchmark/sector context primitives.
+- `training/train_baseline.py` — classical market classifier/regressor.
+- `training/walk_forward.py` — expanding-window OOS predictions.
+- `training/score_prediction_ledger.py` — OOS probability/accuracy metrics.
+- `training/score_realized_outcomes.py` — independent realized outcome scoring.
+- `training/analyze_prediction_stability.py` — calibration/fold/regime analysis.
+- `training/stability_gate.py` — stability promotion checks.
+- `training/accuracy_gate.py` — raw-performance + stability promotion gate.
+- `training/portfolio.py` — deterministic confidence-aware sizing.
+- `training/risk.py` — point-in-time ATR/stop-distance risk budgeting.
+- `training/backtest.py` — causal risk-weighted backtest.
+- `training/exposure.py` — correlation-aware exposure attribution.
+- `training/shadow.py` — historical paper/shadow replay.
+- `training/live_shadow.py` — restart-safe live shadow lifecycle.
+- `training/live_shadow_feed.py` — local market API connector.
+- `training/shadow_metrics.py` — rolling shadow metrics/calibration.
 
-The game is not a replacement for OOS validation. It is a controlled training environment and the contract for live shadow monitoring.
+## Verification
 
-## Live shadow mode
-
-`training/live_shadow.py` is the persistent session engine. It accepts real timestamped market observations and validated model predictions, persists them atomically, and resolves predictions only after the required executable entry/exit window exists. It has no broker client and no order-placement path.
-
-`training/live_shadow_feed.py` is the market connector. It polls the existing local market API (`/api/market/:symbol/live`) and writes the returned real quote timestamps/closes into the persistent shadow session. It can also ingest an append-only JSONL prediction stream. **It never derives probabilities from a direction/confidence signal and never manufactures market prices.**
-
-Example live shadow feed:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.live_shadow_feed NIFTY BANKNIFTY `
-  --api-base http://127.0.0.1:4100 `
-  --state data\shadow\session.json `
-  --predictions data\shadow\predictions.jsonl `
-  --interval 15
-```
-
-For a single connectivity check:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.live_shadow_feed NIFTY --once --state data\shadow\session.json
-```
-
-Prediction JSONL must contain the complete probability vector, for example:
-
-```json
-{"timestamp":"2026-09-15T10:00:00Z","symbol":"NIFTY","horizon":"1d","prediction":"UP","market_probability_down":0.1,"market_probability_flat":0.1,"market_probability_up":0.8}
-```
-
-The feed is intentionally **not** the live prediction runner. That remains a separate gate because the approved model must produce the probability vector from a point-in-time feature set rather than converting an existing signal into synthetic probabilities.
-
-## Rolling shadow metrics
-
-`training/shadow_metrics.py` evaluates only predictions already marked `SCORED` by the shadow engine. Pending predictions are excluded rather than treated as wrong.
-
-It reports:
-
-- overall and rolling-window accuracy;
-- directional accuracy and number of directional calls;
-- mean prediction confidence;
-- multiclass Brier score;
-- calibration gap;
-- confidence-bucket calibration;
-- pending count;
-- virtual return and maximum drawdown;
-- `live_orders_sent = 0`.
-
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.shadow_metrics data\shadow\session.json --window 100 --output data\shadow\metrics.json
-```
-
-This is an evaluation monitor, not a promotion decision. Sustained-shadow promotion will be implemented separately after the live prediction runner exists.
-
-## Main training modules
-
-- `download_historical.py` — raw daily history acquisition.
-- `validate_history.py` — OHLCV validation.
-- `dataset.py` — point-in-time dataset contract.
-- `manifest.py` — deterministic provenance/fingerprint manifests.
-- `build_dataset.py` — 1d/3d/5d point-in-time features and labels.
-- `market_state.py` — causal descriptive market-state classification, separate from prediction.
-- `train_baseline.py` — classical market classifier/regressor.
-- `walk_forward.py` — strict expanding-window OOS predictions.
-- `score_prediction_ledger.py` — OOS accuracy/probability metrics.
-- `score_realized_outcomes.py` — independent realized outcome scoring.
-- `analyze_prediction_stability.py` — calibration/fold/regime analysis.
-- `stability_gate.py` — stability promotion checks.
-- `accuracy_gate.py` — raw-performance + stability promotion gate.
-- `portfolio.py` — deterministic confidence-aware sizing.
-- `risk.py` — point-in-time ATR/stop-distance risk budgeting.
-- `backtest.py` — causal risk-weighted, drawdown-aware V1 backtest.
-- `exposure.py` — cross-instrument exposure attribution/correlation limits.
-- `shadow.py` — historical paper/shadow replay and accuracy game.
-- `live_shadow.py` — restart-safe live observations, delayed resolution and virtual P&L.
-- `live_shadow_feed.py` — local market API → persistent live-shadow connector.
-- `shadow_metrics.py` — rolling accuracy and calibration monitor.
-- `train_meta.py` — conservative calibration/meta layer.
-- `embed_events.py` — research-document vector memory.
-
-## Windows verification
-
-The GitHub implementation and tests have been added, but the Windows test suite has **not** been executed from the user's local environment in this session. Verify locally with:
+The GitHub changes in this session have **not** been executed in the user's Windows environment. Run:
 
 ```powershell
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-Do not treat the live-shadow implementation as verified until that command passes locally.
-
-## Local-first runtime
-
-The primary product target is a single-command local application. Windows launchers are available through `d-predict.cmd` / `d-predict.ps1`. The launcher starts the existing PostgreSQL/market API/collector stack and dashboard. The research service is not yet claimed as a Compose runtime service.
-
-Vercel is optional frontend/demo infrastructure, not the primary research runtime.
+Do not treat the new market-state/context layer as validated until the suite passes locally and the cross-stock point-in-time harness has been run.
 
 ## Future improvement checklist
 
 ### Data
 
-- [ ] Complete NSE/BSE/Yahoo canonical provider mapping.
-- [ ] Exchange calendars and trading-session-aware timestamps.
+- [ ] Exchange calendars and session-aware timestamps.
 - [ ] Corporate-action adjustment and provenance.
 - [ ] Point-in-time news/disclosure ingestion.
-- [ ] Source-level data-quality/freshness monitoring.
+- [ ] Source-level freshness monitoring.
 - [ ] Native pgvector indexing when justified.
 
 ### Research
 
+- [x] Explicit causal MarketState layer.
+- [x] Causal benchmark/sector context primitives.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
-- [x] Explicit causal MarketState layer.
-- [ ] Point-in-time benchmark relative strength.
-- [ ] Point-in-time sector context.
+- [ ] Context integration into OOS training datasets.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Signal-quality / no-trade layer.
-- [ ] True Meta Model.
-- [ ] Calibration-drift monitoring.
-- [ ] Provenance/freshness-aware research terminal.
-- [ ] Reliable live ticker suggestions with exchange/company-name resolution.
+- [ ] Signal-quality / `NO_TRADE` layer.
+- [ ] Confidence calibration by executable trade outcome.
+- [ ] Cross-stock validation harness: SBI, HDFC BANK, RELIANCE, ONGC, LT, ADANIPORTS.
+- [ ] Human-readable + machine-readable research report.
 
 ### Shadow / risk / runtime
 
 - [x] Historical paper/shadow replay.
-- [x] Restart-safe live shadow session engine.
+- [x] Restart-safe live shadow session.
 - [x] Live market connector.
 - [x] Rolling accuracy/calibration monitor.
 - [x] Unified prediction/trade economic-event window.
-- [ ] Active-position ledger with explicit open/entry/exit/closed lifecycle.
-- [ ] Active rather than cumulative exposure accounting.
-- [ ] Live prediction runner using the approved model.
-- [ ] Interactive dashboard/game mode.
-- [ ] Human-vs-model scorecards.
+- [ ] Active-position ledger.
+- [ ] Active exposure accounting.
+- [ ] Deterministic forecast seed/version provenance.
+- [ ] Approved-model live prediction runner.
+- [ ] Interactive human-vs-model game mode.
 - [ ] Sustained shadow promotion gate.
-- [ ] Research service in Compose.
-- [ ] Graceful service restart/supervision.
-- [ ] Cross-platform launcher.
-- [ ] CI for Python tests plus dashboard typecheck/build.
+- [ ] CI for Python tests and dashboard build.
 - [ ] Runtime observability.
 
 ### Later, not now
 
-- [ ] RL / FinRL after supervised/event models are demonstrably useful.
+- [ ] RL / FinRL after supervised/event models are demonstrably useful OOS.
 - [ ] Complex deep learning only after classical baselines are beaten OOS.
 - [ ] LLM-assisted research with evidence citations.
 - [ ] Advanced options research after reliable historical options data exists.
