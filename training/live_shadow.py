@@ -2,8 +2,8 @@
 
 This module is simulation-only. It accepts real observations and predictions from
 an upstream market/model process, persists state atomically, and resolves a
-prediction only when the required future bar has actually arrived. It never
-places broker orders.
+prediction only when the executable entry/exit window has actually arrived. It
+never places broker orders.
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def _net_return(direction: str, entry: float, exit_price: float, config: LiveSha
 
 def _new_state(config: LiveShadowConfig, session_id: str) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "session_id": session_id,
         "mode": "LIVE_SHADOW",
         "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -205,17 +205,15 @@ def _refresh_pending(state: dict) -> None:
         if exit_position >= len(frame):
             continue
 
-        current_close = float(frame.iloc[position]["close"])
-        future_close = float(frame.iloc[position + horizon]["close"])
-        realized_return = future_close / current_close - 1
+        entry_price = float(frame.iloc[entry_position]["close"])
+        exit_price = float(frame.iloc[exit_position]["close"])
+        realized_return = exit_price / entry_price - 1
         realized_class = _classify(realized_return)
         confidence = float(prediction["prediction_confidence"])
         correct = prediction["prediction"] == realized_class
         point_delta = confidence if correct else -confidence
         position_weight = 0.0
         portfolio_return = 0.0
-        entry_price = float(frame.iloc[entry_position]["close"])
-        exit_price = float(frame.iloc[exit_position]["close"])
         if prediction["prediction"] != "FLAT" and confidence > 1 / 3:
             edge = (confidence - 1 / 3) / (2 / 3)
             position_weight = min(config.max_position_weight, config.max_position_weight * edge)
@@ -233,7 +231,9 @@ def _refresh_pending(state: dict) -> None:
         state["max_drawdown"] = min(state["max_drawdown"], drawdown)
         prediction.update({
             "outcome_status": "SCORED",
-            "realized_close": future_close,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "realized_close": exit_price,
             "realized_return": realized_return,
             "realized_class": realized_class,
             "entry_timestamp": timestamps[entry_position].isoformat(),
@@ -277,6 +277,8 @@ def record_prediction(state: dict, prediction: dict) -> dict:
         "realized_class": None,
         "entry_timestamp": None,
         "exit_timestamp": None,
+        "entry_price": None,
+        "exit_price": None,
         "position_weight": 0.0,
         "portfolio_return": 0.0,
         "game_score": None,
@@ -343,7 +345,7 @@ def main() -> None:
     parser.add_argument("--slippage-bps", type=float, default=5.0)
     parser.add_argument("--rolling-window", type=int, default=100)
     args = parser.parse_args()
-    config = LiveShadowConfig(args.initial_capital, args.max_position_weight, args.cost_bps, args.slippage_bps)
+    config = LiveShadowConfig(args.initial_capital, args.max_position_weight, args.cost_bps, args.slippage_bps, args.rolling_window)
     print(json.dumps(run_events(args.events, args.state, config, args.session_id), indent=2))
 
 
