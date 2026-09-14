@@ -29,7 +29,7 @@ function Invoke-Init {
   Info "Initialization complete. Run '.\dp.ps1 start'."
 }
 function Invoke-Doctor {
-  foreach ($c in @('node','npm','python','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "$c: available" } else { Warn "$c: missing" } }
+  foreach ($c in @('node','npm','python','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "${c}: available" } else { Warn "${c}: missing" } }
   if (Test-Path $EnvFile) { Info ".env: present" } else { Warn ".env: missing" }
   if (Test-Path (Join-Path $Root "backend\node_modules")) { Info "backend dependencies: installed" } else { Warn "backend dependencies: missing" }
   if (Test-Path (Join-Path $Root "dashboard\node_modules")) { Info "dashboard dependencies: installed" } else { Warn "dashboard dependencies: missing" }
