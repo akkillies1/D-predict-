@@ -12,3 +12,4 @@ db/postgres.log
 releases/*.tar.gz
 releases/SHA256SUMS
 .run/
+dashboard-local.log
