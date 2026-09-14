@@ -70,6 +70,76 @@ def test_backtest_uses_next_close_and_risk_weight(tmp_path):
     assert metrics["final_equity"] > 0
 
 
+def test_distribution_target_is_the_same_economic_exit_as_pnl(tmp_path):
+    prediction_path, history_path = write_inputs(tmp_path, periods=24)
+    predictions = pd.read_csv(prediction_path)
+    # First signal enters on 2026-01-16 at 103.75. Its calibrated target is
+    # 1% above entry and is printed by the next bar's high.
+    for column, value in {
+        "distribution_status": "CALIBRATED",
+        "return_p15": -0.02,
+        "return_p35": 0.01,
+        "return_p55": 0.02,
+        "return_p75": 0.03,
+        "return_p85": 0.04,
+    }.items():
+        predictions[column] = value
+    predictions.loc[0, "prediction"] = "UP"
+    predictions.loc[0, "horizon"] = "3d"
+    predictions = predictions.iloc[[0]]
+    predictions.to_csv(prediction_path, index=False)
+
+    history = pd.read_csv(history_path)
+    # Make the first post-entry bar hit the 1% target while keeping the stop
+    # untouched. The close is deliberately different so P&L proves the target
+    # price, rather than the horizon close, was used.
+    history.loc[16, "high"] = 106.0
+    history.loc[16, "low"] = 104.0
+    history.loc[16, "close"] = 104.25
+    history.to_csv(history_path, index=False)
+
+    result = backtest(prediction_path, history_path, initial_capital=100_000)
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "TARGET_1"
+    assert trade["target_1_hit"] is True
+    assert trade["stop_hit"] is False
+    assert trade["exit_price"] == pytest.approx(trade["target_1_price"])
+    assert trade["exit_price"] != pytest.approx(104.25)
+    assert result["metrics"]["target_1_hit_rate"] == 1.0
+
+
+def test_distribution_stop_is_the_same_economic_exit_as_pnl(tmp_path):
+    prediction_path, history_path = write_inputs(tmp_path, periods=24)
+    predictions = pd.read_csv(prediction_path)
+    for column, value in {
+        "distribution_status": "CALIBRATED",
+        "return_p15": -0.02,
+        "return_p35": 0.01,
+        "return_p55": 0.02,
+        "return_p75": 0.03,
+        "return_p85": 0.04,
+    }.items():
+        predictions[column] = value
+    predictions.loc[0, "prediction"] = "UP"
+    predictions.loc[0, "horizon"] = "3d"
+    predictions = predictions.iloc[[0]]
+    predictions.to_csv(prediction_path, index=False)
+
+    history = pd.read_csv(history_path)
+    history.loc[16, "high"] = 104.0
+    history.loc[16, "low"] = 101.0
+    history.loc[16, "close"] = 103.0
+    history.to_csv(history_path, index=False)
+
+    result = backtest(prediction_path, history_path, initial_capital=100_000)
+    trade = result["trades"][0]
+    assert trade["exit_reason"] == "STOP"
+    assert trade["stop_hit"] is True
+    assert trade["target_1_hit"] is False
+    assert trade["exit_price"] == pytest.approx(trade["stop_price"])
+    assert result["metrics"]["stop_hit_rate"] == 1.0
+
+
 def test_backtest_skips_overlapping_signals(tmp_path):
     prediction_path, history_path = write_inputs(tmp_path)
     predictions = pd.read_csv(prediction_path)
