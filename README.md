@@ -33,9 +33,9 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Cross-instrument correlation-aware exposure limits.
 - [x] Historical paper/shadow replay with virtual capital and accuracy-game scoring.
 - [x] Restart-safe live shadow session state and delayed outcome resolver.
-- [ ] Direct live market connector into the shadow session.
+- [x] Live market connector into the persistent shadow session.
+- [x] Rolling shadow accuracy/calibration metrics.
 - [ ] Live prediction runner using the approved model.
-- [ ] Rolling shadow accuracy/calibration/drift dashboard.
 - [ ] Interactive human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
 - [ ] Automated live execution only after all research/backtest/shadow gates pass.
@@ -117,24 +117,57 @@ The game is not a replacement for OOS validation. It is a controlled training en
 
 ## Live shadow mode
 
-`training/live_shadow.py` is the next layer. It accepts **real timestamped market observations and model predictions from an upstream process**, persists them atomically, and resolves predictions only after the required future observations exist. It has no broker client and no order-placement path.
+`training/live_shadow.py` is the persistent session engine. It accepts real timestamped market observations and validated model predictions, persists them atomically, and resolves predictions only after the required future observations exist. It has no broker client and no order-placement path.
 
-The session is restart-safe: state is written to a temporary file, flushed/fsynced and atomically replaced. Prediction timestamps are unique per symbol. Market bars are immutable by `(symbol, timestamp)`; conflicting duplicates are rejected. Unresolved predictions remain `PENDING`.
+`training/live_shadow_feed.py` is now the market connector. It polls the existing local market API (`/api/market/:symbol/live`) and writes the returned real quote timestamps/closes into the persistent shadow session. It can also ingest an append-only JSONL prediction stream. **It never derives probabilities from a direction/confidence signal and never manufactures market prices.**
 
-Event stream format is JSONL:
-
-```json
-{"type":"bar","timestamp":"2026-09-15T10:00:00Z","symbol":"NIFTY","close":25000}
-{"type":"prediction","timestamp":"2026-09-15T10:00:00Z","symbol":"NIFTY","horizon":"1d","prediction":"UP","market_probability_down":0.1,"market_probability_flat":0.1,"market_probability_up":0.8}
-```
-
-Run locally:
+Example live shadow feed:
 
 ```powershell
-.\collector\.venv\Scripts\python.exe -m training.live_shadow data\shadow\events.jsonl --state data\shadow\session.json --session-id nifty-training
+.\collector\.venv\Scripts\python.exe -m training.live_shadow_feed NIFTY BANKNIFTY `
+  --api-base http://127.0.0.1:4100 `
+  --state data\shadow\session.json `
+  --predictions data\shadow\predictions.jsonl `
+  --interval 15
 ```
 
-The live-shadow module is intentionally an adapter/session boundary. It does **not** claim that the existing market collector or model is already wired to it. The next implementation step is that connector, followed by the rolling accuracy/calibration monitor and dashboard/game mode.
+For a single connectivity check:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.live_shadow_feed NIFTY --once --state data\shadow\session.json
+```
+
+Prediction JSONL must contain the complete probability vector, for example:
+
+```json
+{"timestamp":"2026-09-15T10:00:00Z","symbol":"NIFTY","horizon":"1d","prediction":"UP","market_probability_down":0.1,"market_probability_flat":0.1,"market_probability_up":0.8}
+```
+
+The feed is intentionally **not** the live prediction runner. That remains a separate gate because the approved model must produce the probability vector from a point-in-time feature set rather than converting an existing signal into synthetic probabilities.
+
+## Rolling shadow metrics
+
+`training/shadow_metrics.py` evaluates only predictions already marked `SCORED` by the shadow engine. Pending predictions are excluded rather than treated as wrong.
+
+It reports:
+
+- overall and rolling-window accuracy;
+- directional accuracy and number of directional calls;
+- mean prediction confidence;
+- multiclass Brier score;
+- calibration gap;
+- confidence-bucket calibration;
+- pending count;
+- virtual return and maximum drawdown;
+- `live_orders_sent = 0`.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.shadow_metrics data\shadow\session.json --window 100 --output data\shadow\metrics.json
+```
+
+This is an evaluation monitor, not a promotion decision. Sustained-shadow promotion will be implemented separately after the live prediction runner exists.
 
 ## Main training modules
 
@@ -156,6 +189,8 @@ The live-shadow module is intentionally an adapter/session boundary. It does **n
 - `exposure.py` — cross-instrument exposure attribution/correlation limits.
 - `shadow.py` — historical paper/shadow replay and accuracy game.
 - `live_shadow.py` — restart-safe live observations, delayed resolution and virtual P&L.
+- `live_shadow_feed.py` — local market API → persistent live-shadow connector.
+- `shadow_metrics.py` — rolling accuracy and calibration monitor.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -167,7 +202,7 @@ The GitHub implementation and tests have been added, but the Windows test suite 
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-Do not treat the new live-shadow implementation as verified until that command passes locally.
+Do not treat the live-shadow implementation as verified until that command passes locally.
 
 ## Local-first runtime
 
@@ -202,9 +237,9 @@ Vercel is optional frontend/demo infrastructure, not the primary research runtim
 
 - [x] Historical paper/shadow replay.
 - [x] Restart-safe live shadow session engine.
-- [ ] Live market connector.
-- [ ] Live prediction runner.
-- [ ] Rolling accuracy/calibration/drift monitor.
+- [x] Live market connector.
+- [x] Rolling accuracy/calibration monitor.
+- [ ] Live prediction runner using the approved model.
 - [ ] Interactive dashboard/game mode.
 - [ ] Human-vs-model scorecards.
 - [ ] Sustained shadow promotion gate.
