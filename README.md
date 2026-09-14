@@ -40,14 +40,7 @@ The research layer is intentionally **public-information only**. It does not acc
 
 The objective is not to display a confident-looking number. The objective is to make the confidence reflect evidence quality.
 
-The research score therefore considers:
-
-- freshness of information
-- number and diversity of sources
-- agreement/disagreement across sources
-- higher weight for official exchange/regulatory sources
-- bullish versus bearish evidence
-- explicit governance/regulatory risk themes
+The research score considers freshness, source diversity, source agreement/disagreement, higher weight for official exchange/regulatory sources, bullish versus bearish evidence, and explicit governance/regulatory risk themes.
 
 A single article should not create a high-confidence conclusion. A strong-looking headline without confirmation should remain a weak signal.
 
@@ -57,13 +50,20 @@ A single article should not create a high-confidence conclusion. A strong-lookin
 
 ### News
 
-The local research service uses Yahoo Finance search/news and GDELT's document-search API for broad recent coverage. GDELT supports keyword/phrase search and rolling time windows for news discovery. citeturn168127search0
+The local research service uses Yahoo Finance search/news and GDELT's document-search API for broad recent coverage. GDELT supports keyword/phrase search and rolling time windows for news discovery.
+
+- GDELT: https://www.gdeltproject.org/
+- GDELT DOC API: https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
 
 ### Official disclosures
 
-The dashboard provides direct access to NSE corporate announcements and NSE public Regulation 7(2) insider-trading disclosures. NSE also publishes corporate-announcement datasets and an insider-trading archive. citeturn814199search0turn814199search9turn814199search7
+The dashboard provides direct access to NSE corporate announcements and NSE public Regulation 7(2) insider-trading disclosures. NSE also publishes corporate-announcement datasets and an insider-trading archive.
 
-SEBI publishes public filings and enforcement material, including records concerning suspected insider-trading activity. citeturn168127search2turn168127search8
+- NSE announcements: https://www.nseindia.com/companies-listing/corporate-filings-announcements
+- NSE insider trading: https://www.nseindia.com/companies-listing/corporate-filings-insider-trading
+- NSE insider-trading archive: https://www.nseindia.com/companies-listing/corporate-filings-insider-trading-archive-data
+- SEBI filings: https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=3&smid=11
+- SEBI insider-trading search: https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListingAll=yes&search=Insider+Trading
 
 ## Local architecture
 
@@ -151,7 +151,7 @@ See [`LOCAL_INSTALL_GUIDE.md`](LOCAL_INSTALL_GUIDE.md) for the full Windows walk
 
 ## Linux / macOS
 
-The existing `./dp` launcher remains available for Unix-like systems:
+The `./dp` launcher starts PostgreSQL, the market API, research service, dashboard and collector.
 
 ```bash
 git clone https://github.com/akkillies1/D-predict-.git
@@ -161,8 +161,6 @@ cd D-predict-
 ./dp start
 ```
 
-The primary difference on Windows is using `dp.ps1` instead of `./dp`.
-
 ## Searching a ticker
 
 Use the dashboard search box. Search is debounced and can discover supported Yahoo symbols even when they have not yet been activated locally.
@@ -171,13 +169,6 @@ Example:
 
 ```text
 rel
-```
-
-can produce matches such as:
-
-```text
-RELIANCE.NS
-TCS.NS
 ```
 
 Select a result. D-predict activates it in the local instrument table so the collector can pick it up on its next cycle.
@@ -259,6 +250,7 @@ Unix-like systems:
 ./dp test
 ./dp stop
 ./dp api
+./dp research
 ./dp collect
 ```
 
