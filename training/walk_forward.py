@@ -2,7 +2,7 @@
 
 Each validation prediction is made using only earlier observations, with a
 label-horizon purge between training and validation. The resulting
-out-of-sample ledger is the material used by calibration and meta-model work.
+out-of-sample ledger is the material used by calibration and trade-thesis work.
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss, mean_absolute_error, mean_squared_error
 
 from .dataset import DatasetSpec, PointInTimeDataset, make_segments
 from .train_baseline import CLASS_MAP, CLASS_NAMES, FEATURE_COLUMNS
@@ -68,13 +68,24 @@ def evaluate(symbol: str, horizon: str, folds: int) -> dict:
         if train.empty or valid.empty:
             continue
 
-        model = HistGradientBoostingClassifier(
+        classifier = HistGradientBoostingClassifier(
             learning_rate=0.05, max_iter=250, max_leaf_nodes=15,
             l2_regularization=1.0, random_state=42,
         )
-        model.fit(train[FEATURE_COLUMNS], train["target_class"].map(CLASS_MAP))
-        probs = model.predict_proba(valid[FEATURE_COLUMNS])
-        pred = model.predict(valid[FEATURE_COLUMNS])
+        classifier.fit(train[FEATURE_COLUMNS], train["target_class"].map(CLASS_MAP))
+        probs = classifier.predict_proba(valid[FEATURE_COLUMNS])
+        pred = classifier.predict(valid[FEATURE_COLUMNS])
+
+        # The return forecast is trained independently but under the exact same
+        # expanding-window / purge boundary. It is OOS by construction and is
+        # the foundation for the later conditional return-distribution layer.
+        return_model = HistGradientBoostingRegressor(
+            learning_rate=0.05, max_iter=250, max_leaf_nodes=15,
+            l2_regularization=1.0, random_state=42, loss="squared_error",
+        )
+        return_model.fit(train[FEATURE_COLUMNS], train["target_return"])
+        predicted_returns = return_model.predict(valid[FEATURE_COLUMNS])
+
         for idx, (timestamp, row) in enumerate(valid.iterrows()):
             p = probs[idx]
             rows.append({
@@ -90,6 +101,7 @@ def evaluate(symbol: str, horizon: str, folds: int) -> dict:
                 "prediction": CLASS_NAMES[int(pred[idx])],
                 "actual": row["target_class"],
                 "target_return": float(row["target_return"]),
+                "predicted_return": float(predicted_returns[idx]),
             })
 
     if not rows:
@@ -102,6 +114,7 @@ def evaluate(symbol: str, horizon: str, folds: int) -> dict:
     y_true = result["actual"].map(CLASS_MAP)
     y_pred = result["prediction"].map(CLASS_MAP)
     proba = result[["market_probability_down", "market_probability_flat", "market_probability_up"]].to_numpy()
+    return_error = result["target_return"] - result["predicted_return"]
     metrics = {
         "symbol": symbol.upper(),
         "horizon": horizon,
@@ -111,6 +124,9 @@ def evaluate(symbol: str, horizon: str, folds: int) -> dict:
         "accuracy": round(float(accuracy_score(y_true, y_pred)), 6),
         "balanced_accuracy": round(float(balanced_accuracy_score(y_true, y_pred)), 6),
         "log_loss": round(float(log_loss(y_true, proba, labels=[0, 1, 2])), 6),
+        "return_mae": round(float(mean_absolute_error(result["target_return"], result["predicted_return"])), 8),
+        "return_rmse": round(float(mean_squared_error(result["target_return"], result["predicted_return"]) ** 0.5), 8),
+        "return_bias": round(float(return_error.mean()), 8),
         "prediction_file": str(out),
     }
     print(json.dumps(metrics, indent=2))
