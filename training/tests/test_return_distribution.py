@@ -43,7 +43,7 @@ def test_current_outcome_is_not_available_to_its_own_distribution():
 
 
 def test_trade_thesis_derives_targets_and_stop_from_distribution():
-    frame = ledger_frame([0.01, 0.02, 0.03, 0.04, 0.05, 0.06])
+    frame = ledger_frame([-0.04, -0.02, 0.01, 0.02, 0.04, 0.06])
     calibrated = calibrate_return_distributions(frame, ReturnDistributionConfig(min_history=3))
     thesis = construct_trade_thesis(calibrated.iloc[-1], 1000.0, ReturnDistributionConfig(min_history=3))
 
