@@ -16,6 +16,8 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Point-in-time datasets, purge-aware splits and deterministic manifests.
 - [x] Baseline model + expanding walk-forward validation.
 - [x] Walk-forward OOS ledger now includes an independent `predicted_return` forecast and return MAE/RMSE/bias.
+- [x] Leakage-free prior-OOS residual distribution primitive with explicit `UNCALIBRATED`/`CALIBRATED` status.
+- [x] Deterministic distribution-derived target/stop and trade-thesis primitive; not yet promoted as calibrated until independent OOS hit-rate tests pass.
 - [x] Prediction/realized-outcome scoring and stability promotion gates.
 - [x] Causal risk-weighted backtest, drawdown and correlation limits.
 - [x] Historical and restart-safe live shadow simulation.
@@ -29,11 +31,10 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 
 ### Next gates
 
-- [ ] Integrate context/state/quality into versioned OOS datasets.
-- [ ] Build leakage-free conditional return-distribution calibration from prior OOS residuals.
-- [ ] Derive probabilistic T1/T2/T3 targets and stop levels from the calibrated distribution.
-- [ ] Produce a versioned complete Trade Thesis: direction, entry, targets, stop, horizon, probabilities, confidence and tradeability.
+- [ ] Add dedicated unit/adversarial tests for return-distribution leakage and target/stop construction.
+- [ ] Integrate distribution/thesis into the OOS prediction pipeline without using future outcomes.
 - [ ] Validate target/stop probability calibration independently OOS.
+- [ ] Measure return-distribution coverage, interval width and conditional calibration by horizon/regime/confidence.
 - [ ] Wire active-position ledger into backtest/shadow engines.
 - [ ] Replace cumulative exposure with active-position exposure.
 - [ ] Deterministic forecast seed/version provenance.
@@ -119,35 +120,38 @@ Run after the relevant local historical and walk-forward prediction artifacts ex
 
 Outputs are written under `data/reports/`. The report explicitly records missing symbols/artifacts instead of inventing results.
 
-## Trade thesis roadmap
+## Return distribution and trade thesis
 
-The next research layer is deliberately **not** a hard-coded target calculator. The model will first produce a point-in-time return forecast and an independently calibrated conditional return distribution. Price targets, stop probability and tradeability will then be derived from that distribution.
-
-The expanding-window walk-forward ledger now contains `predicted_return` alongside the existing direction probabilities and realized target return. The classifier and return regressor share the same training cutoff and label-horizon purge, so the return forecast is OOS by construction.
+`training/return_distribution.py` is the first implementation of the trade-thesis layer. It consumes OOS predictions containing `predicted_return` and builds an expanding residual distribution from:
 
 ```text
-DIRECTION MODEL + RETURN MODEL
-              ↓
-       OOS RETURN FORECAST
-              ↓
-   PRIOR-OOS RESIDUAL CALIBRATION
-              ↓
-     CONDITIONAL RETURN PDF/CDF
-              ↓
-       PRICE DISTRIBUTION
-          ↓     ↓
-       TARGETS  STOP
-          ↓     ↓
-       PROBABILITIES
-              ↓
-         TRADE THESIS
-              ↓
-      SIGNAL QUALITY / NO_TRADE
-              ↓
-       RISK / POSITION / P&L
+actual_return - predicted_return
 ```
 
-Targets must never be arbitrary fixed percentages. If a target is reported with a probability, that probability must be evaluated later against its independently observed hit rate out-of-sample. The distribution layer must use only information available at the prediction timestamp and must not tune itself against future outcomes.
+Only residuals from strictly earlier predictions for the same symbol and horizon are eligible. The current row's outcome is appended **after** its distribution is constructed, preventing same-row leakage. Before the minimum history is reached, the row is explicitly `UNCALIBRATED` and cannot produce an executable thesis.
+
+Targets are derived from distribution quantiles corresponding to configurable hit probabilities, rather than fixed `+5%`/`-5%` rules. The stop is likewise derived from an adverse-tail probability. The initial v1 target probabilities are `65%`, `45%`, and `25%`; these are design parameters, not claimed calibration results. They must be independently validated out of sample before being treated as trustworthy probabilities.
+
+The thesis primitive produces:
+
+```text
+Direction
+Signal
+Decision
+Entry
+Expected return
+Target 1 / Target 2 / Target 3 + probabilities
+Stop + probability
+Risk/reward to Target 1
+Horizon
+Model probability / confidence
+Distribution status
+Thesis version
+```
+
+`EXECUTABLE` is only possible when the distribution is calibrated, the prediction is directional, the distribution provides at least one favorable target and a valid adverse stop. Otherwise the result is explicit `NO_TRADE`.
+
+This module is currently a research primitive. It is **not yet integrated into the production prediction UI, backtest or shadow engine**, and its probabilities are not yet promotion-approved.
 
 ## Research chain
 
@@ -182,6 +186,7 @@ MARKET DATA
 - `training/cross_stock_validation.py` — six-stock point-in-time executable validation/report.
 - `training/train_baseline.py` — classical classifier/regressor.
 - `training/walk_forward.py` — expanding-window OOS direction and return forecasts.
+- `training/return_distribution.py` — leakage-free OOS residual distribution and thesis construction.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
 - `training/score_realized_outcomes.py` — independent realized outcomes.
 - `training/analyze_prediction_stability.py` — calibration/fold/regime analysis.
@@ -220,14 +225,15 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [x] Active position lifecycle primitive.
 - [x] Cross-stock validation harness.
 - [x] OOS predicted-return ledger foundation.
+- [x] Leakage-free return-distribution primitive.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
 - [ ] Native sector-index histories rather than peer proxies.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Conditional return-distribution calibration.
-- [ ] Probabilistic target/stop engine.
-- [ ] Complete versioned Trade Thesis.
+- [ ] Independent target/stop probability calibration.
+- [ ] Distribution coverage and interval-width validation.
+- [ ] Complete production Trade Thesis integration.
 - [ ] Executable-outcome confidence calibration.
 - [ ] Human-readable + machine-readable research report review against baseline.
 
