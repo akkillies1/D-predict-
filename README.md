@@ -23,6 +23,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Causal benchmark/sector context primitives and tests.
 - [x] Active position lifecycle ledger and exposure-release tests.
 - [x] Deterministic signal-quality / `NO_TRADE` primitive and tests.
+- [x] Cross-stock point-in-time validation harness and confidence/regime report generation.
 
 ### Next gates
 
@@ -30,7 +31,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [ ] Wire active-position ledger into backtest/shadow engines.
 - [ ] Replace cumulative exposure with active-position exposure.
 - [ ] Deterministic forecast seed/version provenance.
-- [ ] Cross-stock validation harness and report.
+- [ ] Run the six-stock harness on the user's local historical/prediction artifacts and review failures.
 - [ ] Approved-model live prediction runner.
 - [ ] Human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
@@ -47,6 +48,8 @@ MarketState is **not** a trade signal. Oversold/overbought are structural modifi
 `training/context_features.py` computes benchmark and sector context using only observations at or before timestamp `T`: benchmark return 1/5/20, sector return 1/5/20, stock-vs-benchmark relative strength 1/5/20, 60-row stock return context and stock-vs-sector relative strength.
 
 These primitives are **not yet wired into production training**. They must first pass cross-stock leakage and OOS validation. No news, analyst opinions or observed September-2026 outcomes are used.
+
+The cross-stock harness currently labels the sector field as a **peer proxy** when a native sector-index history is unavailable. It never silently presents a peer stock as a true sector index.
 
 ## Signal quality / NO_TRADE
 
@@ -85,7 +88,30 @@ ONE realized event
     └─ game score
 ```
 
-The previous `T → T+horizon` versus `T+1 → T+1+horizon` mismatch has been corrected in shadow. The adversarial case where `T → T+1` rises but `T+1 → T+2` falls is covered by the shadow test suite.
+The previous `T → T+horizon` versus `T+1 → T+1+horizon` mismatch has been corrected in shadow. The adversarial case where `T → T+1` rises but `T+1 → T+2` falls is covered by the shadow test suite and the cross-stock harness.
+
+## Cross-stock validation
+
+`training/cross_stock_validation.py` evaluates existing OOS prediction ledgers for:
+
+```text
+SBI
+HDFCBANK
+RELIANCE
+ONGC
+LT
+ADANIPORTS
+```
+
+The harness does **not** retrain or tune the model. For every prediction timestamp it records causal MarketState, benchmark/peer-sector context, forecast confidence, executable entry/exit prices, friction-adjusted trade return, directional correctness, executable trade accuracy, MAE and MFE. It also produces confidence-bucket and regime/volatility performance summaries.
+
+Run after the relevant local historical and walk-forward prediction artifacts exist:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.cross_stock_validation --horizon 1d
+```
+
+Outputs are written under `data/reports/`. The report explicitly records missing symbols/artifacts instead of inventing results.
 
 ## Research chain
 
@@ -114,6 +140,7 @@ MARKET DATA
 - `training/context_features.py` — causal benchmark/sector context.
 - `training/signal_quality.py` — deterministic quality / no-trade decisions.
 - `training/position_ledger.py` — active position lifecycle and exposure release.
+- `training/cross_stock_validation.py` — six-stock point-in-time executable validation/report.
 - `training/train_baseline.py` — classical classifier/regressor.
 - `training/walk_forward.py` — expanding-window OOS predictions.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
@@ -134,7 +161,13 @@ The GitHub implementation has **not** been executed in the user's Windows enviro
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-The new layers are not considered production-validated until the full suite and the cross-stock OOS harness pass.
+Then run the harness:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.cross_stock_validation --horizon 1d
+```
+
+Do not treat generated reports as evidence of model improvement until the artifacts are present, the tests pass, and the report is reviewed for missing-data failures and point-in-time integrity.
 
 ## Future improvement checklist
 
@@ -144,13 +177,14 @@ The new layers are not considered production-validated until the full suite and 
 - [x] Causal benchmark/sector context primitives.
 - [x] Signal-quality / `NO_TRADE` primitive.
 - [x] Active position lifecycle primitive.
+- [x] Cross-stock validation harness.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
+- [ ] Native sector-index histories rather than peer proxies.
 - [ ] Formal point-in-time Regime Model.
 - [ ] Executable-outcome confidence calibration.
-- [ ] Cross-stock harness: SBI, HDFC BANK, RELIANCE, ONGC, LT, ADANIPORTS.
-- [ ] Human + machine research report.
+- [ ] Human-readable + machine-readable research report review against baseline.
 
 ### Shadow / risk / runtime
 
