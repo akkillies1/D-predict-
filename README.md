@@ -71,6 +71,41 @@ Example:
 .\collector\.venv\Scripts\python.exe -m training.probability_calibration data\predictions\realized.csv --min-history 100 --output data\reports\probability_calibration.json
 ```
 
+## Target price + time-to-target
+
+The trade thesis now treats **target price** and **time-to-target** as two separate predictions. `training/return_distribution.py` determines the target price and its hit probability from the OOS return distribution. `training/target_timing.py` estimates the time required to reach that exact target using an empirical first-passage-time distribution from historical bars.
+
+The timing engine reports:
+
+- median ETA (`p50`)
+- probable ETA range (`p25`–`p75`)
+- seconds
+- minutes
+- hours
+- days
+- number of historical target-hit events used
+- data resolution used for the estimate
+
+`training/trade_thesis_timing.py` attaches this information to every T1/T2/T3 target without changing the target price itself.
+
+Example presentation:
+
+```text
+TARGET 1: ₹1,238
+Probability: 68%
+Expected time: 2h 35m
+Likely range: 1h 20m – 4h 10m
+
+TARGET 2: ₹1,215
+Probability: 47%
+Expected time: 1d 2h
+Likely range: 8h – 2d 6h
+```
+
+This is deliberately **not** fake precision. If the source data is daily, D-Predict cannot honestly claim that a target will be reached in 17 minutes 42 seconds. Minute/second-level ETA requires minute/second-level historical bars and sufficient first-passage observations. If there is insufficient history, the result is explicitly `INSUFFICIENT_HISTORY`.
+
+The economic meaning is first-passage time: starting from an equivalent historical entry, how long did it actually take for price to reach the same favorable return threshold? It is an ETA distribution, not a guaranteed arrival timestamp.
+
 ## Return distribution and trade thesis
 
 D-Predict does not use arbitrary fixed-percentage targets. `training/return_distribution.py` constructs an expanding residual distribution from strictly prior OOS return forecasts:
@@ -108,9 +143,11 @@ DIRECTION + RETURN FORECAST
         ↓
 OOS PROBABILITY CALIBRATION
         ↓
-CALIBRATED DISTRIBUTION
+CALIBRATED PRICE DISTRIBUTION
         ↓
-TARGET / STOP / HORIZON
+TARGET PRICE + TIME-TO-TARGET
+        ↓
+STOP / HORIZON
         ↓
 TRADE THESIS
         ↓
@@ -125,7 +162,7 @@ INDEPENDENT VALIDATION
 PROMOTION GATE
 ```
 
-The economic event must remain consistent across forecast scoring, target/stop scoring, executable trade accuracy, P&L, MAE and MFE.
+The economic event must remain consistent across forecast scoring, target/stop scoring, time-to-target scoring, executable trade accuracy, P&L, MAE and MFE.
 
 ## Future improvement checklist
 
@@ -141,9 +178,12 @@ The economic event must remain consistent across forecast scoring, target/stop s
 
 ### Trade thesis
 - [x] Distribution-derived targets/stops integrated into executable backtest
+- [x] Empirical first-passage time-to-target estimator
+- [x] T1/T2/T3 ETA integration
 - [x] MAE/MFE and first-hit target/stop event recording
 - [ ] Persist deterministic forecast/model/dataset provenance
 - [ ] Validate target probabilities on independent future periods
+- [ ] Validate time-to-target probabilities on independent future periods
 - [ ] Validate risk/reward after realistic friction
 
 ### Promotion
