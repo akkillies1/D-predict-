@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from training.backtest import DrawdownConfig, backtest, drawdown_multiplier
+from training.backtest import DrawdownConfig, backtest, drawdown_multiplier, load_inputs
 from training.risk import RiskConfig
 
 
@@ -88,6 +88,29 @@ def test_backtest_rejects_bad_history(tmp_path):
     history.to_csv(history_path, index=False)
     with pytest.raises(ValueError, match="positive"):
         backtest(prediction_path, history_path)
+
+
+def test_prediction_key_allows_same_timestamp_for_different_symbols(tmp_path):
+    prediction_path, history_path = write_inputs(tmp_path)
+    predictions = pd.read_csv(prediction_path)
+    duplicate = predictions.iloc[[0]].copy()
+    duplicate["symbol"] = "BANKNIFTY"
+    predictions = pd.concat([predictions, duplicate], ignore_index=True)
+    predictions.to_csv(prediction_path, index=False)
+
+    loaded_predictions, _ = load_inputs(prediction_path, history_path)
+    assert len(loaded_predictions) == 4
+
+
+def test_prediction_key_rejects_same_symbol_horizon_timestamp(tmp_path):
+    prediction_path, history_path = write_inputs(tmp_path)
+    predictions = pd.read_csv(prediction_path)
+    duplicate = predictions.iloc[[0]].copy()
+    predictions = pd.concat([predictions, duplicate], ignore_index=True)
+    predictions.to_csv(prediction_path, index=False)
+
+    with pytest.raises(ValueError, match="Prediction keys must be unique"):
+        load_inputs(prediction_path, history_path)
 
 
 def test_hard_drawdown_blocks_new_risk_without_freezing_future_signals(tmp_path):
