@@ -1,11 +1,14 @@
 """Paper/shadow trading simulator for historical replay and model training.
 
 This module never sends orders. It replays an OOS prediction ledger against
-historical closes, resolves outcomes only when the required future bar exists,
-and maintains virtual capital plus an accuracy/training score.
+historical closes, resolves outcomes only when the executable entry/exit window
+exists, and maintains virtual capital plus an accuracy/training score.
 
-The same engine can later consume a live prediction stream: unresolved
-predictions remain PENDING until the future observation becomes available.
+Prediction correctness and simulated P&L deliberately use the same economic
+event: prediction at T, entry at the next available bar, then exit after the
+requested trading-row horizon. This prevents a prediction from being scored
+correct while its corresponding simulated trade loses money solely because the
+scoring and execution windows differ.
 """
 from __future__ import annotations
 
@@ -110,7 +113,7 @@ def replay(
     histories: dict[str, pd.DataFrame],
     config: ShadowConfig | None = None,
 ) -> dict:
-    """Replay predictions chronologically with virtual capital and accuracy scoring."""
+    """Replay predictions with one unified executable entry/exit outcome window."""
     config = config or ShadowConfig()
     config.validate()
     _validate_ledger(ledger)
@@ -164,22 +167,17 @@ def replay(
             continue
 
         horizon = HORIZON_ROWS[str(row["horizon"]).lower()]
-        future_position = position + horizon
-        if future_position >= len(history):
-            pending += 1
-            rows.append(base)
-            continue
-
         entry_position = position + 1
-        if entry_position >= len(history) or entry_position + horizon >= len(history):
+        exit_position = entry_position + horizon
+        if exit_position >= len(history):
             pending += 1
             rows.append(base)
             continue
 
-        current_close = float(history.iloc[position]["close"])
-        future_close = float(history.iloc[future_position]["close"])
-        realized_return = future_close / current_close - 1.0
-        realized_class = _classify(realized_return)
+        entry_price = float(history.iloc[entry_position]["close"])
+        exit_price = float(history.iloc[exit_position]["close"])
+        prediction_return = exit_price / entry_price - 1.0
+        realized_class = _classify(prediction_return)
         prediction = str(row["prediction"])
         confidence = float(base["prediction_confidence"])
         correct_now = prediction == realized_class
@@ -193,12 +191,9 @@ def replay(
 
         position_weight = 0.0
         portfolio_return = 0.0
-        entry_price = float(history.iloc[entry_position]["close"])
-        exit_position = entry_position + horizon
         if prediction != "FLAT" and confidence > 1 / 3:
             edge = (confidence - 1 / 3) / (2 / 3)
             position_weight = min(config.max_position_weight, config.max_position_weight * edge)
-            exit_price = float(history.iloc[exit_position]["close"])
             trade_return = _net_return(prediction, entry_price, exit_price, config)
             portfolio_return = position_weight * trade_return
             equity *= 1.0 + portfolio_return
@@ -209,9 +204,11 @@ def replay(
             "outcome_status": "SCORED",
             "entry_timestamp": timestamps[entry_position].isoformat(),
             "exit_timestamp": timestamps[exit_position].isoformat(),
-            "realized_close": future_close,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "realized_close": exit_price,
             "realized_class": realized_class,
-            "realized_return": realized_return,
+            "realized_return": prediction_return,
             "position_weight": position_weight,
             "portfolio_return": portfolio_return,
             "game_score": point_delta,
