@@ -24,10 +24,16 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Active position lifecycle ledger and exposure-release tests.
 - [x] Deterministic signal-quality / `NO_TRADE` primitive and tests.
 - [x] Cross-stock point-in-time validation harness and confidence/regime report generation.
+- [x] Hardened CI tests for the portfolio confidence boundary and floating-point position P&L assertions.
 
 ### Next gates
 
 - [ ] Integrate context/state/quality into versioned OOS datasets.
+- [ ] Add OOS predicted-return forecasts to the prediction ledger.
+- [ ] Build leakage-free conditional return-distribution calibration from prior OOS residuals.
+- [ ] Derive probabilistic T1/T2/T3 targets and stop levels from the calibrated distribution.
+- [ ] Produce a versioned complete Trade Thesis: direction, entry, targets, stop, horizon, probabilities, confidence and tradeability.
+- [ ] Validate target/stop probability calibration independently OOS.
 - [ ] Wire active-position ledger into backtest/shadow engines.
 - [ ] Replace cumulative exposure with active-position exposure.
 - [ ] Deterministic forecast seed/version provenance.
@@ -113,6 +119,34 @@ Run after the relevant local historical and walk-forward prediction artifacts ex
 
 Outputs are written under `data/reports/`. The report explicitly records missing symbols/artifacts instead of inventing results.
 
+## Trade thesis roadmap
+
+The next research layer is deliberately **not** a hard-coded target calculator. The model will first produce a point-in-time return forecast and an independently calibrated conditional return distribution. Price targets, stop probability and tradeability will then be derived from that distribution.
+
+```text
+DIRECTION MODEL + RETURN MODEL
+              ↓
+       OOS RETURN FORECAST
+              ↓
+   PRIOR-OOS RESIDUAL CALIBRATION
+              ↓
+     CONDITIONAL RETURN PDF/CDF
+              ↓
+       PRICE DISTRIBUTION
+          ↓     ↓
+       TARGETS  STOP
+          ↓     ↓
+       PROBABILITIES
+              ↓
+         TRADE THESIS
+              ↓
+      SIGNAL QUALITY / NO_TRADE
+              ↓
+       RISK / POSITION / P&L
+```
+
+Targets must never be arbitrary fixed percentages. If a target is reported with a probability, that probability must be evaluated later against its independently observed hit rate out-of-sample. The distribution layer must use only information available at the prediction timestamp and must not tune itself against future outcomes.
+
 ## Research chain
 
 ```text
@@ -124,6 +158,7 @@ MARKET DATA
  → MODEL
  → PREDICTION
  → SIGNAL QUALITY / NO TRADE
+ → TRADE THESIS
  → EXECUTABLE TRADE EVENT
  → ACTIVE POSITIONS
  → RISK / EXPOSURE
@@ -185,6 +220,10 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [ ] Context/state/quality integration into OOS datasets.
 - [ ] Native sector-index histories rather than peer proxies.
 - [ ] Formal point-in-time Regime Model.
+- [ ] OOS predicted-return ledger.
+- [ ] Conditional return-distribution calibration.
+- [ ] Probabilistic target/stop engine.
+- [ ] Complete versioned Trade Thesis.
 - [ ] Executable-outcome confidence calibration.
 - [ ] Human-readable + machine-readable research report review against baseline.
 
