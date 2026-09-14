@@ -24,6 +24,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Automated tests for history validation and dataset point-in-time rules.
 - [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
 - [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
+- [x] Reproducible dataset manifests and SHA-256 content fingerprints emitted by dataset builds.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
 - [x] Production favicon added and linked from the dashboard HTML.
 - [x] Vercel root build/output configuration added for the monorepo dashboard.
@@ -31,7 +32,6 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] One-command Windows local launcher starts the database, market API, collector and dashboard, performs health checks and opens the browser.
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
-- [ ] Add reproducible dataset manifests and dataset fingerprints.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
 - [ ] Add prediction-ledger outcome scoring.
 - [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
@@ -44,8 +44,9 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Background startup for PostgreSQL, market API and collector through Docker Compose.
 - [x] Automatic dashboard startup and browser launch.
 - [x] Local health-check gate before opening the UI.
-- [ ] Add a polished cross-platform launcher for macOS/Linux.
+- [ ] Start and health-check every required research service.
 - [ ] Add graceful process supervision/restart for failed local services.
+- [ ] Add a polished cross-platform launcher for macOS/Linux.
 - [ ] Add a desktop-style tray/stop experience after the local runtime is stable.
 - [ ] Package an optional Windows executable/installer.
 
@@ -56,7 +57,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Add corporate-action adjustment/provenance handling.
 - [ ] Add point-in-time historical news and disclosure ingestion.
 - [ ] Add data-quality reports and freshness monitoring per source.
-- [ ] Add reproducible dataset manifests and content fingerprints.
+- [x] Reproducible dataset manifests and content fingerprints.
 - [ ] Add native `pgvector` storage/indexing when document volume justifies it.
 
 ### Research and modelling
@@ -202,7 +203,7 @@ The objective is not to display a confident-looking number. The objective is to 
 
 The current research score considers freshness, source diversity, source agreement/disagreement, higher weight for official exchange/regulatory sources, bullish versus bearish evidence, and explicit governance/regulatory risk themes.
 
-The ML layer adds a stronger requirement: every training example is tied to a timestamp, features only use information available at that timestamp, and the future move is stored separately as the target. Dataset construction records a formal feature-set version and label horizon, validates source cutoffs, and creates chronological splits with a purge gap sized to the target horizon. The baseline trainer and walk-forward evaluator consume this contract rather than maintaining independent split logic.
+The ML layer adds a stronger requirement: every training example is tied to a timestamp, features only use information available at that timestamp, and the future move is stored separately as the target. Dataset construction records a formal feature-set version and label horizon, validates source cutoffs, creates chronological splits with a purge gap sized to the target horizon, and emits a manifest containing provenance and a deterministic SHA-256 content fingerprint. The baseline trainer and walk-forward evaluator consume this contract rather than maintaining independent split logic.
 
 **No prediction system can guarantee accuracy.** A model is only promoted after its out-of-sample performance, calibration, false-positive rate, regime-specific behaviour and robustness are measured.
 
@@ -213,7 +214,8 @@ The repository includes a repeatable baseline training pipeline under `training/
 - `download_historical.py` downloads raw daily history when local PostgreSQL history is insufficient.
 - `validate_history.py` checks raw OHLCV history before research use.
 - `dataset.py` defines the D-predict-native point-in-time dataset contract and chronological segments.
-- `build_dataset.py` creates point-in-time market features and future-return labels for 1-day, 3-day and 5-day horizons and records a purge-aware dataset split.
+- `manifest.py` creates deterministic dataset fingerprints and JSON provenance manifests.
+- `build_dataset.py` creates point-in-time market features and future-return labels for 1-day, 3-day and 5-day horizons, persists purge-aware split assignments and writes a manifest beside each dataset.
 - `train_baseline.py` trains a market classifier and return regressor from the formal dataset contract.
 - `walk_forward.py` produces strictly out-of-sample predictions using expanding windows with horizon-aware purging.
 - `train_meta.py` learns a conservative calibration layer over available model probabilities.
