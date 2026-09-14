@@ -163,9 +163,13 @@ def build(symbol: str, min_rows: int = 500) -> None:
         data["dataset_split"] = split_by_timestamp.values
         data = data.dropna(subset=["dataset_split"])
 
+        # The manifest must describe exactly the bytes of the final dataset frame,
+        # including the persisted split assignment.
+        final_dataset = PointInTimeDataset(spec=spec, frame=data, segments=segments)
+        final_dataset.validate()
         path = DATA_DIR / f"{symbol.lower()}_{horizon}.csv"
         data.reset_index(names="timestamp").to_csv(path, index=False)
-        manifest = build_manifest(dataset, source=source, output_path=path)
+        manifest = build_manifest(final_dataset, source=source, output_path=path)
         manifest["dataset_rows_after_split"] = int(len(data))
         manifest_path = DATA_DIR / f"{symbol.lower()}_{horizon}.manifest.json"
         write_manifest(manifest, manifest_path)
