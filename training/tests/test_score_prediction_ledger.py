@@ -26,8 +26,8 @@ def test_score_reports_accuracy_and_majority_lift() -> None:
     assert result["examples"] == 6
     assert result["folds"] == 2
     assert result["accuracy"] == pytest.approx(5 / 6)
-    assert result["majority_baseline_accuracy"] == pytest.approx(2 / 6)
-    assert result["accuracy_lift_vs_majority"] == pytest.approx(0.5)
+    assert result["majority_baseline_accuracy"] == pytest.approx(3 / 6)
+    assert result["accuracy_lift_vs_majority"] == pytest.approx(1 / 3)
     assert result["directional_accuracy"] == pytest.approx(4 / 5)
     assert result["directional_coverage"] == pytest.approx(1.0)
     assert result["log_loss"] > 0
