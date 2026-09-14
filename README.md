@@ -22,16 +22,15 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Purge gap between dataset segments to reduce future-label leakage across boundaries.
 - [x] Dataset provenance checks for instrument, feature-set version, label horizon and source cutoff.
 - [x] Automated tests for history validation and dataset point-in-time rules.
+- [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
+- [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
-- [ ] Make the baseline trainer consume the formal dataset splits instead of calculating its own split.
 - [ ] Add reproducible dataset manifests and dataset fingerprints.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
 - [ ] Add prediction-ledger outcome scoring.
-- [ ] Add V1 walk-forward backtest with leakage-safe metrics.
+- [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
 
 ## Future improvement checklist
-
-These are intentionally tracked in the repository so the roadmap stays visible while implementation progresses.
 
 ### Data foundation
 
@@ -40,7 +39,8 @@ These are intentionally tracked in the repository so the roadmap stays visible w
 - [ ] Add corporate-action adjustment/provenance handling.
 - [ ] Add point-in-time historical news and disclosure ingestion.
 - [ ] Add data-quality reports and freshness monitoring per source.
-- [ ] Add native `pgvector` storage/indexing when the document volume justifies it.
+- [ ] Add reproducible dataset manifests and content fingerprints.
+- [ ] Add native `pgvector` storage/indexing when document volume justifies it.
 
 ### Research and modelling
 
@@ -56,8 +56,8 @@ These are intentionally tracked in the repository so the roadmap stays visible w
 
 ### Backtesting and risk
 
-- [ ] Strict expanding-window walk-forward engine.
-- [ ] Purged/embargoed validation where label horizons require it.
+- [x] Strict expanding-window walk-forward engine.
+- [x] Purged validation where label horizons require it.
 - [ ] Transaction-cost and slippage model.
 - [ ] Portfolio construction and position sizing layer.
 - [ ] Risk limits and exposure attribution.
@@ -132,7 +132,7 @@ The objective is not to display a confident-looking number. The objective is to 
 
 The current research score considers freshness, source diversity, source agreement/disagreement, higher weight for official exchange/regulatory sources, bullish versus bearish evidence, and explicit governance/regulatory risk themes.
 
-The ML layer adds a stronger requirement: every training example is tied to a timestamp, features only use information available at that timestamp, and the future move is stored separately as the target. Dataset construction now records a formal feature-set version and label horizon, validates source cutoffs, and creates chronological splits with a purge gap sized to the target horizon.
+The ML layer adds a stronger requirement: every training example is tied to a timestamp, features only use information available at that timestamp, and the future move is stored separately as the target. Dataset construction records a formal feature-set version and label horizon, validates source cutoffs, and creates chronological splits with a purge gap sized to the target horizon. The baseline trainer and walk-forward evaluator consume this contract rather than maintaining independent split logic.
 
 **No prediction system can guarantee accuracy.** A model is only promoted after its out-of-sample performance, calibration, false-positive rate, regime-specific behaviour and robustness are measured.
 
@@ -144,8 +144,8 @@ The repository includes a repeatable baseline training pipeline under `training/
 - `validate_history.py` checks raw OHLCV history before research use.
 - `dataset.py` defines the D-predict-native point-in-time dataset contract and chronological segments.
 - `build_dataset.py` creates point-in-time market features and future-return labels for 1-day, 3-day and 5-day horizons and records a purge-aware dataset split.
-- `train_baseline.py` trains a market classifier and return regressor.
-- `walk_forward.py` produces strictly out-of-sample predictions using expanding windows.
+- `train_baseline.py` trains a market classifier and return regressor from the formal dataset contract.
+- `walk_forward.py` produces strictly out-of-sample predictions using expanding windows with horizon-aware purging.
 - `train_meta.py` learns a conservative calibration layer over available model probabilities.
 - `embed_events.py` stores and searches research-document vectors.
 
