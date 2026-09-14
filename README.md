@@ -1,26 +1,157 @@
-# Nifty Options Signal Engine
+# D-predict
 
-Personal research/trading tool for generating rule-based entry/exit cues on Nifty options — direction, strike/expiry, position sizing, and hedging — with backtesting inserted between each engine layer.
+D-predict is a local research and market-analysis cockpit for Indian equities and NIFTY/BANKNIFTY derivatives.
 
-## Architecture
+It is designed around one principle: **do not turn a headline into a trade without checking the evidence around it**.
+
+## What the system does
+
+D-predict combines several layers:
 
 ```text
-Data collector (Python)  →  PostgreSQL/Supabase  →  Feature layer  →  Signal engine (TypeScript)
-                                                                    →  Trade construction
-                                                                    →  Risk engine
-                                                                    →  Hedging engine
+Live / recent market data
+        │
+        ├── price + volume + history
+        ├── option-chain structure
+        ├── stored rule-based signals
+        │
+        ▼
+Public research intelligence
+        ├── financial/news headlines
+        ├── cross-source agreement
+        ├── freshness
+        ├── NSE corporate announcements
+        ├── public insider-trading disclosures
+        └── SEBI/public regulatory material
+        │
+        ▼
+Meta-prediction
+        ├── direction: BULLISH / BEARISH / MIXED
+        ├── confidence
+        ├── evidence score
+        ├── source agreement
+        ├── themes
+        └── explicit risks
 ```
 
-Hard rules:
+The research layer is intentionally **public-information only**. It does not access, request, infer, or trade on illegal material non-public information. Publicly disclosed insider transactions, exchange announcements and regulator records are valid evidence and are shown separately from general media.
 
-- The collector never makes trading decisions.
-- Every engine decision is versioned and logged with its inputs.
-- Numerical outputs such as strike, lots, stop, and target come from deterministic code, never an LLM.
-- AI is optional and limited to explanation, summarization, and research assistance.
+## Accuracy philosophy
 
-## Installation paths
+The objective is not to display a confident-looking number. The objective is to make the confidence reflect evidence quality.
 
-### Path A: Git developer installation
+The research score therefore considers:
+
+- freshness of information
+- number and diversity of sources
+- agreement/disagreement across sources
+- higher weight for official exchange/regulatory sources
+- bullish versus bearish evidence
+- explicit governance/regulatory risk themes
+
+A single article should not create a high-confidence conclusion. A strong-looking headline without confirmation should remain a weak signal.
+
+**No prediction system can guarantee accuracy.** D-predict must be evaluated using out-of-sample backtests, probability calibration, false-positive analysis, source-level performance tracking and regime-specific performance before it is trusted with capital.
+
+## Current research sources
+
+### News
+
+The local research service uses Yahoo Finance search/news and GDELT's document-search API for broad recent coverage. GDELT supports keyword/phrase search and rolling time windows for news discovery. citeturn168127search0
+
+### Official disclosures
+
+The dashboard provides direct access to NSE corporate announcements and NSE public Regulation 7(2) insider-trading disclosures. NSE also publishes corporate-announcement datasets and an insider-trading archive. citeturn814199search0turn814199search9turn814199search7
+
+SEBI publishes public filings and enforcement material, including records concerning suspected insider-trading activity. citeturn168127search2turn168127search8
+
+## Local architecture
+
+```text
+React dashboard :3000
+       │
+       ├────────── Local Market API :4100 ─────── PostgreSQL :5433
+       │                     │                         ▲
+       │                     └── live Yahoo quote     │
+       │                                               │
+       └────────── Research API :4200 ── Yahoo/GDELT ─┘
+                                                     ▲
+                                                     │
+                                               Python collector
+```
+
+The collector stores market data. The market API serves local data and a current quote endpoint. The research service is separate so slow or unavailable news providers cannot block the main market API.
+
+## Windows local installation
+
+Windows is the recommended developer path for this repository.
+
+### 1. Install prerequisites
+
+Install:
+
+- Node.js 22 LTS or newer
+- Python 3.12+
+- Docker Desktop with Docker Compose
+- Git
+
+Make sure `node`, `npm`, `python`, `docker` and `git` work in PowerShell.
+
+### 2. Clone the repository
+
+```powershell
+git clone https://github.com/akkillies1/D-predict-.git
+cd D-predict-
+```
+
+### 3. Prepare the local environment
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 doctor
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 init
+```
+
+`init` installs backend/dashboard packages, creates the collector virtual environment and installs collector dependencies.
+
+### 4. Start everything
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 start
+```
+
+This starts:
+
+```text
+PostgreSQL  → 5433
+Market API  → 4100
+Research API → 4200
+Dashboard   → 3000
+Collector   → background process
+```
+
+Open:
+
+```text
+http://127.0.0.1:3000
+```
+
+### 5. Check status
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 status
+```
+
+### 6. Stop everything
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 stop
+```
+
+See [`LOCAL_INSTALL_GUIDE.md`](LOCAL_INSTALL_GUIDE.md) for the full Windows walkthrough and troubleshooting.
+
+## Linux / macOS
+
+The existing `./dp` launcher remains available for Unix-like systems:
 
 ```bash
 git clone https://github.com/akkillies1/D-predict-.git
@@ -30,124 +161,144 @@ cd D-predict-
 ./dp start
 ```
 
-The `dp` command installs Python, engine, and backend dependencies, creates `.env`, initializes the private local PostgreSQL cluster, and starts the local API. The API listens on `http://127.0.0.1:4100` by default.
+The primary difference on Windows is using `dp.ps1` instead of `./dp`.
 
-After the first initialization, the normal one-command workflow is `./dp start`. It starts the private PostgreSQL database, local API, bundled dashboard, and collector. Open `http://127.0.0.1:3000`. The collector uses Yahoo Finance for price bars and NSE for NIFTY/BANKNIFTY option chains; it does not invent values. If no row has been collected, the UI shows `NO DATA` rather than a fabricated price.
+## Searching a ticker
 
-### Path B: Download without Git
+Use the dashboard search box. Search is debounced and can discover supported Yahoo symbols even when they have not yet been activated locally.
 
-Download a versioned release archive from the repository Releases page, extract it, and run:
-
-```bash
-cd d-predict
-./dp init
-./dp doctor
-./dp start
-```
-
-A future release installer can install the archive into `~/.d-predict` and add `dp` to PATH:
-
-```bash
-curl -fsSLo dp-install.sh https://downloads.example.com/d-predict/install.sh
-bash dp-install.sh
-dp init
-```
-
-Do not run an installer from an untrusted URL. Releases should publish SHA-256 checksums and preserve `.env`, local database data, logs, and model artifacts during updates.
-
-### Path C: Docker Compose
-
-```bash
-cp .env.example .env
-docker compose up -d postgres collector
-docker compose --profile engine run --rm engine
-```
-
-Docker keeps PostgreSQL data in a named volume and is the most reproducible path. It requires Docker Desktop or Docker Engine.
-
-## Local CLI
+Example:
 
 ```text
-./dp init       Install dependencies, create .env, initialize PostgreSQL
-./dp doctor     Check runtimes, dependencies, database, and configuration
-./dp start      Start local PostgreSQL and the local API
-./dp stop       Stop local PostgreSQL
-./dp api        Run the local API in the foreground
-./dp collect    Run the Python collector continuously
-./dp test       Run TypeScript tests and build
-./dp features   Generate feature snapshots
-./dp signal     Generate signal decisions
-./dp construct  Generate trade candidates
-./dp backtest   Run signal backtests
-./dp forecast   Run Monte Carlo forecast
-./dp update     Pull Git changes and re-run initialization
+rel
 ```
 
-The dashboard should use `http://127.0.0.1:4100` as its local API base URL. The API exposes `/health`, `/api/data-health`, `/api/instruments`, `/api/market/:symbol/overview`, `/api/market/:symbol/history`, `/api/signals/latest`, and `/api/options/chain`.
+can produce matches such as:
 
-## Analyze an individual script
+```text
+RELIANCE.NS
+TCS.NS
+```
 
-The UI ticker selector reads the local `instruments` table. Add any Yahoo symbol from the UI, for example `RELIANCE.NS`, `TCS.NS`, or `^NSEI`, and the collector will fetch its price bars on the next cycle. NIFTY and BANKNIFTY receive NSE option-chain collection; ordinary equities receive price data and are not incorrectly shown as having options data.
+Select a result. D-predict activates it in the local instrument table so the collector can pick it up on its next cycle.
 
-## Optional AI providers
+## Live market flow
 
-The engine runs without AI. Configure optional AI through `.env`; never commit API keys.
+After selecting a symbol:
+
+1. the dashboard reads the local database for stored 1-minute history;
+2. the market API can fetch a current Yahoo quote;
+3. the collector continues writing fresh bars;
+4. the UI refreshes the market view periodically;
+5. NIFTY/BANKNIFTY can additionally show the stored NSE option-chain snapshots.
+
+The application must display `NO DATA`, `WAITING` or `OFFLINE` when the source is unavailable. It must not invent market prices.
+
+## Research flow
+
+Selecting a ticker also updates the research workspace.
+
+The research service:
+
+1. identifies the company where possible;
+2. collects recent public news;
+3. searches a broader GDELT news window;
+4. searches for public NSE/SEBI material where indexed;
+5. removes duplicate URLs;
+6. scores the direction of the current public evidence;
+7. measures source agreement and freshness;
+8. highlights themes and risks;
+9. provides direct links to official public disclosure pages.
+
+The UI calls this a **Meta-prediction** because it is an attempt to assess the direction implied by the *current evidence stack*, not simply repeat one prediction source.
+
+## Environment variables
+
+The `.env.example` file contains safe local defaults:
 
 ```env
-AI_MODE=disabled
-AI_PROVIDER=
-AI_BASE_URL=
-AI_API_KEY=
-AI_MODEL=
+DATABASE_URL=postgresql://postgres:localdev@localhost:5433/nifty
+API_PORT=4100
+RESEARCH_PORT=4200
+VITE_API_BASE_URL=http://127.0.0.1:4100
+VITE_RESEARCH_BASE_URL=http://127.0.0.1:4200
+OPTION_CHAIN_POLL_SECONDS=15
+PRICE_BAR_POLL_SECONDS=15
+COLLECTOR_INSTRUMENTS=NIFTY,BANKNIFTY
+RESEARCH_NEWS_ENABLED=true
+RESEARCH_CACHE_SECONDS=60
+GDELT_TIMESPAN=3d
+RESEARCH_MAX_ARTICLES=30
 ```
 
-Supported provider targets in the planned provider-neutral adapter include:
+Never commit API keys or private credentials.
 
-- Local Ollama or another OpenAI-compatible local server.
-- OpenRouter, including `openrouter/free` or a fixed `:free` model.
-- NVIDIA hosted NIM API through the NVIDIA API Catalog.
-- Other OpenAI-compatible hosted providers.
+## Useful commands
 
-Free hosted models have changing availability, rate limits, and model selection. They should be used for explanations and development, not reproducible training labels. AI cannot calculate or approve trades.
+Windows:
 
-## Vercel and backend deployment
-
-Vercel is appropriate for the dashboard frontend and lightweight API proxy. The Python collector, PostgreSQL database, and long-running TypeScript worker should run as separate backend services. See [DEPLOYMENT.md](DEPLOYMENT.md) for the production split, backend API contract, environment variables, and safeguards.
-
-```text
-Vercel dashboard → backend API → managed PostgreSQL
-                              ↘ collector worker
-                              ↘ engine worker
+```powershell
+.\dp.ps1 doctor
+.\dp.ps1 init
+.\dp.ps1 start
+.\dp.ps1 status
+.\dp.ps1 test
+.\dp.ps1 stop
+.\dp.ps1 api
+.\dp.ps1 research
+.\dp.ps1 ui
+.\dp.ps1 collect
 ```
 
-Do not run the continuous collector inside a Vercel serverless function.
-
-## Database
-
-The local scripts create a private PostgreSQL cluster under `db/data/` on port 5433 by default:
+Unix-like systems:
 
 ```bash
-./db/setup.sh
-./db/start.sh
-./db/stop.sh
+./dp doctor
+./dp init
+./dp start
+./dp test
+./dp stop
+./dp api
+./dp collect
 ```
 
-The data directory and logs are ignored by Git. For production, use managed PostgreSQL or Supabase with automated backups.
+## Validation
 
-## Current status
+GitHub Actions validates the backend, dashboard typecheck/build and collector compile checks. The dashboard install uses the repository's `--legacy-peer-deps` path because the existing `@builder.io/vite-plugin-jsx-loc` dependency has an older Vite peer range.
 
-- [x] Canonical data schema (`db/schema.sql`)
-- [x] Python collector skeleton (`collector/`)
-- [x] Feature engine with PCR, max-pain, MACD, and volume z-score
-- [x] Phase 1 signal engine and reason-code backtest
-- [x] Phase 2 trade construction and premium-path backtest
-- [x] Monte Carlo probability cone
-- [x] Local PostgreSQL setup scripts
-- [x] Git/ZIP/Docker installation foundation
-- [x] Vercel/backend deployment documentation
-- [ ] Point-in-time-safe option feature queries
-- [ ] Friction-aware backtests with spread, slippage, and costs
-- [ ] Meta-model for historical signal reliability
-- [ ] Phase 3 risk engine
-- [ ] Phase 4 hedging engine
-- [ ] Broker integration and paper-trading reconciliation
+For local validation on Windows:
+
+```powershell
+.\dp.ps1 test
+```
+
+## Safety and scope
+
+D-predict is a research tool, not a broker and not an order-execution system.
+
+It must not:
+
+- claim access to secret or non-public inside information;
+- convert an unverified rumour into “confirmed” information;
+- fabricate prices, option data or company events;
+- present model confidence as certainty;
+- execute orders automatically.
+
+## Roadmap for higher accuracy
+
+The next accuracy work should be empirical rather than cosmetic:
+
+- historical news/event ingestion with point-in-time timestamps;
+- article/source reliability scores learned from outcomes;
+- entity resolution for company names, aliases and subsidiaries;
+- event-study features around corporate disclosures;
+- analyst-consensus revisions and estimate surprises;
+- options-implied distributions where reliable data is available;
+- contradiction detection across sources;
+- probability calibration (for example isotonic/Platt calibration);
+- regime-specific meta-models;
+- walk-forward out-of-sample testing;
+- precision/recall and expected-value dashboards;
+- alerting only after measured precision targets are met.
+
+The goal is not “AI that sounds smart”. The goal is a measured, auditable evidence system that can demonstrate when its predictions are actually useful.
