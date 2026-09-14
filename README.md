@@ -25,8 +25,9 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
 - [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
+- [x] Production favicon added.
 - [x] `main` is the canonical development/deployment branch.
-- [ ] Add a production favicon and complete web metadata polish.
+- [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Add reproducible dataset manifests and dataset fingerprints.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
