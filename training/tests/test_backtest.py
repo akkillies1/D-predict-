@@ -20,7 +20,7 @@ def write_inputs(tmp_path: Path, periods: int = 32):
     )
     predictions = pd.DataFrame(
         {
-            "timestamp": [timestamps[14], timestamps[16], timestamps[20]],
+            "timestamp": [timestamps[14], timestamps[16], timestamps[18]],
             "symbol": ["NIFTY"] * 3,
             "horizon": ["1d", "1d", "1d"],
             "prediction": ["UP", "DOWN", "FLAT"],
@@ -78,7 +78,7 @@ def test_backtest_skips_overlapping_signals(tmp_path):
     predictions.to_csv(prediction_path, index=False)
     result = backtest(prediction_path, history_path, initial_capital=100_000)
     assert result["metrics"]["trades"] == 2
-    assert result["trades"][1]["signal_timestamp"] == "2026-01-21T00:00:00+00:00"
+    assert result["trades"][1]["signal_timestamp"] == "2026-01-17T00:00:00+00:00"
 
 
 def test_backtest_rejects_bad_history(tmp_path):
