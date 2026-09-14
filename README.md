@@ -47,6 +47,18 @@ Example:
 .\collector\.venv\Scripts\python.exe -m training.model_compare --symbols RELIANCE ONGC LT ADANIPORTS SBI HDFCBANK --horizons 1d 3d 5d --folds 5
 ```
 
+## Untouched temporal holdout
+
+`training/temporal_holdout.py` provides the final model-selection boundary. Development OOS data is evaluated separately from a later temporal holdout. The holdout must begin strictly after the latest scored development observation, must contain enough scored examples, and is evaluated without retraining or threshold retuning.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.temporal_holdout data\predictions\development_realized.csv data\predictions\holdout_realized.csv --min-examples 100 --output data\reports\temporal_holdout.json
+```
+
+The holdout reports accuracy, balanced accuracy, majority-baseline lift, log loss and directional accuracy. `HOLDOUT_ONLY` means the artifact was evaluated under the holdout contract; it is not a claim that the model is profitable or ready for live trading.
+
 ## Return distribution and trade thesis
 
 D-Predict does not use arbitrary fixed-percentage targets. `training/return_distribution.py` constructs an expanding residual distribution from strictly prior OOS return forecasts:
@@ -104,7 +116,8 @@ The economic event must remain consistent across forecast scoring, target/stop s
 ## Future improvement checklist
 
 ### Accuracy
-- [ ] Untouched temporal holdout for final model selection
+- [x] Untouched temporal holdout evaluator
+- [ ] Use an untouched temporal holdout for final model selection on real historical artifacts
 - [ ] Compare candidates using trade-level and return-level metrics, not accuracy alone
 - [ ] Calibrate class probabilities on strictly OOS data
 - [ ] Conditional residual distributions by causal regime/volatility state
