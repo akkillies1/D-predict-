@@ -26,10 +26,11 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Confidence, calibration, fold-stability and evaluation-only regime-proxy analysis.
 - [x] Stability-aware final model promotion gate.
 - [x] V1 non-overlapping portfolio backtest with transaction costs and slippage.
+- [x] Deterministic portfolio construction with confidence-aware sizing and gross-exposure limits.
 - [x] One-command Windows local launcher for database, market API, collector and dashboard.
 - [ ] Complete research-terminal workflow: search → activation → validation → dataset → prediction.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Portfolio construction, sizing and risk limits.
+- [ ] Portfolio risk limits beyond V1 gross-exposure caps.
 - [ ] Paper/shadow trading.
 
 ## Future improvement checklist
@@ -60,8 +61,10 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Expanding-window walk-forward engine.
 - [x] Purged validation.
 - [x] Transaction-cost and slippage-aware V1 backtest.
-- [ ] Portfolio construction and position sizing.
-- [ ] Risk limits and exposure attribution.
+- [x] Deterministic portfolio sizing with per-position and total gross-exposure caps.
+- [ ] Volatility/stop-distance-aware risk budgeting.
+- [ ] Portfolio risk limits and exposure attribution across instruments.
+- [ ] Drawdown-aware portfolio throttle.
 - [ ] Paper-trading/shadow mode before any live capital.
 - [ ] No automated live execution until research, backtest and paper-trading gates pass.
 
@@ -180,6 +183,28 @@ Example:
 
 The generated backtest artifact should normally remain local and should not be committed as model evidence unless explicitly versioned for an audit.
 
+## Portfolio construction and risk limits
+
+`training/portfolio.py` converts the OOS probability vector into deterministic portfolio decisions without placing orders or inventing prices.
+
+The current V1 rules are deliberately simple:
+
+1. `FLAT` predictions produce no position.
+2. `UP`/`DOWN` predictions must meet a configurable minimum class probability, default 55%.
+3. Position weight scales with the probability edge above the neutral 1/3 class prior.
+4. A hard per-position cap defaults to 25% of portfolio capital.
+5. A hard total gross-exposure cap defaults to 100%.
+6. Once the gross cap is consumed, later candidates receive zero additional exposure.
+7. Every decision records timestamp, symbol, horizon, prediction, confidence, requested limits and resulting gross exposure.
+
+This is a **portfolio-construction primitive**, not yet a complete risk model. It does not pretend that probability confidence is volatility-adjusted risk. The next risk layer will add volatility/stop-distance budgeting, cross-instrument exposure attribution and drawdown-aware throttling.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
+```
+
 ## Historical learning pipeline
 
 The main training modules are:
@@ -197,6 +222,7 @@ The main training modules are:
 - `stability_gate.py` — stability promotion checks.
 - `accuracy_gate.py` — raw-performance + required stability promotion gate.
 - `backtest.py` — V1 transaction-cost/slippage-aware portfolio accounting.
+- `portfolio.py` — deterministic confidence-aware sizing and gross-exposure controls.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -214,9 +240,10 @@ The main training modules are:
 .\collector\.venv\Scripts\python.exe -m training.stability_gate data\predictions\nifty_1d_stability.json --output data\predictions\nifty_1d_stability_gate.json
 .\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv --stability-report data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
+.\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
 ```
 
-Repeat the realized scoring, stability and backtest stages for 3d and 5d. Do not promote a model from one headline aggregate number.
+Repeat the realized scoring, stability, backtest and portfolio stages for 3d and 5d. Do not promote a model from one headline aggregate number.
 
 ## Environment
 
