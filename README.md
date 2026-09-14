@@ -27,10 +27,11 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Stability-aware final model promotion gate.
 - [x] V1 non-overlapping portfolio backtest with transaction costs and slippage.
 - [x] Deterministic portfolio construction with confidence-aware sizing and gross-exposure limits.
-- [x] One-command Windows local launcher for database, market API, collector and dashboard.
+- [x] Point-in-time volatility/ATR-aware risk budgeting with explicit missing-risk-data handling.
 - [ ] Complete research-terminal workflow: search → activation → validation → dataset → prediction.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Portfolio risk limits beyond V1 gross-exposure caps.
+- [ ] Cross-instrument portfolio risk attribution and correlation-aware limits.
+- [ ] Drawdown-aware portfolio throttle.
 - [ ] Paper/shadow trading.
 
 ## Future improvement checklist
@@ -62,7 +63,7 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Purged validation.
 - [x] Transaction-cost and slippage-aware V1 backtest.
 - [x] Deterministic portfolio sizing with per-position and total gross-exposure caps.
-- [ ] Volatility/stop-distance-aware risk budgeting.
+- [x] Volatility/stop-distance-aware risk budgeting using point-in-time historical OHLC.
 - [ ] Portfolio risk limits and exposure attribution across instruments.
 - [ ] Drawdown-aware portfolio throttle.
 - [ ] Paper-trading/shadow mode before any live capital.
@@ -197,12 +198,15 @@ The current V1 rules are deliberately simple:
 6. Once the gross cap is consumed, later candidates receive zero additional exposure.
 7. Every decision records timestamp, symbol, horizon, prediction, confidence, requested limits and resulting gross exposure.
 
-This is a **portfolio-construction primitive**, not yet a complete risk model. It does not pretend that probability confidence is volatility-adjusted risk. The next risk layer will add volatility/stop-distance budgeting, cross-instrument exposure attribution and drawdown-aware throttling.
+`training/risk.py` adds the next layer without inventing volatility. For every prediction timestamp it calculates ATR percentage from historical OHLC bars with `history_timestamp <= prediction_timestamp`. The stop distance is `max(min_stop_distance_bps, ATR% × stop_atr_multiplier)`, and the risk budget is `risk_per_trade / stop_distance`. Final weight is the minimum of the confidence-edge weight, volatility-derived risk budget, position cap and remaining gross exposure. If insufficient history exists for ATR, the result is an explicit `RISK_DATA_UNAVAILABLE` no-trade rather than a guessed volatility value.
+
+This remains an evaluation/risk layer. It does not place orders, use future bars, or claim that ATR is a complete portfolio risk model. Cross-instrument exposure attribution and drawdown-aware throttling are still pending.
 
 Example:
 
 ```powershell
 .\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
+.\collector\.venv\Scripts\python.exe -m training.risk data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_risk.json
 ```
 
 ## Historical learning pipeline
@@ -223,6 +227,7 @@ The main training modules are:
 - `accuracy_gate.py` — raw-performance + required stability promotion gate.
 - `backtest.py` — V1 transaction-cost/slippage-aware portfolio accounting.
 - `portfolio.py` — deterministic confidence-aware sizing and gross-exposure controls.
+- `risk.py` — point-in-time ATR/stop-distance risk budgeting.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -241,9 +246,10 @@ The main training modules are:
 .\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv --stability-report data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
 .\collector\.venv\Scripts\python.exe -m training.portfolio data\predictions\nifty_1d_walk_forward.csv --output data\predictions\nifty_1d_portfolio.json
+.\collector\.venv\Scripts\python.exe -m training.risk data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_risk.json
 ```
 
-Repeat the realized scoring, stability, backtest and portfolio stages for 3d and 5d. Do not promote a model from one headline aggregate number.
+Repeat the realized scoring, stability, backtest, portfolio and risk stages for 3d and 5d. Do not promote a model from one headline aggregate number.
 
 ## Environment
 
