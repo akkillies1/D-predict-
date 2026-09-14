@@ -20,9 +20,9 @@ A sprint is only considered **implemented** when its code path, tests and docume
 
 ### Sprint 2 — Accuracy & Trade Thesis
 
-**Engineering scope: implemented.** The repository contains bounded classical model comparison, OOS return forecasts, leakage-free return distributions, distribution-derived targets/stops, independent target/stop calibration scoring and deterministic trade-thesis construction.
+**Engineering scope: implemented.** The repository contains bounded classical model comparison, OOS return forecasts, leakage-free return distributions, distribution-derived targets/stops, empirical target timing, independent target/stop calibration scoring and deterministic trade-thesis construction.
 
-**Validation scope: data-dependent.** No candidate is promoted from implementation tests alone. Model selection and target/stop probabilities require untouched temporal validation and independent OOS calibration evidence.
+**Validation scope: data-dependent.** No candidate is promoted from implementation tests alone. Model selection, target/stop probabilities and time-to-target probabilities require untouched temporal validation and independent OOS calibration evidence.
 
 ### Sprint 3 — Risk, Shadow & Promotion
 
@@ -46,6 +46,46 @@ Example:
 ```powershell
 .\collector\.venv\Scripts\python.exe -m training.model_compare --symbols RELIANCE ONGC LT ADANIPORTS SBI HDFCBANK --horizons 1d 3d 5d --folds 5
 ```
+
+## End-to-end real-artifact accuracy comparison
+
+`training/run_accuracy_pipeline.py` accepts explicit OOS prediction ledgers and compares the canonical raw probability score with leakage-safe calibrated probabilities. It does **not** generate synthetic data, retune thresholds or promote a model.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.run_accuracy_pipeline `
+  --ledger data\predictions\RELIANCE_1d_walk_forward.csv `
+  --ledger data\predictions\HDFCBANK_1d_walk_forward.csv `
+  --ledger data\predictions\ICICIBANK_1d_walk_forward.csv `
+  --ledger data\predictions\INFY_1d_walk_forward.csv `
+  --ledger data\predictions\TCS_1d_walk_forward.csv `
+  --ledger data\predictions\SBIN_1d_walk_forward.csv `
+  --min-calibration-history 100 `
+  --output data\reports\accuracy_comparison.json
+```
+
+The actual universe can be any sufficiently liquid equities, indices or options for which D-Predict has reliable historical artifacts. Options should be evaluated separately by contract/expiry/horizon and must not be mixed into an equity model merely because their labels look similar.
+
+The comparison is:
+
+```text
+RAW PROBABILITY
+      ↓
+CALIBRATED PROBABILITY
+      ↓
+RETURN FORECAST
+      ↓
+TARGET / STOP DISTRIBUTION
+      ↓
+TIME-TO-TARGET
+      ↓
+EXECUTABLE ENTRY/EXIT
+      ↓
+FRICTION-ADJUSTED P&L
+```
+
+No conclusion about calibration improvement is valid until this runner has been executed on real OOS artifacts.
 
 ## Untouched temporal holdout
 
@@ -73,38 +113,19 @@ Example:
 
 ## Target price + time-to-target
 
-The trade thesis now treats **target price** and **time-to-target** as two separate predictions. `training/return_distribution.py` determines the target price and its hit probability from the OOS return distribution. `training/target_timing.py` estimates the time required to reach that exact target using an empirical first-passage-time distribution from historical bars.
+The trade thesis treats **target price** and **time-to-target** as two separate predictions. `training/return_distribution.py` determines the target price and its hit probability from the OOS return distribution. `training/target_timing.py` estimates the time required to reach that exact target using an empirical first-passage-time distribution from historical bars.
 
-The timing engine reports:
-
-- median ETA (`p50`)
-- probable ETA range (`p25`–`p75`)
-- seconds
-- minutes
-- hours
-- days
-- number of historical target-hit events used
-- data resolution used for the estimate
+The timing engine reports median ETA (`p50`), probable ETA range (`p25`–`p75`), seconds, minutes, hours, days, historical target-hit sample count and data resolution.
 
 `training/trade_thesis_timing.py` attaches this information to every T1/T2/T3 target without changing the target price itself.
 
-Example presentation:
+If the source data is daily, D-Predict cannot honestly claim minute/second precision. Minute/second ETA requires minute/second historical bars and sufficient first-passage observations. Insufficient evidence is explicitly reported rather than filled with a guess.
 
-```text
-TARGET 1: ₹1,238
-Probability: 68%
-Expected time: 2h 35m
-Likely range: 1h 20m – 4h 10m
+## Dashboard trade-thesis integration
 
-TARGET 2: ₹1,215
-Probability: 47%
-Expected time: 1d 2h
-Likely range: 8h – 2d 6h
-```
+The local dashboard terminal is wired to display a persisted trade thesis from the latest signal payload, including entry, expected move, probability, horizon, T1/T2/T3 prices, target probabilities, median ETA, ETA p25–p75 range, stop, risk/reward and thesis version.
 
-This is deliberately **not** fake precision. If the source data is daily, D-Predict cannot honestly claim that a target will be reached in 17 minutes 42 seconds. Minute/second-level ETA requires minute/second-level historical bars and sufficient first-passage observations. If there is insufficient history, the result is explicitly `INSUFFICIENT_HISTORY`.
-
-The economic meaning is first-passage time: starting from an equivalent historical entry, how long did it actually take for price to reach the same favorable return threshold? It is an ETA distribution, not a guaranteed arrival timestamp.
+The dashboard deliberately displays **No persisted trade thesis** rather than inventing a target when the signal producer has not supplied one. The signal-producing path must persist the Python-generated thesis into `signal_decisions.parameters` for live/local signals to populate these fields.
 
 ## Return distribution and trade thesis
 
@@ -126,15 +147,11 @@ A calibration report never promotes or changes probabilities automatically. If a
 
 The backtest prediction ledger treats `(timestamp, symbol, horizon)` as the prediction identity when symbol metadata is present. This permits simultaneous predictions for different instruments while still rejecting duplicate predictions for the same instrument and horizon.
 
-When a prediction carries a calibrated return distribution, the backtest now derives T1 and stop prices from that distribution and resolves the **same entry-to-exit economic event** for target/stop outcome and P&L. It records target-hit, stop-hit, MAE and MFE. If both stop and target are printed in the same OHLC bar, the conservative rule is stop-first because intrabar ordering is unknown.
+When a prediction carries a calibrated return distribution, the backtest derives T1 and stop prices from that distribution and resolves the **same entry-to-exit economic event** for target/stop outcome and P&L. It records target-hit, stop-hit, MAE and MFE. If both stop and target are printed in the same OHLC bar, the conservative rule is stop-first because intrabar ordering is unknown.
 
 If an older prediction ledger has no calibrated distribution, the legacy requested-horizon close exit remains available for compatibility. It must not be interpreted as distribution-aware validation.
 
-The backtest remains causal: prediction at T enters at the next available close, applies transaction costs/slippage and uses point-in-time risk information. It is an evaluation engine, not a broker executor.
-
 ## Risk and shadow gates
-
-The current research chain includes:
 
 ```text
 POINT-IN-TIME FEATURES
@@ -169,6 +186,8 @@ The economic event must remain consistent across forecast scoring, target/stop s
 ### Accuracy
 - [x] Untouched temporal holdout evaluator
 - [x] Leakage-safe OOS probability calibration primitive
+- [x] Real-artifact raw-vs-calibrated comparison runner
+- [ ] Execute comparison on real historical artifacts
 - [ ] Validate calibrated probabilities on an untouched future period
 - [ ] Use an untouched temporal holdout for final model selection on real historical artifacts
 - [ ] Compare candidates using trade-level and return-level metrics, not accuracy alone
@@ -180,6 +199,7 @@ The economic event must remain consistent across forecast scoring, target/stop s
 - [x] Distribution-derived targets/stops integrated into executable backtest
 - [x] Empirical first-passage time-to-target estimator
 - [x] T1/T2/T3 ETA integration
+- [x] Dashboard target/ETA presentation
 - [x] MAE/MFE and first-hit target/stop event recording
 - [ ] Persist deterministic forecast/model/dataset provenance
 - [ ] Validate target probabilities on independent future periods
