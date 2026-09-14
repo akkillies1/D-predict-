@@ -57,15 +57,15 @@ def _validate_ledger(frame: pd.DataFrame) -> None:
         raise ValueError(f"prediction ledger is missing columns: {', '.join(missing)}")
     if frame.empty:
         raise ValueError("prediction ledger is empty")
-    if frame["horizon"].astype(str).str.lower().isin(HORIZON_ROWS).all() is False:
-        bad = sorted(set(frame["horizon"].astype(str).str.lower()) - set(HORIZON_ROWS))
+    horizons = frame["horizon"].astype(str).str.lower()
+    if not horizons.isin(HORIZON_ROWS).all():
+        bad = sorted(set(horizons) - set(HORIZON_ROWS))
         raise ValueError(f"unsupported prediction horizons: {bad}")
     allowed = set(CLASS_MAP)
-    for column in ("prediction",):
-        values = set(frame[column].dropna().astype(str))
-        unknown = sorted(values - allowed)
-        if unknown:
-            raise ValueError(f"unknown {column} values: {unknown}")
+    values = set(frame["prediction"].dropna().astype(str))
+    unknown = sorted(values - allowed)
+    if unknown:
+        raise ValueError(f"unknown prediction values: {unknown}")
     probabilities = frame[PROBABILITY_COLUMNS].apply(pd.to_numeric, errors="coerce")
     if probabilities.isna().any().any():
         raise ValueError("prediction probabilities contain missing/non-numeric values")
