@@ -155,7 +155,9 @@ MARKET DATA
 
 ## Verification
 
-The GitHub implementation has **not** been executed in the user's Windows environment in this session. Run:
+The GitHub implementation has **not** been executed in the user's Windows environment in this session. The repository now has CI coverage for backend tests, dashboard tests/typecheck/build, collector compilation, and the full Python training test suite. CI is the authoritative remote execution check when a new `main` commit runs successfully.
+
+Local verification remains:
 
 ```powershell
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
@@ -200,7 +202,7 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [ ] Approved live prediction runner.
 - [ ] Human-vs-model game.
 - [ ] Sustained-shadow promotion gate.
-- [ ] CI for Python tests and dashboard build.
+- [x] CI for Python tests and dashboard build.
 
 ### Later, not now
 
