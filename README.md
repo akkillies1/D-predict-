@@ -30,9 +30,9 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Point-in-time volatility/ATR-aware risk budgeting with explicit missing-risk-data handling.
 - [x] Causal drawdown-aware throttling integrated into the risk-weighted backtest.
 - [x] Cross-instrument exposure attribution and point-in-time correlation-aware limits.
+- [x] Historical paper/shadow replay with virtual capital, delayed outcome resolution and model-accuracy game scoring.
 - [ ] Complete research-terminal workflow: search → activation → validation → dataset → prediction.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Paper/shadow trading.
 
 ## Future improvement checklist
 
@@ -57,7 +57,7 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [ ] Research terminal with provenance/freshness beside key values.
 - [ ] Reliable live ticker suggestions with exchange/company-name resolution.
 
-### Backtesting and risk
+### Backtesting, shadow and risk
 
 - [x] Expanding-window walk-forward engine.
 - [x] Purged validation.
@@ -66,8 +66,12 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Volatility/stop-distance-aware risk budgeting using point-in-time historical OHLC.
 - [x] Drawdown-aware portfolio throttle.
 - [x] Cross-instrument exposure attribution and correlation-aware limits.
-- [ ] Paper-trading/shadow mode before any live capital.
-- [ ] No automated live execution until research, backtest and paper-trading gates pass.
+- [x] Historical paper/shadow replay with virtual capital and accuracy scoring.
+- [ ] Live market shadow feed with no order placement.
+- [ ] Shadow-session persistence and restart-safe state.
+- [ ] Interactive dashboard/game mode for prediction decisions and delayed scoring.
+- [ ] Promotion gate requiring sustained shadow accuracy/stability before any live-capital consideration.
+- [ ] No automated live execution until research, backtest and paper/shadow gates pass.
 
 ### Local-first runtime
 
@@ -108,7 +112,7 @@ DECISION ENGINE
         ↓
 BACKTEST
         ↓
-PAPER TRADING
+PAPER / SHADOW SIMULATION
         ↓
 LIVE MONITORING
 ```
@@ -117,7 +121,7 @@ The intended research chain is:
 
 ```text
 Instrument → Calendar → Dataset → Feature definitions
-→ Label definitions → Model → Prediction → Backtest → Evaluation
+→ Label definitions → Model → Prediction → Backtest → Shadow → Evaluation
 ```
 
 ## Accuracy and promotion philosophy
@@ -163,6 +167,52 @@ Example:
 
 The generated backtest artifact should normally remain local and should not be committed as model evidence unless explicitly versioned for an audit.
 
+## Paper / shadow trading as a game and training system
+
+`training/shadow.py` is the first paper/shadow layer. It is deliberately **simulation-only**: it sends zero broker orders and reports `live_orders_sent = 0` in its summary.
+
+The same prediction ledger can be replayed chronologically against historical data. Each prediction becomes a virtual decision, then its outcome is resolved only when the required future trading row exists. This creates a training/game loop:
+
+```text
+MODEL PREDICTION
+      ↓
+VIRTUAL DECISION
+      ↓
+WAIT FOR FUTURE BAR
+      ↓
+REALIZED OUTCOME
+      ↓
+ACCURACY SCORE + CONFIDENCE SCORE
+      ↓
+VIRTUAL P&L / EQUITY
+      ↓
+MODEL / HUMAN REVIEW
+```
+
+The simulator tracks:
+
+- overall accuracy after every resolved prediction;
+- directional accuracy for UP/DOWN decisions;
+- confidence-weighted game score (`+confidence` for correct, `-confidence` for incorrect);
+- pending predictions whose future outcome is not yet available;
+- virtual capital and virtual return;
+- maximum virtual drawdown;
+- position weight derived from confidence edge;
+- entry/exit timestamps and realized outcome;
+- zero live-order count.
+
+The **accuracy game is not a replacement for OOS validation**. It is a controlled replay/training environment that makes model quality measurable as a sequence of decisions rather than a single headline metric. It also provides the interface contract for a later live shadow feed where real market observations resolve predictions without placing orders.
+
+Historical replay example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.shadow data\predictions\nifty_1d_walk_forward.csv --history NIFTY=data\historical\nifty.csv --output data\predictions\nifty_1d_shadow.json
+```
+
+Multiple instruments can be replayed in one session by repeating `--history SYMBOL=PATH`. Missing instrument history is reported explicitly rather than replaced with synthetic prices.
+
+The current shadow layer intentionally does **not** claim live market connectivity, persistence, broker integration, or interactive UI. Those are the next shadow-mode layers.
+
 ## Portfolio construction and risk limits
 
 `training/portfolio.py` converts the OOS probability vector into deterministic portfolio decisions without placing orders or inventing prices.
@@ -201,6 +251,7 @@ The main training modules are:
 - `risk.py` — point-in-time ATR/stop-distance risk budgeting.
 - `backtest.py` — causal risk-weighted, drawdown-aware V1 portfolio accounting.
 - `exposure.py` — cross-instrument exposure attribution and correlation-aware limits.
+- `shadow.py` — historical paper/shadow replay, virtual capital and accuracy-game scoring.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -218,9 +269,10 @@ The main training modules are:
 .\collector\.venv\Scripts\python.exe -m training.stability_gate data\predictions\nifty_1d_stability.json --output data\predictions\nifty_1d_stability_gate.json
 .\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv --stability-report data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
+.\collector\.venv\Scripts\python.exe -m training.shadow data\predictions\nifty_1d_walk_forward.csv --history NIFTY=data\historical\nifty.csv --output data\predictions\nifty_1d_shadow.json
 ```
 
-Repeat the realized scoring, stability and backtest stages for 3d and 5d. Do not promote a model from one headline aggregate number.
+Repeat the realized scoring, stability, backtest and shadow stages for 3d and 5d. Do not promote a model from one headline number.
 
 ## Local-first startup
 
@@ -250,13 +302,13 @@ The repository contains Python tests under `training/tests`. Recommended local v
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-The risk tests cover point-in-time ATR sizing and missing-risk-data handling. The backtest tests cover drawdown-throttle boundaries, causal risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking. The exposure tests cover correlation limits, uncorrelated instruments, missing history and configuration validation.
+The risk tests cover point-in-time ATR sizing and missing-risk-data handling. The backtest tests cover drawdown-throttle boundaries, causal risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking. The exposure tests cover correlation limits, uncorrelated instruments, missing history and configuration validation. The shadow tests cover historical replay accuracy, pending outcomes, probability validation and simulation-only operation.
 
 **Verification status:** the GitHub changes were committed, but the Windows test suite has not been executed in this environment. Do not treat the new tests as passing until the command above is run locally or by CI.
 
 ## Product boundaries
 
-D-predict is currently a research and evaluation system. It is not an automated live trading system. The intended progression is:
+D-predict is currently a research, evaluation and simulation system. It is not an automated live trading system. The intended progression is:
 
 ```text
 historical data
@@ -265,7 +317,8 @@ historical data
 → calibration/stability
 → event model
 → portfolio/risk model
-→ paper trading
+→ paper/shadow simulation
+→ live shadow monitoring
 → only then consider live automation
 ```
 
