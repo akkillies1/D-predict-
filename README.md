@@ -30,6 +30,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Unified prediction-scoring and executable trade window.
 - [x] Explicit causal MarketState layer separate from BUY/SELL prediction.
 - [x] Point-in-time benchmark/sector context feature primitives.
+- [x] MarketState adversarial tests.
 
 ### Still pending
 
