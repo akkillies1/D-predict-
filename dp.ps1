@@ -21,7 +21,7 @@ function Invoke-Init {
   Info "Installing backend dependencies..."
   npm --prefix backend install
   Info "Installing dashboard dependencies..."
-  npm --prefix dashboard install
+  npm --prefix dashboard install --legacy-peer-deps
   $venv = Join-Path $Root "collector\.venv"
   if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) { python -m venv $venv }
   & (Join-Path $venv "Scripts\python.exe") -m pip install --upgrade pip
@@ -44,6 +44,8 @@ function Invoke-Start {
   docker compose up -d postgres
   Info "Starting API..."
   Start-Detached "api" "npm --prefix backend run dev"
+  Info "Starting research service..."
+  Start-Detached "research" "npm --prefix backend exec -- tsx src/research-server.ts"
   Info "Starting dashboard..."
   Start-Detached "ui" "npm --prefix dashboard run dev"
   Info "Starting collector..."
@@ -52,9 +54,10 @@ function Invoke-Start {
   Start-Detached "collector" "& '$python' -m collector.main"
   Info "Local dashboard: http://127.0.0.1:3000"
   Info "Local API:       http://127.0.0.1:4100/health"
+  Info "Research API:    http://127.0.0.1:4200/health"
 }
 function Invoke-Stop {
-  foreach ($name in @('api','ui','collector')) {
+  foreach ($name in @('api','research','ui','collector')) {
     $pidFile = Join-Path $Run "$name.pid"
     if (Test-Path $pidFile) {
       $pidValue = Get-Content $pidFile | Select-Object -First 1
@@ -66,7 +69,7 @@ function Invoke-Stop {
 }
 function Invoke-Status {
   if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose ps | Out-Host }
-  foreach ($name in @('api','ui','collector')) {
+  foreach ($name in @('api','research','ui','collector')) {
     $pidFile = Join-Path $Run "$name.pid"
     if (Test-Path $pidFile) {
       $pidValue = Get-Content $pidFile | Select-Object -First 1
@@ -93,6 +96,7 @@ switch ($Command) {
   "status" { Invoke-Status }
   "test" { Invoke-Test }
   "api" { Need npm; npm --prefix backend run dev }
+  "research" { Need npm; npm --prefix backend exec -- tsx src/research-server.ts }
   "ui" { Need npm; npm --prefix dashboard run dev }
   "collect" { $python = Join-Path $Root "collector\.venv\Scripts\python.exe"; if (-not (Test-Path $python)) { Die "Run '.\dp.ps1 init' first." }; & $python -m collector.main }
   default {
@@ -100,11 +104,12 @@ switch ($Command) {
     Write-Host "Usage: .\dp.ps1 <command>"
     Write-Host "  init     Install dependencies and prepare local environment"
     Write-Host "  doctor   Check local prerequisites"
-    Write-Host "  start    Start PostgreSQL, API, dashboard and collector"
+    Write-Host "  start    Start PostgreSQL, API, research, dashboard and collector"
     Write-Host "  stop     Stop local services"
     Write-Host "  status   Show service status"
     Write-Host "  test     Build and test backend/dashboard"
     Write-Host "  api      Run API in foreground"
+    Write-Host "  research Run research service in foreground"
     Write-Host "  ui       Run dashboard in foreground"
     Write-Host "  collect  Run collector in foreground"
   }
