@@ -2,8 +2,8 @@
 
 This is intentionally an artifact runner, not a synthetic benchmark. It scans
 explicit prediction ledgers supplied by the user, scores raw probabilities,
-optionally applies leakage-safe calibration, and emits one comparable report.
-It never invents missing market data or silently substitutes a different symbol.
+then applies leakage-safe calibration using only earlier scored rows. It never
+invents missing market data or silently substitutes a different symbol.
 """
 from __future__ import annotations
 
@@ -14,13 +14,18 @@ from pathlib import Path
 import pandas as pd
 
 from training.probability_calibration import CalibrationConfig, calibrate_oos, score_calibration
-from training.score_prediction_ledger import score_ledger
+from training.score_prediction_ledger import score_file
 
 
-def _raw_score(frame: pd.DataFrame) -> dict:
-    # score_ledger is the canonical raw probability evaluator; keep this runner
-    # as orchestration so there is one definition of accuracy metrics.
-    return score_ledger(frame)
+def _calibration_input(frame: pd.DataFrame) -> pd.DataFrame:
+    required = {"timestamp", "prediction", "actual", "market_probability_down", "market_probability_flat", "market_probability_up"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"calibration requires columns: {', '.join(missing)}")
+    result = frame.copy()
+    result["realized_class"] = result["actual"]
+    result["outcome_status"] = "SCORED"
+    return result
 
 
 def run(ledgers: list[Path], min_calibration_history: int = 100) -> dict:
@@ -29,12 +34,12 @@ def run(ledgers: list[Path], min_calibration_history: int = 100) -> dict:
     results = []
     for path in ledgers:
         frame = pd.read_csv(path)
-        raw = _raw_score(frame)
-        calibrated_frame = calibrate_oos(frame, CalibrationConfig(min_history=min_calibration_history))
+        raw = score_file(path)
+        calibrated_frame = calibrate_oos(_calibration_input(frame), CalibrationConfig(min_history=min_calibration_history))
         calibration = score_calibration(calibrated_frame)
         results.append({
             "ledger": str(path),
-            "symbol": str(frame["symbol"].iloc[0]) if "symbol" in frame.columns and not frame.empty else None,
+            "symbol": str(frame["symbol"].iloc[0]).upper() if "symbol" in frame.columns and not frame.empty else None,
             "horizons": sorted(frame["horizon"].dropna().astype(str).unique().tolist()) if "horizon" in frame.columns else [],
             "raw": raw,
             "calibrated": calibration,
