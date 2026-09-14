@@ -29,6 +29,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Independent realized-outcome scorer for prediction aging against historical closes.
 - [x] Conservative accuracy promotion gate with minimum OOS sample size, baseline lift, log-loss and directional-accuracy checks.
 - [x] Confidence-bucket, calibration, fold-stability and evaluation-only regime-proxy analysis.
+- [x] Stability/calibration evidence is now a required part of the final model promotion gate.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
 - [x] Production favicon added and linked from the dashboard HTML.
 - [x] Vercel root build/output configuration added for the monorepo dashboard.
@@ -37,7 +38,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
-- [ ] Feed stability/calibration evidence into the final promotion gate with explicit minimum bucket/fold/regime requirements.
+- [ ] Replace the evaluation-only regime proxy with a formal point-in-time Regime Model.
 - [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
 
 ## Future improvement checklist
@@ -78,8 +79,8 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Independent 1d/3d/5d realized-outcome scoring with explicit `SCORED`/`PENDING` state.
 - [x] Conservative model promotion gate based on realized OOS outcomes.
 - [x] Confidence buckets, calibration bins and fold-stability analysis.
+- [x] Stability gate for calibration quality, fold dispersion and regime stability.
 - [ ] Replace the evaluation-only regime proxy with a formal point-in-time Regime Model.
-- [ ] Make stability/calibration thresholds part of model promotion.
 
 ### Backtesting and risk
 
@@ -134,22 +135,7 @@ The launcher:
 8. opens the dashboard automatically in the browser;
 9. writes dashboard startup output to `dashboard-local.log` for troubleshooting.
 
-The normal local experience should therefore become:
-
-```text
-Terminal
-   │
-   └── d-predict.cmd
-          │
-          ├── PostgreSQL :5433
-          ├── Market API :4100
-          ├── Collector
-          ├── Research/data services
-          └── Dashboard :3000+
-                    │
-                    ▼
-                 Browser UI
-```
+The launcher currently starts PostgreSQL, market API, collector and dashboard. The research service is a separate pending runtime item and is not yet claimed as part of the running Compose stack.
 
 Stop the local runtime with:
 
@@ -212,17 +198,19 @@ Accuracy is a **promotion gate**, not a cosmetic dashboard number.
 
 The prediction ledger preserves every out-of-sample prediction together with its timestamp, symbol, horizon, fold, training cutoff, purge information, predicted class and full probability vector. A separate realized-outcome scorer re-reads the historical close series and independently computes the future trading-day outcome. A prediction is `SCORED` only when that future close exists; otherwise it remains `PENDING` rather than being silently counted as a failure or success.
 
-The current promotion gate is deliberately conservative. By default it requires at least 100 realized OOS examples, at least 2 percentage points of accuracy lift over the realized majority-class baseline, multiclass log loss no worse than 1.05, and directional accuracy of at least 52%. The thresholds are explicit CLI parameters rather than hidden constants in the model. The gate returns each check separately and only reports `promotion_ready=true` when every check passes.
+The current raw-performance gate requires at least 100 realized OOS examples, at least 2 percentage points of accuracy lift over the realized majority-class baseline, multiclass log loss no worse than 1.05, and directional accuracy of at least 52%.
 
-The next analysis layer now produces five confidence buckets, empirical-vs-predicted calibration gaps, per-fold stability and an evaluation-only market-regime proxy. The confidence and calibration views are based only on independently realized OOS outcomes. The regime proxy uses a 20-trading-row trend/volatility view of the supplied historical close series and is explicitly **not** a model feature. Buckets and regimes with fewer than 10 observations are marked non-interpretable rather than being treated as reliable evidence.
+The stability layer now makes promotion stricter. `stability_gate.py` requires, by default, maximum interpretable calibration gap of 10 percentage points, fold accuracy standard deviation no greater than 10 percentage points, no fold more than 5 percentage points below its own majority baseline, at least two interpretable regimes, and no interpretable regime more than 5 percentage points below its majority baseline. These are deliberately conservative engineering thresholds and are CLI-configurable.
 
-These are **engineering gates, not claims that these thresholds guarantee profitability**. Stability analysis is evidence for promotion decisions, but it does not yet change `accuracy_gate.py`; explicit stability thresholds remain a future promotion-gate step.
+`accuracy_gate.py` now requires a successful stability-gate result before it can return `promotion_ready=true`. A strong aggregate accuracy result therefore cannot bypass poor calibration, unstable walk-forward folds or severe regime degradation.
+
+The stability analysis uses five confidence buckets and empirical-vs-predicted calibration gaps. Its regime view is an evaluation-only proxy based on 20-trading-row trend and volatility quantiles from the supplied historical close series. It is **not** a model feature and is not a substitute for the future formal point-in-time Regime Model.
+
+These are **engineering gates, not claims that these thresholds guarantee profitability**. A model can pass these gates and still lose money. The next promotion layers will include transaction costs, slippage, portfolio construction, risk limits and paper trading.
 
 We will not accept a model merely because its headline accuracy is high. Every evaluation compares it against a majority-class baseline and reports balanced accuracy, directional accuracy, probability quality through log loss and Brier score, directional coverage, and per-class precision/recall/F1. The realized scorer additionally records the realized return and realized class, so the outcome can be audited independently of the dataset-generation code.
 
 The objective is not to display a confident-looking number. The objective is to make the confidence reflect evidence quality and historical performance.
-
-The current research score considers freshness, source diversity, source agreement/disagreement, higher weight for official exchange/regulatory sources, bullish versus bearish evidence, and explicit governance/regulatory risk themes.
 
 The ML layer adds a stronger requirement: every training example is tied to a timestamp, features only use information available at that timestamp, and the future move is stored separately as the target. Dataset construction records a formal feature-set version and label horizon, validates source cutoffs, creates chronological splits with a purge gap sized to the target horizon, and emits a manifest containing provenance and a deterministic SHA-256 content fingerprint. The baseline trainer and walk-forward evaluator consume this contract rather than maintaining independent split logic.
 
@@ -241,8 +229,9 @@ The repository includes a repeatable baseline training pipeline under `training/
 - `walk_forward.py` produces strictly out-of-sample predictions using expanding windows with horizon-aware purging.
 - `score_prediction_ledger.py` scores OOS accuracy, directional accuracy, majority-baseline lift, log loss, Brier score and per-class precision/recall/F1.
 - `score_realized_outcomes.py` independently joins prediction timestamps to historical closes, computes realized 1d/3d/5d returns/classes, and marks unavailable future outcomes as `PENDING`.
-- `accuracy_gate.py` applies explicit promotion thresholds to the independently realized OOS ledger.
 - `analyze_prediction_stability.py` analyzes confidence buckets, empirical calibration, fold stability and an evaluation-only regime proxy from the realized OOS ledger.
+- `stability_gate.py` applies explicit calibration, fold and regime-stability thresholds.
+- `accuracy_gate.py` applies the raw-performance thresholds and requires a passing stability gate before model promotion.
 - `train_meta.py` learns a conservative calibration layer over available model probabilities.
 - `embed_events.py` stores and searches research-document vectors.
 
@@ -272,8 +261,9 @@ The equivalent manual sequence is:
 .\collector\.venv\Scripts\python.exe -m training.walk_forward --symbols NIFTY BANKNIFTY
 .\collector\.venv\Scripts\python.exe -m training.score_prediction_ledger data\predictions\nifty_1d_walk_forward.csv
 .\collector\.venv\Scripts\python.exe -m training.score_realized_outcomes data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_realized.csv
-.\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv
 .\collector\.venv\Scripts\python.exe -m training.analyze_prediction_stability data\predictions\nifty_1d_realized.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_stability.json
+.\collector\.venv\Scripts\python.exe -m training.stability_gate data\predictions\nifty_1d_stability.json --output data\predictions\nifty_1d_stability_gate.json
+.\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv --stability-report data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.train_meta --symbols NIFTY BANKNIFTY
 ```
 
@@ -295,7 +285,7 @@ React/Vite dashboard
                        Historical ML pipeline
 ```
 
-The collector stores market data. The market API serves local data and a current quote endpoint. The research service is separate so slow or unavailable news providers cannot block the main market API.
+The collector stores market data. The market API serves local data and a current quote endpoint. The research service is separate so slow or unavailable news providers cannot block the main market API. The research service remains a runtime integration item until it is actually defined and health-checked in Compose.
 
 ## Environment variables
 
@@ -318,3 +308,16 @@ EMBEDDING_MODEL=all-MiniLM-L6-v2
 ```
 
 Never commit API keys, model credentials or private credentials.
+
+## Future improvement checklist
+
+- [ ] Formal point-in-time Regime Model replacing the evaluation-only proxy.
+- [ ] Confidence calibration model and calibration-drift monitoring.
+- [ ] Fold/regime minimum-sample and stability policy refinement from real OOS results.
+- [ ] Transaction-cost and slippage-aware backtesting.
+- [ ] Portfolio construction, sizing and risk limits.
+- [ ] Paper-trading/shadow mode.
+- [ ] Research-service Compose integration and health checks.
+- [ ] CI for Python tests plus dashboard typecheck/build.
+- [ ] Reliable exchange/company-name ticker discovery.
+- [ ] Only after the above: evaluate advanced models, RL/FinRL, LLM research assistance and automated execution.
