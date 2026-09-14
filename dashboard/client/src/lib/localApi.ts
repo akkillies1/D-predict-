@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:4100";
 const RESEARCH_BASE = import.meta.env.VITE_RESEARCH_BASE_URL ?? "http://127.0.0.1:4200";
 
 export type LocalHealth = { ok: boolean; database?: string; time?: string };
-export type MarketOverview = { ok: true; symbol: string; timestamp: string; collectedAt?: string; open: number; high: number; low: number; close: number; volume: number | null; source?: string };
+export type MarketOverview = { ok: true; symbol: string; timestamp: string; collectedAt?: string; open: number | null; high: number | null; low: number | null; close: number; volume: number | null; source?: string; status?: "LIVE" | "CACHED" | "STALE" | "OFFLINE" };
 export type Instrument = { symbol: string; exchange: string; lotSize: number; isActive: boolean; name?: string | null; source?: string };
 export type PriceBar = { timestamp: string; open: number; high: number; low: number; close: number; volume: number | null };
 export type Signal = { id: string; symbol: string; timestamp: string; strategyVersion: string; modelVersion: string; direction: "BULLISH" | "BEARISH" | "NEUTRAL"; confidence: number; regime: string | null; reasonCodes: string[]; parameters: Record<string, unknown> };
@@ -24,7 +24,19 @@ export async function getMarketOverview(symbol = "NIFTY", signal?: AbortSignal):
 export async function getLiveQuote(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview> { return json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/live`, { signal }); }
 export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> { const payload = await json<{ instruments: Instrument[] }>(`${API_BASE}/api/instruments`, { signal }); return payload.instruments; }
 export async function searchInstruments(query: string, signal?: AbortSignal): Promise<Instrument[]> { const payload = await json<{ instruments: Instrument[] }>(`${API_BASE}/api/instruments/discover?q=${encodeURIComponent(query)}`, { signal }); return payload.instruments; }
-export async function addInstrument(instrument: Pick<Instrument, "symbol" | "exchange" | "lotSize" | "name">): Promise<Instrument> { const payload = await json<{ instrument: Instrument }>(`${API_BASE}/api/instruments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: instrument.symbol, exchange: instrument.exchange, lotSize: instrument.lotSize, name: instrument.name ?? null }) }); return payload.instrument; }
+
+export async function addInstrument(instrument: Pick<Instrument, "symbol" | "exchange" | "lotSize" | "name"> | string): Promise<Instrument> {
+  const normalized: Pick<Instrument, "symbol" | "exchange" | "lotSize" | "name"> = typeof instrument === "string"
+    ? { symbol: instrument.trim().toUpperCase(), exchange: instrument.trim().toUpperCase().endsWith(".BO") ? "BSE" : "NSE", lotSize: 1, name: null }
+    : instrument;
+  const payload = await json<{ instrument: Instrument }>(`${API_BASE}/api/instruments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol: normalized.symbol, exchange: normalized.exchange, lotSize: normalized.lotSize, name: normalized.name ?? null }),
+  });
+  return payload.instrument;
+}
+
 export async function getMarketHistory(symbol: string, signal?: AbortSignal): Promise<PriceBar[]> { const payload = await json<{ rows: PriceBar[] }>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/history?limit=120`, { signal }); return payload.rows; }
 export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal> { const payload = await json<{ signal: Signal }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.signal; }
 export async function getOptionChain(symbol: string, signal?: AbortSignal): Promise<OptionRow[]> { const payload = await json<{ rows: OptionRow[] }>(`${API_BASE}/api/options/chain?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.rows; }
