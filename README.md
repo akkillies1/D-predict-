@@ -36,10 +36,46 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Live market connector into the persistent shadow session.
 - [x] Rolling shadow accuracy/calibration metrics.
 - [x] Unified prediction-scoring and executable trade window in historical/live shadow.
+- [x] Explicit causal market-state classification separate from BUY/SELL prediction.
+- [ ] Point-in-time benchmark/sector relative-strength context.
+- [ ] Active-position ledger with explicit open/entry/exit/closed lifecycle.
+- [ ] Active rather than cumulative exposure accounting.
 - [ ] Live prediction runner using the approved model.
 - [ ] Interactive human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
 - [ ] Automated live execution only after all research/backtest/shadow gates pass.
+
+## Market-state architecture
+
+`training/market_state.py` introduces a deterministic descriptive state layer. It does **not** turn state into a trade direction. Current states include:
+
+- `TREND_UP`, `TREND_DOWN`
+- `RANGE`, `RECOVERY`, `BREAKDOWN`
+- `HIGH_VOLATILITY`, `LOW_VOLATILITY`
+- `OVERSOLD_TREND`, `OVERBOUGHT_TREND`
+- `REVERSAL_ATTEMPT`
+- `INSUFFICIENT_DATA`
+
+Oversold/overbought states are modifiers of an observed trend, not reversal signals. The classifier uses only features available at the observation timestamp and emits reason codes and regime confidence. Future returns are not accepted as inputs.
+
+The intended separation is:
+
+```text
+MARKET STATE ≠ TRADE SIGNAL
+
+market_state
+trend_strength
+volatility_regime
+regime_confidence
+        ↓
+MODEL PREDICTION
+        ↓
+direction + forecast confidence
+        ↓
+SIGNAL QUALITY / NO TRADE
+        ↓
+EXECUTABLE POSITION
+```
 
 ## Research architecture
 
@@ -49,6 +85,8 @@ MARKET DATA + RESEARCH DATA
 POINT-IN-TIME DATA LAYER
         ↓
 NUMERICAL + EVENT FEATURES
+        ↓
+MARKET STATE / REGIME CONTEXT
         ↓
 MARKET MODEL + EVENT MODEL
         ↓
@@ -73,7 +111,8 @@ Intended research chain:
 
 ```text
 Instrument → Calendar → Dataset → Feature definitions
-→ Label definitions → Model → Prediction → Backtest → Shadow → Evaluation
+→ Label definitions → Market State → Model → Prediction
+→ Executable Trade Event → Backtest → Shadow → Evaluation
 ```
 
 ## Accuracy and promotion philosophy
@@ -207,6 +246,7 @@ This is an evaluation monitor, not a promotion decision. Sustained-shadow promot
 - `dataset.py` — point-in-time dataset contract.
 - `manifest.py` — deterministic provenance/fingerprint manifests.
 - `build_dataset.py` — 1d/3d/5d point-in-time features and labels.
+- `market_state.py` — causal descriptive market-state classification, separate from prediction.
 - `train_baseline.py` — classical market classifier/regressor.
 - `walk_forward.py` — strict expanding-window OOS predictions.
 - `score_prediction_ledger.py` — OOS accuracy/probability metrics.
@@ -256,9 +296,11 @@ Vercel is optional frontend/demo infrastructure, not the primary research runtim
 
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
-- [ ] Market Model.
-- [ ] Event Model.
+- [x] Explicit causal MarketState layer.
+- [ ] Point-in-time benchmark relative strength.
+- [ ] Point-in-time sector context.
 - [ ] Formal point-in-time Regime Model.
+- [ ] Signal-quality / no-trade layer.
 - [ ] True Meta Model.
 - [ ] Calibration-drift monitoring.
 - [ ] Provenance/freshness-aware research terminal.
