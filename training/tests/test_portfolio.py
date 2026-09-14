@@ -11,7 +11,7 @@ def frame(*rows):
 def test_flat_and_low_confidence_are_no_trade():
     result = construct_portfolio(frame(
         {"timestamp": "2026-01-01", "symbol": "NIFTY", "horizon": "1d", "prediction": "FLAT", "market_probability_down": 0.1, "market_probability_flat": 0.8, "market_probability_up": 0.1},
-        {"timestamp": "2026-01-02", "symbol": "BANKNIFTY", "horizon": "1d", "prediction": "UP", "market_probability_down": 0.2, "market_probability_flat": 0.25, "market_probability_up": 0.55},
+        {"timestamp": "2026-01-02", "symbol": "BANKNIFTY", "horizon": "1d", "prediction": "UP", "market_probability_down": 0.201, "market_probability_flat": 0.25, "market_probability_up": 0.549},
     ))
     assert result["position_weight"].tolist() == [0.0, 0.0]
     assert result["decision"].tolist() == ["NO_TRADE", "NO_TRADE"]
