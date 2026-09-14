@@ -33,7 +33,8 @@ done
 createdb -h localhost -p "$PORT" -U postgres nifty
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/schema.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/003_instrument_metadata.sql"
-psql -h localhost -p "$PORT" -U postgres -d nifty -c "insert into instruments (symbol, name, lot_size) values ('NIFTY', 'NIFTY 50', 75), ('BANKNIFTY', 'NIFTY Bank', 30);"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/004_canonical_instrument_metadata.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -c "insert into instruments (symbol, name, lot_size, instrument_type, provider_symbol, canonical_source) values ('NIFTY', 'NIFTY 50', 75, 'INDEX', '^NSEI', 'seed'), ('BANKNIFTY', 'NIFTY Bank', 30, 'INDEX', '^NSEBANK', 'seed');"
 
 pg_ctl -D "$DATA_DIR" stop
 
