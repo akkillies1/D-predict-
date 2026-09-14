@@ -63,11 +63,15 @@ Targets and stops are derived from the calibrated return distribution and remain
 
 A calibration report never promotes or changes probabilities automatically. If a 65% target only hits 42% out of sample, the system records that failure rather than tuning the number until it looks correct.
 
-## Multi-instrument backtest integrity
+## Multi-instrument and trade-event backtest integrity
 
-The backtest prediction ledger now treats `(timestamp, symbol, horizon)` as the prediction identity when symbol metadata is present. This permits simultaneous predictions for different instruments while still rejecting duplicate predictions for the same instrument and horizon. This is required before the portfolio backtest can be trusted across multiple stocks.
+The backtest prediction ledger treats `(timestamp, symbol, horizon)` as the prediction identity when symbol metadata is present. This permits simultaneous predictions for different instruments while still rejecting duplicate predictions for the same instrument and horizon.
 
-The backtest remains causal: prediction at T enters at the next available close, holds for the requested trading-row horizon, applies transaction costs/slippage and uses point-in-time risk information. It is an evaluation engine, not a broker executor.
+When a prediction carries a calibrated return distribution, the backtest now derives T1 and stop prices from that distribution and resolves the **same entry-to-exit economic event** for target/stop outcome and P&L. It records target-hit, stop-hit, MAE and MFE. If both stop and target are printed in the same OHLC bar, the conservative rule is stop-first because intrabar ordering is unknown.
+
+If an older prediction ledger has no calibrated distribution, the legacy requested-horizon close exit remains available for compatibility. It must not be interpreted as distribution-aware validation.
+
+The backtest remains causal: prediction at T enters at the next available close, applies transaction costs/slippage and uses point-in-time risk information. It is an evaluation engine, not a broker executor.
 
 ## Risk and shadow gates
 
@@ -108,10 +112,10 @@ The economic event must remain consistent across forecast scoring, target/stop s
 - [ ] Evaluate `NO_TRADE` as a first-class outcome
 
 ### Trade thesis
+- [x] Distribution-derived targets/stops integrated into executable backtest
+- [x] MAE/MFE and first-hit target/stop event recording
 - [ ] Persist deterministic forecast/model/dataset provenance
-- [ ] Integrate distribution-derived targets/stops into the executable backtest
 - [ ] Validate target probabilities on independent future periods
-- [ ] Add MAE/MFE and first-hit target/stop event ledger
 - [ ] Validate risk/reward after realistic friction
 
 ### Promotion
