@@ -55,7 +55,7 @@ def _validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"return forecast ledger missing columns: {sorted(missing)}")
     result = frame.copy()
     result["timestamp"] = pd.to_datetime(result["timestamp"], utc=True)
-    if result["timestamp"].duplicated(subset=["symbol", "horizon"]).any():
+    if result.duplicated(subset=["symbol", "horizon", "timestamp"]).any():
         raise ValueError("timestamps must be unique per symbol and horizon")
     if not result["prediction"].isin(VALID_CLASSES).all():
         raise ValueError("prediction classes must be DOWN, FLAT or UP")
