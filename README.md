@@ -24,8 +24,8 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Automated tests for history validation and dataset point-in-time rules.
 - [x] Baseline trainer consumes the formal point-in-time dataset contract and its purged splits.
 - [x] Walk-forward validation uses a horizon-aware purge between training and validation observations.
-- [x] Fix Vercel dashboard typecheck failure caused by nullable live-market OHLC fields.
-- [x] Keep `main` as the canonical development/deployment branch.
+- [x] Vercel TypeScript fix for nullable live-market OHLC fields.
+- [x] `main` is the canonical development/deployment branch.
 - [ ] Add a production favicon and complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Add reproducible dataset manifests and dataset fingerprints.
@@ -225,3 +225,154 @@ A future `pgvector` migration can add native approximate-nearest-neighbour index
 The local research service uses Yahoo Finance search/news and GDELT's document-search API for broad recent coverage. GDELT supports keyword/phrase search and rolling time windows for news discovery.
 
 - GDELT: https://www.gdeltproject.org/
+- GDELT DOC API: https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/
+
+### Official disclosures
+
+The dashboard provides direct access to NSE corporate announcements and NSE public Regulation 7(2) insider-trading disclosures. NSE also publishes corporate-announcement datasets and an insider-trading archive.
+
+- NSE announcements: https://www.nseindia.com/companies-listing/corporate-filings-announcements
+- NSE insider trading: https://www.nseindia.com/companies-listing/corporate-filings-insider-trading
+- NSE insider-trading archive: https://www.nseindia.com/companies-listing/corporate-filings-insider-trading-archive-data
+- SEBI filings: https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=3&smid=11
+- SEBI insider-trading search: https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListingAll=yes&search=Insider+Trading
+
+## Local architecture
+
+```text
+React dashboard :3000
+       │
+       ├────────── Local Market API :4100 ─────── PostgreSQL :5433
+       │                     │                         ▲
+       │                     └── live Yahoo quote     │
+       │                                               │
+       └────────── Research API :4200 ── Yahoo/GDELT ─┤
+                                                     │
+                                               Python collector
+                                                     │
+                                             Historical ML pipeline
+```
+
+The collector stores market data. The market API serves local data and a current quote endpoint. The research service is separate so slow or unavailable news providers cannot block the main market API. Research results are also persisted for future event learning.
+
+## Windows local installation
+
+Windows is the recommended developer path for this repository.
+
+### 1. Install prerequisites
+
+Install:
+
+- Node.js 22 LTS or newer
+- Python 3.12+
+- Docker Desktop with Docker Compose
+- Git
+
+Make sure `node`, `npm`, `python`, `docker` and `git` work in PowerShell.
+
+### 2. Clone the repository
+
+```powershell
+git clone https://github.com/akkillies1/D-predict-.git
+cd D-predict-
+```
+
+### 3. Prepare the local environment
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 doctor
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 init
+```
+
+`init` installs backend/dashboard packages, creates the collector virtual environment and installs collector dependencies. The training dependency set can be installed separately with:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m pip install -r training\requirements.txt
+```
+
+### 4. Start everything
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 start
+```
+
+This starts PostgreSQL on 5433, the Market API on 4100, the Research API on 4200, the Dashboard on 3000 and the collector as a background process.
+
+Open `http://127.0.0.1:3000`.
+
+### 5. Apply the ML/research schema
+
+For an existing local database, run once:
+
+```powershell
+docker compose up -d postgres
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/002-prediction-ml.sql
+```
+
+Fresh PostgreSQL volumes also receive the mounted migration automatically during initial database creation.
+
+### 6. Check status
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 status
+```
+
+### 7. Stop everything
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\dp.ps1 stop
+```
+
+See `LOCAL_INSTALL_GUIDE.md` and `training/README.md` for the full workflow.
+
+## Linux / macOS
+
+The existing `./dp` launcher starts PostgreSQL, the market API, research service, dashboard and collector. The training modules can be run with the active Python environment using the commands in `training/README.md`.
+
+## Searching a ticker
+
+Use the dashboard search box. Search is debounced and can discover supported Yahoo symbols even when they have not yet been activated locally.
+
+Example: `rel`
+
+Select a result. D-predict activates it in the local instrument table so the collector can pick it up on its next cycle.
+
+## Live market flow
+
+After selecting a symbol:
+
+1. the dashboard reads the local database for stored 1-minute history;
+2. the market API can fetch a current Yahoo quote;
+3. the collector continues writing fresh bars;
+4. the UI refreshes the market view periodically;
+5. NIFTY/BANKNIFTY can additionally show the stored NSE option-chain snapshots.
+
+The application must display `NO DATA`, `WAITING` or `OFFLINE` when the source is unavailable. It must not invent market prices.
+
+## Research flow
+
+Selecting a ticker also updates the research workspace. The research service identifies the company where possible, collects recent public news, searches a broader GDELT news window, searches for public NSE/SEBI material where indexed, removes duplicate URLs, scores current evidence, measures source agreement and freshness, persists research documents for later embedding, highlights themes and risks, and provides direct links to official public disclosure pages.
+
+The UI calls this a **Meta-prediction** because it assesses the direction implied by the current evidence stack, not simply one prediction source.
+
+## Environment variables
+
+The `.env.example` file contains safe local defaults:
+
+```env
+DATABASE_URL=postgresql://postgres:localdev@localhost:5433/nifty
+API_PORT=4100
+RESEARCH_PORT=4200
+VITE_API_BASE_URL=http://127.0.0.1:4100
+VITE_RESEARCH_BASE_URL=http://127.0.0.1:4200
+OPTION_CHAIN_POLL_SECONDS=15
+PRICE_BAR_POLL_SECONDS=15
+COLLECTOR_INSTRUMENTS=NIFTY,BANKNIFTY
+RESEARCH_NEWS_ENABLED=true
+RESEARCH_CACHE_SECONDS=60
+GDELT_TIMESPAN=3d
+RESEARCH_MAX_ARTICLES=30
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
+
+Never commit API keys, model credentials or private credentials.
