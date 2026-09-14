@@ -43,7 +43,8 @@ def test_current_outcome_is_not_available_to_its_own_distribution():
 
 
 def test_trade_thesis_derives_targets_and_stop_from_distribution():
-    frame = ledger_frame([-0.04, -0.02, 0.01, 0.02, 0.04, 0.06])
+    # Five prior residuals give both favorable and adverse tails for an UP thesis.
+    frame = ledger_frame([-0.06, -0.01, 0.02, 0.04, 0.06, 0.08])
     calibrated = calibrate_return_distributions(frame, ReturnDistributionConfig(min_history=3))
     thesis = construct_trade_thesis(calibrated.iloc[-1], 1000.0, ReturnDistributionConfig(min_history=3))
 
