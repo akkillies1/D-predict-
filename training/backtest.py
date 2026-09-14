@@ -36,8 +36,7 @@ class DrawdownConfig:
 def drawdown_multiplier(drawdown: float, config: DrawdownConfig | None = None) -> float:
     config = config or DrawdownConfig()
     config.validate()
-    if drawdown < 0:
-        drawdown = 0.0
+    drawdown = max(0.0, drawdown)
     if drawdown <= config.soft_drawdown:
         return 1.0
     if drawdown >= config.hard_drawdown:
@@ -165,7 +164,6 @@ def backtest(
                 "equity_before": equity,
                 "equity_after": equity,
             })
-            next_free_timestamp = exit_time
             continue
 
         trade_return = _net_return(row.prediction, entry_price, exit_price, cost_bps, slippage_bps)
