@@ -34,6 +34,7 @@ SECTORS = {
     "LT": ("NIFTY", "INFRASTRUCTURE"),
     "ADANIPORTS": ("NIFTY", "INFRASTRUCTURE"),
 }
+CONFIDENCE_BUCKETS = ((0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 0.75), (0.75, 0.80), (0.80, 1.01))
 
 
 @dataclass(frozen=True)
@@ -125,14 +126,55 @@ def _market_state_row(history: pd.DataFrame, timestamp: pd.Timestamp) -> dict:
     }
 
 
+def _group_metrics(frame: pd.DataFrame, column: str) -> list[dict]:
+    if frame.empty:
+        return []
+    rows = []
+    for key, group in frame.groupby(column, dropna=False):
+        if group.empty:
+            continue
+        rows.append({
+            column: None if pd.isna(key) else str(key),
+            "examples": int(len(group)),
+            "directional_accuracy": float(group["direction_correct"].mean()),
+            "executable_trade_accuracy": float(group["profitable_after_friction"].mean()),
+            "mean_return": float(group["trade_return"].mean()),
+            "median_return": float(group["trade_return"].median()),
+            "return_std": float(group["trade_return"].std(ddof=0)),
+            "mean_mae": float(group["mae"].mean()),
+            "mean_mfe": float(group["mfe"].mean()),
+        })
+    return rows
+
+
+def _confidence_metrics(frame: pd.DataFrame) -> list[dict]:
+    rows = []
+    for low, high in CONFIDENCE_BUCKETS:
+        group = frame[(frame["forecast_confidence"] >= low) & (frame["forecast_confidence"] < high)]
+        rows.extend(_group_metrics(group, "confidence_bucket") if not group.empty else [])
+        if rows and rows[-1].get("confidence_bucket") == f"{low:.2f}-{min(high, 1.0):.2f}":
+            continue
+        if not group.empty:
+            rows.append({
+                "confidence_bucket": f"{low:.2f}-{min(high, 1.0):.2f}",
+                "examples": int(len(group)),
+                "directional_accuracy": float(group["direction_correct"].mean()),
+                "executable_trade_accuracy": float(group["profitable_after_friction"].mean()),
+                "mean_return": float(group["trade_return"].mean()),
+                "median_return": float(group["trade_return"].median()),
+                "return_std": float(group["trade_return"].std(ddof=0)),
+                "mean_mae": float(group["mae"].mean()),
+                "mean_mfe": float(group["mfe"].mean()),
+            })
+    return rows
+
+
 def evaluate_symbol(symbol: str, config: HarnessConfig) -> tuple[pd.DataFrame, dict]:
     history = _load_history(symbol)
     predictions = _load_predictions(symbol, config.horizon)
     benchmark_name, sector = SECTORS.get(symbol, (DEFAULT_BENCHMARK, None))
     benchmark = _load_history(benchmark_name)
 
-    # Until native sector-index histories exist, use a clearly labelled peer proxy.
-    # It is still causal and never substitutes future stock outcomes into features.
     sector_frame = None
     sector_proxy_symbol = None
     for candidate, (_, candidate_sector) in SECTORS.items():
@@ -149,38 +191,15 @@ def evaluate_symbol(symbol: str, config: HarnessConfig) -> tuple[pd.DataFrame, d
         if ts not in history.index:
             continue
         state = _market_state_row(history, ts)
-        context = build_context_row(
-            ts,
-            history["close"],
-            benchmark["close"],
-            ContextSpec(benchmark_name, sector),
-            sector_frame["close"] if sector_frame is not None else None,
-        ).to_dict()
+        context = build_context_row(ts, history["close"], benchmark["close"], ContextSpec(benchmark_name, sector), sector_frame["close"] if sector_frame is not None else None).to_dict()
         direction = str(pred["prediction"])
         confidence = _confidence(pred)
         trade = _trade_event(history, ts, config.horizon, direction, config.cost_bps_per_side, config.slippage_bps_per_side)
-        rows.append({
-            **pred.to_dict(),
-            **state,
-            **context,
-            "sector_proxy_symbol": sector_proxy_symbol,
-            "direction": direction,
-            "forecast_confidence": confidence,
-            "executable_trade_status": trade["status"],
-            **trade,
-        })
+        rows.append({**pred.to_dict(), **state, **context, "sector_proxy_symbol": sector_proxy_symbol, "direction": direction, "forecast_confidence": confidence, "executable_trade_status": trade["status"], **trade})
 
     result = pd.DataFrame(rows)
     scored = result[result["executable_trade_status"] == "SCORED"] if not result.empty else result
-    summary = {
-        "symbol": symbol,
-        "horizon": config.horizon,
-        "examples": int(len(result)),
-        "scored_trades": int(len(scored)),
-        "pending": int((result["executable_trade_status"] == "PENDING").sum()) if not result.empty else 0,
-        "sector_context": sector,
-        "sector_proxy_symbol": sector_proxy_symbol,
-    }
+    summary = {"symbol": symbol, "horizon": config.horizon, "examples": int(len(result)), "scored_trades": int(len(scored)), "pending": int((result["executable_trade_status"] == "PENDING").sum()) if not result.empty else 0, "no_trade": int((result["executable_trade_status"] == "NO_TRADE").sum()) if not result.empty else 0, "sector_context": sector, "sector_proxy_symbol": sector_proxy_symbol}
     if not scored.empty:
         summary.update({
             "directional_accuracy": float(scored["direction_correct"].mean()),
@@ -189,9 +208,12 @@ def evaluate_symbol(symbol: str, config: HarnessConfig) -> tuple[pd.DataFrame, d
             "median_trade_return": float(scored["trade_return"].median()),
             "mae_mean": float(scored["mae"].mean()),
             "mfe_mean": float(scored["mfe"].mean()),
+            "confidence_buckets": _confidence_metrics(scored),
+            "regime_performance": _group_metrics(scored, "market_state"),
+            "volatility_performance": _group_metrics(scored, "volatility_regime"),
         })
     else:
-        summary.update({"directional_accuracy": None, "executable_trade_accuracy": None, "mean_trade_return": None, "median_trade_return": None, "mae_mean": None, "mfe_mean": None})
+        summary.update({"directional_accuracy": None, "executable_trade_accuracy": None, "mean_trade_return": None, "median_trade_return": None, "mae_mean": None, "mfe_mean": None, "confidence_buckets": [], "regime_performance": [], "volatility_performance": []})
     return result, summary
 
 
