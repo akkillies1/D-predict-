@@ -247,9 +247,9 @@ The repository contains Python tests under `training/tests`. Recommended local v
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-The new backtest tests cover drawdown-throttle boundaries, invalid thresholds, causal risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking.
+The backtest tests cover drawdown-throttle boundaries, invalid thresholds, causal ATR/risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking. The latest test fixture was corrected so ATR has sufficient point-in-time history before the first risk-sized signal.
 
-No claim is made here that the local Windows test suite has passed unless it has actually been run in the user's environment or through CI.
+**Verification status:** the GitHub changes were committed, but the Windows test suite has not been executed in this environment. Do not treat the new backtest/risk tests as passing until the command above is run locally or by CI.
 
 ## Product boundaries
 
