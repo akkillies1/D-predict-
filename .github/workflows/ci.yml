@@ -25,3 +25,11 @@ jobs:
         run: python -m pip install -r collector/requirements.txt && python -m compileall -q collector
       - name: Training source compile check
         run: python -m compileall -q training
+      - name: Package source snapshot
+        run: git archive --format=zip --output=d-predict-source.zip HEAD
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: d-predict-source
+          path: d-predict-source.zip
+          retention-days: 1
