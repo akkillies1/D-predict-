@@ -16,16 +16,31 @@ const YAHOO_HEADERS = { "User-Agent": "Mozilla/5.0 D-predict/1.0" };
 const iso = (value: unknown) => value instanceof Date ? value.toISOString() : value;
 const noDb = (res: express.Response) => res.status(503).json({ ok: false, error: "DATABASE_UNAVAILABLE", message: "Configure DATABASE_URL and start PostgreSQL." });
 const yahooSymbol = (symbol: string) => ({ NIFTY: "^NSEI", BANKNIFTY: "^NSEBANK" } as Record<string, string>)[symbol] ?? symbol;
+
 const fetchJson = async (url: string, signal?: AbortSignal) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
   try {
-    const response = await fetch(url, { signal: signal ?? controller.signal, headers: YAHOO_HEADERS });
+    const response = await fetch(url, { signal: controller.signal, headers: YAHOO_HEADERS });
     if (!response.ok) throw new Error(`Yahoo returned ${response.status}`);
     return await response.json() as any;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
+};
+
+const normaliseYahooQuote = (quote: any) => {
+  const symbol = String(quote?.symbol ?? "").trim().toUpperCase();
+  if (!symbol) return null;
+  const exchange = String(quote?.exchange ?? quote?.exchDisp ?? "").trim().toUpperCase();
+  const name = String(quote?.longname ?? quote?.shortname ?? symbol).trim();
+  const isIndian = /\.(NS|BO)$/i.test(symbol) || /NIFTY|BANKNIFTY/i.test(symbol) || symbol === "^NSEI" || symbol === "^NSEBANK";
+  if (!isIndian) return null;
+  const lotSize = Number.isInteger(Number(quote?.lotSize)) && Number(quote.lotSize) > 0 ? Number(quote.lotSize) : 1;
+  return { symbol, exchange: exchange || (symbol.endsWith(".BO") ? "BSE" : "NSE"), lotSize, isActive: true, name, source: "yahoo" };
 };
 
 app.get("/health", async (_req, res) => {
@@ -46,7 +61,7 @@ app.get("/api/data-health", async (_req, res) => {
 app.get("/api/instruments", async (_req, res) => {
   if (!pool) return noDb(res);
   try {
-    const result = await pool.query("select symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\" from instruments order by symbol limit 1000");
+    const result = await pool.query(`select symbol, exchange, lot_size as "lotSize", is_active as "isActive", name from instruments order by symbol limit 1000`);
     return res.json({ ok: true, instruments: result.rows });
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
@@ -56,7 +71,7 @@ app.get("/api/instruments/search", async (req, res) => {
   const query = String(req.query.q ?? "").trim().toUpperCase();
   if (!query) return res.json({ ok: true, instruments: [] });
   try {
-    const result = await pool.query(`select symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\" from instruments where is_active and (upper(symbol) like $1 or upper(symbol) like $2) order by case when upper(symbol) = $3 then 0 when upper(symbol) like $2 then 1 else 2 end, symbol limit 20`, [`${query}%`, `%${query}%`, query]);
+    const result = await pool.query(`select symbol, exchange, lot_size as "lotSize", is_active as "isActive", name, 'local' as source from instruments where is_active and (upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or upper(symbol) like $2 or upper(coalesce(name,'')) like $2) order by case when upper(symbol) = $3 then 0 when upper(symbol) like $1 then 1 when upper(coalesce(name,'')) like $1 then 2 else 3 end, symbol limit 20`, [`${query}%`, `%${query}%`, query]);
     return res.json({ ok: true, instruments: result.rows });
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
@@ -65,23 +80,24 @@ app.get("/api/instruments/discover", async (req, res) => {
   if (!pool) return noDb(res);
   const query = String(req.query.q ?? "").trim();
   if (query.length < 1) return res.json({ ok: true, instruments: [] });
+  const upper = query.toUpperCase();
   try {
-    const local = await pool.query(`select symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\" from instruments where is_active and (upper(symbol) like $1 or upper(symbol) like $2) order by case when upper(symbol) = $3 then 0 when upper(symbol) like $1 then 1 else 2 end, symbol limit 20`, [`${query.toUpperCase()}%`, `%${query.toUpperCase()}%`, query.toUpperCase()]);
-    const localRows = local.rows.map(row => ({ ...row, name: null, source: "local" }));
+    const local = await pool.query(`select symbol, exchange, lot_size as "lotSize", is_active as "isActive", name, 'local' as source from instruments where is_active and (upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or upper(symbol) like $2 or upper(coalesce(name,'')) like $2) order by case when upper(symbol) = $3 then 0 when upper(symbol) like $1 then 1 when upper(coalesce(name,'')) like $1 then 2 else 3 end, symbol limit 20`, [`${upper}%`, `%${upper}%`, upper]);
+    const localRows = local.rows;
     if (query.length < 2 || localRows.length >= 10) return res.json({ ok: true, instruments: localRows.slice(0, 20) });
 
     let remoteRows: any[] = [];
     try {
-      const payload = await fetchJson(`${YAHOO_SEARCH}?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0`);
-      remoteRows = Array.isArray(payload?.quotes) ? payload.quotes.filter((quote: any) => quote?.symbol).map((quote: any) => ({
-        symbol: String(quote.symbol),
-        exchange: String(quote.exchange ?? quote.exchDisp ?? ""),
-        lotSize: 1,
-        isActive: true,
-        name: quote.longname ?? quote.shortname ?? quote.symbol,
-        source: "yahoo",
-      })).filter((item: any) => /^(\^NSEI|\^NSEBANK|[A-Z0-9.-]+\.(NS|BO))$/.test(item.symbol) || /NIFTY|BANKNIFTY/i.test(item.symbol)) : [];
-    } catch { remoteRows = []; }
+      const payload = await fetchJson(`${YAHOO_SEARCH}?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`);
+      const seen = new Set<string>();
+      remoteRows = Array.isArray(payload?.quotes) ? payload.quotes.map(normaliseYahooQuote).filter(Boolean).filter((item: any) => {
+        if (seen.has(item.symbol)) return false;
+        seen.add(item.symbol);
+        return true;
+      }) : [];
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return res.status(504).json({ ok: false, error: "DISCOVERY_TIMEOUT" });
+    }
 
     const seen = new Set(localRows.map(row => row.symbol));
     const merged = [...localRows];
@@ -94,10 +110,12 @@ app.post("/api/instruments", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = String(req.body?.symbol ?? "").trim().toUpperCase();
   const exchange = String(req.body?.exchange ?? (symbol.endsWith(".BO") ? "BSE" : "NSE")).trim().toUpperCase();
-  const lotSize = Math.max(1, Number(req.body?.lotSize ?? 1));
-  if (!/^[A-Z0-9._^:-]{1,32}$/.test(symbol) || !Number.isInteger(lotSize)) return res.status(400).json({ ok: false, error: "INVALID_INSTRUMENT" });
+  const requestedLotSize = Number(req.body?.lotSize ?? 1);
+  const lotSize = Number.isInteger(requestedLotSize) && requestedLotSize > 0 ? requestedLotSize : 1;
+  const name = String(req.body?.name ?? "").trim().slice(0, 200) || null;
+  if (!/^[A-Z0-9._^:-]{1,32}$/.test(symbol)) return res.status(400).json({ ok: false, error: "INVALID_INSTRUMENT" });
   try {
-    const result = await pool.query("insert into instruments (symbol, exchange, lot_size) values ($1, $2, $3) on conflict (symbol) do update set is_active = true, exchange = excluded.exchange, lot_size = excluded.lot_size returning symbol, exchange, lot_size as \"lotSize\", is_active as \"isActive\"", [symbol, exchange, lotSize]);
+    const result = await pool.query(`insert into instruments (symbol, exchange, lot_size, name) values ($1, $2, $3, $4) on conflict (symbol) do update set is_active = true, exchange = excluded.exchange, lot_size = case when instruments.lot_size > 1 and excluded.lot_size = 1 then instruments.lot_size else excluded.lot_size end, name = coalesce(excluded.name, instruments.name) returning symbol, exchange, lot_size as "lotSize", is_active as "isActive", name`, [symbol, exchange, lotSize, name]);
     return res.status(201).json({ ok: true, instrument: result.rows[0], message: "Instrument activated. The collector will pick it up on its next poll." });
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
@@ -106,14 +124,15 @@ app.get("/api/market/:symbol/live", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const payload = await fetchJson(`${YAHOO_CHART}/${encodeURIComponent(yahooSymbol(symbol))}?interval=1m&range=1d`);
-    const meta = payload?.chart?.result?.[0]?.meta;
+    const result = payload?.chart?.result?.[0];
+    const meta = result?.meta;
     if (!meta) return res.status(404).json({ ok: false, error: "NO_LIVE_QUOTE" });
     const price = Number(meta.regularMarketPrice ?? meta.chartPreviousClose);
     if (!Number.isFinite(price)) return res.status(404).json({ ok: false, error: "NO_LIVE_QUOTE" });
     const previous = Number(meta.previousClose ?? meta.chartPreviousClose ?? price);
     const marketTime = meta.regularMarketTime ? new Date(Number(meta.regularMarketTime) * 1000).toISOString() : new Date().toISOString();
     return res.json({ ok: true, symbol, timestamp: marketTime, collectedAt: new Date().toISOString(), open: previous, high: price, low: price, close: price, volume: meta.regularMarketVolume == null ? null : Number(meta.regularMarketVolume), source: "yahoo-live" });
-  } catch (error) { return res.status(502).json({ ok: false, error: "LIVE_QUOTE_UNAVAILABLE", message: error instanceof Error ? error.message : "upstream_failed" }); }
+  } catch (error) { return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "upstream_failed" }); }
 });
 
 app.get("/api/market/:symbol/overview", async (req, res) => {
@@ -156,8 +175,34 @@ app.get("/api/options/chain", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 
-app.get("/api/forecast", async (req, res) => { if (!pool) return noDb(res); const symbol = String(req.query.symbol ?? "NIFTY").toUpperCase(); const horizonDays = Math.min(10, Math.max(1, Number(req.query.horizon ?? 5))); try { const result = await pool.query(`select date(pb.market_timestamp at time zone 'Asia/Kolkata') as trading_day, (array_agg(pb.close order by pb.market_timestamp desc))[1] as close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 group by 1 order by 1 desc limit 60`, [symbol]); const closes = result.rows.reverse().map(row => Number(row.close)).filter(Number.isFinite); if (closes.length < 5) return res.status(404).json({ ok: false, error: "INSUFFICIENT_HISTORY", daysOfHistoryUsed: closes.length, required: 5 }); const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index])); const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length; const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, returns.length - 1); const dailyVolatility = Math.sqrt(variance); const spot = closes[closes.length - 1]; const paths = 1000; const bands = [{ day: 0, p10: spot, p25: spot, median: spot, p75: spot, p90: spot }]; let terminalPrices: number[] = []; const quantile = (values: number[], probability: number) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(probability * (sorted.length - 1)))]; }; for (let day = 1; day <= horizonDays; day += 1) { const prices = Array.from({ length: paths }, () => { let price = spot; for (let step = 0; step < day; step += 1) { const u = Math.max(Number.EPSILON, Math.random()); const v = Math.max(Number.EPSILON, Math.random()); const gaussian = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); price *= Math.exp(dailyVolatility * gaussian); } return price; }); terminalPrices = prices; bands.push({ day, p10: quantile(prices, 0.1), p25: quantile(prices, 0.25), median: quantile(prices, 0.5), p75: quantile(prices, 0.75), p90: quantile(prices, 0.9) }); } const above = terminalPrices.filter(price => price > spot).length / terminalPrices.length; return res.json({ ok: true, symbol, spot, dailyVolatility, daysOfHistoryUsed: closes.length, horizonDays, paths, probabilityAboveSpot: above, probabilityBelowSpot: 1 - above, bands }); } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); } });
+app.get("/api/forecast", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = String(req.query.symbol ?? "NIFTY").toUpperCase();
+  const horizonDays = Math.min(10, Math.max(1, Number(req.query.horizon ?? 5)));
+  try {
+    const result = await pool.query(`select date(pb.market_timestamp at time zone 'Asia/Kolkata') as trading_day, (array_agg(pb.close order by pb.market_timestamp desc))[1] as close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 group by 1 order by 1 desc limit 60`, [symbol]);
+    const closes = result.rows.reverse().map(row => Number(row.close)).filter(Number.isFinite);
+    if (closes.length < 5) return res.status(404).json({ ok: false, error: "INSUFFICIENT_HISTORY", daysOfHistoryUsed: closes.length, required: 5 });
+    const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index]));
+    const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+    const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, returns.length - 1);
+    const dailyVolatility = Math.sqrt(variance);
+    const spot = closes[closes.length - 1];
+    const paths = 1000;
+    const bands = [{ day: 0, p10: spot, p25: spot, median: spot, p75: spot, p90: spot }];
+    let terminalPrices: number[] = [];
+    const quantile = (values: number[], probability: number) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor(probability * (sorted.length - 1)))]; };
+    for (let day = 1; day <= horizonDays; day += 1) {
+      const prices = Array.from({ length: paths }, () => { let price = spot; for (let step = 0; step < day; step += 1) { const u = Math.max(Number.EPSILON, Math.random()); const v = Math.max(Number.EPSILON, Math.random()); const gaussian = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); price *= Math.exp(dailyVolatility * gaussian); } return price; });
+      terminalPrices = prices;
+      bands.push({ day, p10: quantile(prices, 0.1), p25: quantile(prices, 0.25), median: quantile(prices, 0.5), p75: quantile(prices, 0.75), p90: quantile(prices, 0.9) });
+    }
+    const above = terminalPrices.filter(price => price > spot).length / terminalPrices.length;
+    return res.json({ ok: true, symbol, spot, dailyVolatility, daysOfHistoryUsed: closes.length, horizonDays, paths, probabilityAboveSpot: above, probabilityBelowSpot: 1 - above, bands });
+  } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
+});
 
 const server = app.listen(port, "127.0.0.1", () => console.log(`D-predict local API listening on 127.0.0.1:${port}`));
 const shutdown = async () => { server.close(); await pool?.end(); };
-process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
