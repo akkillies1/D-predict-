@@ -18,6 +18,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Walk-forward OOS ledger now includes an independent `predicted_return` forecast and return MAE/RMSE/bias.
 - [x] Leakage-free prior-OOS residual distribution primitive with explicit `UNCALIBRATED`/`CALIBRATED` status.
 - [x] Deterministic distribution-derived target/stop and trade-thesis primitive; not yet promoted as calibrated until independent OOS hit-rate tests pass.
+- [x] Leakage/adversarial tests proving the current outcome cannot calibrate its own distribution.
 - [x] Prediction/realized-outcome scoring and stability promotion gates.
 - [x] Causal risk-weighted backtest, drawdown and correlation limits.
 - [x] Historical and restart-safe live shadow simulation.
@@ -31,7 +32,6 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 
 ### Next gates
 
-- [ ] Add dedicated unit/adversarial tests for return-distribution leakage and target/stop construction.
 - [ ] Integrate distribution/thesis into the OOS prediction pipeline without using future outcomes.
 - [ ] Validate target/stop probability calibration independently OOS.
 - [ ] Measure return-distribution coverage, interval width and conditional calibration by horizon/regime/confidence.
@@ -226,6 +226,7 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [x] Cross-stock validation harness.
 - [x] OOS predicted-return ledger foundation.
 - [x] Leakage-free return-distribution primitive.
+- [x] Leakage/adversarial distribution tests.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
