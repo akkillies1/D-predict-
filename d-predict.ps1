@@ -60,11 +60,10 @@ try {
 
 Write-Step "Starting dashboard in background..."
 $dashboardLog = Join-Path $PSScriptRoot "dashboard-local.log"
-$dashboardErrorLog = Join-Path $PSScriptRoot "dashboard-local-error.log"
 $dashboard = Start-Process -FilePath "powershell.exe" -ArgumentList @(
   "-NoProfile",
   "-ExecutionPolicy", "Bypass",
-  "-Command", "Set-Location '$PSScriptRoot\dashboard'; corepack pnpm dev *>> '$dashboardLog' 2>> '$dashboardErrorLog'"
+  "-Command", "Set-Location '$PSScriptRoot\dashboard'; corepack pnpm dev *> '$dashboardLog'"
 ) -PassThru -WindowStyle Minimized
 
 Write-Step "Waiting for dashboard..."
@@ -81,8 +80,8 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 
 if (-not $dashboardUrl) {
-  Get-Content $dashboardErrorLog -Tail 80 -ErrorAction SilentlyContinue
-  throw "Dashboard did not start. Check dashboard-local.log and dashboard-local-error.log."
+  Get-Content $dashboardLog -Tail 100 -ErrorAction SilentlyContinue
+  throw "Dashboard did not start. Check dashboard-local.log."
 }
 
 Write-Step "D-Predict is ready."
@@ -94,4 +93,4 @@ Write-Host ""
 Write-Step "Opening browser..."
 Start-Process $dashboardUrl
 Write-Host ""
-Write-Host "Keep this terminal open for the launcher process. Use .\stop-d-predict.ps1 to stop the local stack." -ForegroundColor DarkGray
+Write-Host "Use .\stop-d-predict.ps1 to stop the local stack." -ForegroundColor DarkGray
