@@ -16,6 +16,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from training.dataset import DatasetSpec, PointInTimeDataset, make_segments
+from training.manifest import build_manifest, write_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "training"
@@ -113,10 +114,12 @@ def normalize(frame: pd.DataFrame) -> pd.DataFrame:
 
 def build(symbol: str, min_rows: int = 500) -> None:
     raw = read_postgres(symbol)
+    source = "postgres" if raw is not None and len(raw) >= min_rows else "csv"
     if raw is None or len(raw) < min_rows:
         csv = read_csv(symbol)
         if csv is not None and (raw is None or len(csv) > len(raw)):
             raw = csv
+            source = "csv"
     if raw is None or len(raw) < min_rows:
         raise RuntimeError(
             f"Not enough history for {symbol}. Run: python training/download_historical.py --symbols {symbol}"
@@ -162,11 +165,16 @@ def build(symbol: str, min_rows: int = 500) -> None:
 
         path = DATA_DIR / f"{symbol.lower()}_{horizon}.csv"
         data.reset_index(names="timestamp").to_csv(path, index=False)
+        manifest = build_manifest(dataset, source=source, output_path=path)
+        manifest["dataset_rows_after_split"] = int(len(data))
+        manifest_path = DATA_DIR / f"{symbol.lower()}_{horizon}.manifest.json"
+        write_manifest(manifest, manifest_path)
         counts = data["dataset_split"].value_counts().to_dict()
         print(
             f"{symbol} {horizon}: {len(data):,} point-in-time examples -> {path} "
             f"(train={counts.get('train', 0)}, validation={counts.get('validation', 0)}, test={counts.get('test', 0)}, purge={purge_rows})"
         )
+        print(f"  manifest: {manifest_path} sha256={manifest['content_sha256']}")
 
 
 def main() -> None:
