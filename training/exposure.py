@@ -55,12 +55,7 @@ def _point_in_time_returns(history: pd.DataFrame, timestamp: pd.Timestamp, lookb
     return returns.tail(lookback)
 
 
-def _correlation(
-    candidate_history: pd.DataFrame,
-    existing_history: pd.DataFrame,
-    timestamp: pd.Timestamp,
-    lookback: int,
-) -> float | None:
+def _correlation(candidate_history: pd.DataFrame, existing_history: pd.DataFrame, timestamp: pd.Timestamp, lookback: int) -> float | None:
     candidate = _point_in_time_returns(candidate_history, timestamp, lookback)
     existing = _point_in_time_returns(existing_history, timestamp, lookback)
     joined = pd.concat([candidate.rename("candidate"), existing.rename("existing")], axis=1).dropna()
@@ -87,13 +82,13 @@ def attribute_and_limit_exposure(
     normalised = {str(symbol): _normalise_history(frame) for symbol, frame in histories.items()}
     frame = risk_budget.copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-    if frame["timestamp"].duplicated().any():
-        raise ValueError("Risk-budget timestamps must be unique")
-    if (pd.to_numeric(frame["position_weight"], errors="coerce") < 0).any():
-        raise ValueError("position_weight cannot be negative")
+    if frame[["timestamp", "symbol"]].duplicated().any():
+        raise ValueError("Risk-budget timestamp/symbol pairs must be unique")
+    frame["position_weight"] = pd.to_numeric(frame["position_weight"], errors="coerce")
+    if frame["position_weight"].isna().any() or (frame["position_weight"] < 0).any():
+        raise ValueError("position_weight must be non-negative numeric")
 
     accepted: dict[str, float] = {}
-    accepted_directions: dict[str, str] = {}
     rows: list[dict] = []
 
     for row in frame.sort_values(["timestamp", "symbol"]).itertuples(index=False):
@@ -125,7 +120,6 @@ def attribute_and_limit_exposure(
                 status = "CORRELATED_EXPOSURE_LIMIT"
 
         accepted[symbol] = accepted.get(symbol, 0.0) + proposed
-        accepted_directions[symbol] = str(row.prediction)
         total_gross = sum(accepted.values())
         rows.append({
             "timestamp": timestamp.isoformat(),
