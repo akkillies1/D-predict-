@@ -3,22 +3,30 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from training.backtest import backtest
+from training.backtest import DrawdownConfig, backtest, drawdown_multiplier
+from training.risk import RiskConfig
 
 
-def write_inputs(tmp_path: Path):
+def write_inputs(tmp_path: Path, periods: int = 32):
+    timestamps = pd.date_range("2026-01-01", periods=periods, freq="D", tz="UTC")
+    close = [100 + i * 0.25 for i in range(periods)]
     history = pd.DataFrame(
         {
-            "timestamp": pd.date_range("2026-01-01", periods=8, freq="D", tz="UTC"),
-            "close": [100, 101, 102, 100, 98, 99, 101, 103],
+            "timestamp": timestamps,
+            "high": [price + 1.0 for price in close],
+            "low": [price - 1.0 for price in close],
+            "close": close,
         }
     )
     predictions = pd.DataFrame(
         {
-            "timestamp": [history.timestamp.iloc[0], history.timestamp.iloc[3], history.timestamp.iloc[5]],
+            "timestamp": [timestamps[0], timestamps[16], timestamps[20]],
             "symbol": ["NIFTY"] * 3,
             "horizon": ["1d", "1d", "1d"],
             "prediction": ["UP", "DOWN", "FLAT"],
+            "market_probability_down": [0.1, 0.7, 0.2],
+            "market_probability_flat": [0.1, 0.1, 0.6],
+            "market_probability_up": [0.8, 0.2, 0.2],
         }
     )
     history_path = tmp_path / "history.csv"
@@ -28,14 +36,37 @@ def write_inputs(tmp_path: Path):
     return prediction_path, history_path
 
 
-def test_backtest_uses_next_close_and_costs(tmp_path):
+def test_drawdown_multiplier_is_causal_and_monotonic():
+    config = DrawdownConfig(soft_drawdown=0.05, hard_drawdown=0.10)
+    assert drawdown_multiplier(0.0, config) == 1.0
+    assert drawdown_multiplier(0.05, config) == 1.0
+    assert drawdown_multiplier(0.075, config) == pytest.approx(0.5)
+    assert drawdown_multiplier(0.10, config) == 0.0
+    assert drawdown_multiplier(0.20, config) == 0.0
+
+
+def test_drawdown_config_rejects_invalid_thresholds():
+    with pytest.raises(ValueError):
+        drawdown_multiplier(0.05, DrawdownConfig(0.10, 0.05))
+
+
+def test_backtest_uses_next_close_and_risk_weight(tmp_path):
     prediction_path, history_path = write_inputs(tmp_path)
-    result = backtest(prediction_path, history_path, cost_bps=10, slippage_bps=5, initial_capital=100_000)
+    result = backtest(
+        prediction_path,
+        history_path,
+        cost_bps=10,
+        slippage_bps=5,
+        initial_capital=100_000,
+        risk_config=RiskConfig(atr_period=14, risk_per_trade=0.005),
+    )
     metrics = result["metrics"]
     assert metrics["trades"] == 2
-    assert result["trades"][0]["entry_price"] == 101
-    assert result["trades"][0]["exit_price"] == 102
-    assert result["trades"][0]["net_return"] < 0.01
+    assert result["trades"][0]["entry_price"] == pytest.approx(100.25)
+    assert result["trades"][0]["exit_price"] == pytest.approx(100.5)
+    assert result["trades"][0]["base_position_weight"] > 0
+    assert result["trades"][0]["position_weight"] > 0
+    assert result["trades"][0]["portfolio_return"] != result["trades"][0]["net_return"]
     assert metrics["final_equity"] > 0
 
 
@@ -47,7 +78,7 @@ def test_backtest_skips_overlapping_signals(tmp_path):
     predictions.to_csv(prediction_path, index=False)
     result = backtest(prediction_path, history_path, initial_capital=100_000)
     assert result["metrics"]["trades"] == 2
-    assert result["trades"][1]["signal_timestamp"] == "2026-01-06T00:00:00+00:00"
+    assert result["trades"][1]["signal_timestamp"] == "2026-01-17T00:00:00+00:00"
 
 
 def test_backtest_rejects_bad_history(tmp_path):
@@ -57,3 +88,26 @@ def test_backtest_rejects_bad_history(tmp_path):
     history.to_csv(history_path, index=False)
     with pytest.raises(ValueError, match="positive"):
         backtest(prediction_path, history_path)
+
+
+def test_hard_drawdown_blocks_new_risk_without_freezing_future_signals(tmp_path):
+    prediction_path, history_path = write_inputs(tmp_path)
+    history = pd.read_csv(history_path)
+    # Force the first trade to lose more than the hard threshold while leaving
+    # enough later history for another signal. This is an evaluation fixture only.
+    history.loc[2, "close"] = 70.0
+    history.loc[2, "high"] = 71.0
+    history.loc[2, "low"] = 69.0
+    history.to_csv(history_path, index=False)
+
+    result = backtest(
+        prediction_path,
+        history_path,
+        initial_capital=100_000,
+        risk_config=RiskConfig(atr_period=14, risk_per_trade=0.05),
+        drawdown_config=DrawdownConfig(soft_drawdown=0.01, hard_drawdown=0.02),
+    )
+    assert result["trades"][0]["position_weight"] > 0
+    blocked = [trade for trade in result["trades"] if trade["risk_status"] == "DRAWDOWN_THROTTLED"]
+    assert blocked
+    assert all(trade["position_weight"] == 0 for trade in blocked)
