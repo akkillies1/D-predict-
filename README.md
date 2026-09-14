@@ -15,6 +15,7 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Canonical instruments, market freshness and historical OHLCV validation.
 - [x] Point-in-time datasets, purge-aware splits and deterministic manifests.
 - [x] Baseline model + expanding walk-forward validation.
+- [x] Walk-forward OOS ledger now includes an independent `predicted_return` forecast and return MAE/RMSE/bias.
 - [x] Prediction/realized-outcome scoring and stability promotion gates.
 - [x] Causal risk-weighted backtest, drawdown and correlation limits.
 - [x] Historical and restart-safe live shadow simulation.
@@ -29,7 +30,6 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 ### Next gates
 
 - [ ] Integrate context/state/quality into versioned OOS datasets.
-- [ ] Add OOS predicted-return forecasts to the prediction ledger.
 - [ ] Build leakage-free conditional return-distribution calibration from prior OOS residuals.
 - [ ] Derive probabilistic T1/T2/T3 targets and stop levels from the calibrated distribution.
 - [ ] Produce a versioned complete Trade Thesis: direction, entry, targets, stop, horizon, probabilities, confidence and tradeability.
@@ -123,6 +123,8 @@ Outputs are written under `data/reports/`. The report explicitly records missing
 
 The next research layer is deliberately **not** a hard-coded target calculator. The model will first produce a point-in-time return forecast and an independently calibrated conditional return distribution. Price targets, stop probability and tradeability will then be derived from that distribution.
 
+The expanding-window walk-forward ledger now contains `predicted_return` alongside the existing direction probabilities and realized target return. The classifier and return regressor share the same training cutoff and label-horizon purge, so the return forecast is OOS by construction.
+
 ```text
 DIRECTION MODEL + RETURN MODEL
               ↓
@@ -157,6 +159,8 @@ MARKET DATA
  → BENCHMARK / SECTOR CONTEXT
  → MODEL
  → PREDICTION
+ → RETURN FORECAST
+ → RETURN DISTRIBUTION
  → SIGNAL QUALITY / NO TRADE
  → TRADE THESIS
  → EXECUTABLE TRADE EVENT
@@ -177,7 +181,7 @@ MARKET DATA
 - `training/position_ledger.py` — active position lifecycle and exposure release.
 - `training/cross_stock_validation.py` — six-stock point-in-time executable validation/report.
 - `training/train_baseline.py` — classical classifier/regressor.
-- `training/walk_forward.py` — expanding-window OOS predictions.
+- `training/walk_forward.py` — expanding-window OOS direction and return forecasts.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
 - `training/score_realized_outcomes.py` — independent realized outcomes.
 - `training/analyze_prediction_stability.py` — calibration/fold/regime analysis.
@@ -215,12 +219,12 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [x] Signal-quality / `NO_TRADE` primitive.
 - [x] Active position lifecycle primitive.
 - [x] Cross-stock validation harness.
+- [x] OOS predicted-return ledger foundation.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
 - [ ] Native sector-index histories rather than peer proxies.
 - [ ] Formal point-in-time Regime Model.
-- [ ] OOS predicted-return ledger.
 - [ ] Conditional return-distribution calibration.
 - [ ] Probabilistic target/stop engine.
 - [ ] Complete versioned Trade Thesis.
