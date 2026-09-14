@@ -28,6 +28,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [x] Prediction-ledger accuracy scoring: accuracy, balanced accuracy, directional accuracy, probability quality, majority baseline and per-class precision/recall/F1.
 - [x] Independent realized-outcome scorer for prediction aging against historical closes.
 - [x] Conservative accuracy promotion gate with minimum OOS sample size, baseline lift, log-loss and directional-accuracy checks.
+- [x] Confidence-bucket, calibration, fold-stability and evaluation-only regime-proxy analysis.
 - [x] Vercel TypeScript fix for nullable live-market OHLC fields.
 - [x] Production favicon added and linked from the dashboard HTML.
 - [x] Vercel root build/output configuration added for the monorepo dashboard.
@@ -36,7 +37,7 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Complete web metadata polish.
 - [ ] Connect historical validation directly to every production dataset ingestion path.
 - [ ] Complete the research-terminal workflow from search → activation → data validation → dataset → prediction.
-- [ ] Add confidence-bucket/calibration/fold/regime stability analysis before treating a model as production-grade.
+- [ ] Feed stability/calibration evidence into the final promotion gate with explicit minimum bucket/fold/regime requirements.
 - [ ] Add V1 portfolio/backtest accounting with transaction costs and slippage.
 
 ## Future improvement checklist
@@ -72,11 +73,13 @@ It is designed around one principle: **do not turn a headline into a trade witho
 - [ ] Regime Model for market/regime state.
 - [ ] True Meta Model combining model outputs rather than simply calibrating one source.
 - [ ] Probability calibration and calibration drift monitoring.
-- [ ] Regime-specific performance evaluation.
+- [x] Evaluation-only regime-proxy performance analysis.
 - [x] Prediction-ledger scoring for out-of-sample accuracy and probability quality.
 - [x] Independent 1d/3d/5d realized-outcome scoring with explicit `SCORED`/`PENDING` state.
 - [x] Conservative model promotion gate based on realized OOS outcomes.
-- [ ] Confidence-bucket, calibration, fold-stability and regime-stability analysis.
+- [x] Confidence buckets, calibration bins and fold-stability analysis.
+- [ ] Replace the evaluation-only regime proxy with a formal point-in-time Regime Model.
+- [ ] Make stability/calibration thresholds part of model promotion.
 
 ### Backtesting and risk
 
@@ -211,7 +214,9 @@ The prediction ledger preserves every out-of-sample prediction together with its
 
 The current promotion gate is deliberately conservative. By default it requires at least 100 realized OOS examples, at least 2 percentage points of accuracy lift over the realized majority-class baseline, multiclass log loss no worse than 1.05, and directional accuracy of at least 52%. The thresholds are explicit CLI parameters rather than hidden constants in the model. The gate returns each check separately and only reports `promotion_ready=true` when every check passes.
 
-These are **engineering gates, not claims that these thresholds guarantee profitability**. They are designed to prevent weak models from being promoted merely because their raw accuracy looks attractive on a small or imbalanced sample. Confidence-bucket analysis, calibration, fold stability and regime stability are still required before a production promotion decision.
+The next analysis layer now produces five confidence buckets, empirical-vs-predicted calibration gaps, per-fold stability and an evaluation-only market-regime proxy. The confidence and calibration views are based only on independently realized OOS outcomes. The regime proxy uses a 20-trading-row trend/volatility view of the supplied historical close series and is explicitly **not** a model feature. Buckets and regimes with fewer than 10 observations are marked non-interpretable rather than being treated as reliable evidence.
+
+These are **engineering gates, not claims that these thresholds guarantee profitability**. Stability analysis is evidence for promotion decisions, but it does not yet change `accuracy_gate.py`; explicit stability thresholds remain a future promotion-gate step.
 
 We will not accept a model merely because its headline accuracy is high. Every evaluation compares it against a majority-class baseline and reports balanced accuracy, directional accuracy, probability quality through log loss and Brier score, directional coverage, and per-class precision/recall/F1. The realized scorer additionally records the realized return and realized class, so the outcome can be audited independently of the dataset-generation code.
 
@@ -230,17 +235,18 @@ The repository includes a repeatable baseline training pipeline under `training/
 - `download_historical.py` downloads raw daily history when local PostgreSQL history is insufficient.
 - `validate_history.py` checks raw OHLCV history before research use.
 - `dataset.py` defines the D-predict-native point-in-time dataset contract and chronological segments.
-- `manifest.py` creates deterministic dataset fingerprints and JSON provenance manifests.
+- `manifest.py` creates deterministic dataset fingerprints and JSON provenance.
 - `build_dataset.py` creates point-in-time market features and future-return labels for 1-day, 3-day and 5-day horizons, persists purge-aware split assignments and writes a manifest beside each dataset.
 - `train_baseline.py` trains a market classifier and return regressor from the formal dataset contract.
 - `walk_forward.py` produces strictly out-of-sample predictions using expanding windows with horizon-aware purging.
 - `score_prediction_ledger.py` scores OOS accuracy, directional accuracy, majority-baseline lift, log loss, Brier score and per-class precision/recall/F1.
 - `score_realized_outcomes.py` independently joins prediction timestamps to historical closes, computes realized 1d/3d/5d returns/classes, and marks unavailable future outcomes as `PENDING`.
 - `accuracy_gate.py` applies explicit promotion thresholds to the independently realized OOS ledger.
+- `analyze_prediction_stability.py` analyzes confidence buckets, empirical calibration, fold stability and an evaluation-only regime proxy from the realized OOS ledger.
 - `train_meta.py` learns a conservative calibration layer over available model probabilities.
 - `embed_events.py` stores and searches research-document vectors.
 
-The baseline is deliberately simple so that it becomes a measurable benchmark. It is **not** a claim that the current model is profitable or “very accurate”. The walk-forward results and independently realized outcomes are the evidence that matters.
+The baseline is deliberately simple so that it becomes a measurable benchmark. It is **not** a claim that the current model is profitable or “very accurate”. The walk-forward results, independently realized outcomes and stability analysis are the evidence that matters.
 
 ## Deployment
 
@@ -267,6 +273,7 @@ The equivalent manual sequence is:
 .\collector\.venv\Scripts\python.exe -m training.score_prediction_ledger data\predictions\nifty_1d_walk_forward.csv
 .\collector\.venv\Scripts\python.exe -m training.score_realized_outcomes data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_realized.csv
 .\collector\.venv\Scripts\python.exe -m training.accuracy_gate data\predictions\nifty_1d_realized.csv
+.\collector\.venv\Scripts\python.exe -m training.analyze_prediction_stability data\predictions\nifty_1d_realized.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_stability.json
 .\collector\.venv\Scripts\python.exe -m training.train_meta --symbols NIFTY BANKNIFTY
 ```
 
