@@ -29,9 +29,9 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Deterministic portfolio construction with confidence-aware sizing and gross-exposure limits.
 - [x] Point-in-time volatility/ATR-aware risk budgeting with explicit missing-risk-data handling.
 - [x] Causal drawdown-aware throttling integrated into the risk-weighted backtest.
+- [x] Cross-instrument exposure attribution and point-in-time correlation-aware limits.
 - [ ] Complete research-terminal workflow: search → activation → validation → dataset → prediction.
 - [ ] Formal point-in-time Regime Model.
-- [ ] Cross-instrument portfolio risk attribution and correlation-aware limits.
 - [ ] Paper/shadow trading.
 
 ## Future improvement checklist
@@ -65,7 +65,7 @@ The governing principle is simple: **do not turn a headline into a trade without
 - [x] Deterministic portfolio sizing with per-position and total gross-exposure caps.
 - [x] Volatility/stop-distance-aware risk budgeting using point-in-time historical OHLC.
 - [x] Drawdown-aware portfolio throttle.
-- [ ] Portfolio risk limits and exposure attribution across instruments.
+- [x] Cross-instrument exposure attribution and correlation-aware limits.
 - [ ] Paper-trading/shadow mode before any live capital.
 - [ ] No automated live execution until research, backtest and paper-trading gates pass.
 
@@ -134,7 +134,7 @@ These are engineering gates, **not profitability guarantees**. A model can pass 
 
 ## V1 portfolio backtest
 
-`training/backtest.py` is now a **causal risk-weighted evaluation engine**. It combines the OOS probability vector with the point-in-time ATR risk layer and a drawdown throttle.
+`training/backtest.py` is a **causal risk-weighted evaluation engine**. It combines the OOS probability vector with the point-in-time ATR risk layer and a drawdown throttle.
 
 Rules:
 
@@ -161,12 +161,6 @@ Example:
 .\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --output data\predictions\nifty_1d_backtest.json
 ```
 
-Optional controls:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.backtest data\predictions\nifty_1d_walk_forward.csv --history data\historical\nifty.csv --risk-per-trade 0.005 --atr-period 14 --stop-atr-multiplier 1.5 --soft-drawdown 0.05 --hard-drawdown 0.10 --output data\predictions\nifty_1d_backtest.json
-```
-
 The generated backtest artifact should normally remain local and should not be committed as model evidence unless explicitly versioned for an audit.
 
 ## Portfolio construction and risk limits
@@ -177,7 +171,15 @@ The generated backtest artifact should normally remain local and should not be c
 
 `training/backtest.py` consumes that risk budget and applies a second, portfolio-level drawdown control. The drawdown peak is updated only after realized trades. No future equity, future volatility or future outcome is used to size an earlier trade.
 
-Cross-instrument exposure attribution and correlation-aware limits remain pending because the current V1 backtest is intentionally conservative and primarily validates the causal single-instrument risk path.
+`training/exposure.py` adds cross-instrument exposure attribution. It applies a per-symbol cap and compares each candidate instrument with already accepted exposure using rolling close-to-close return correlation calculated only from bars at or before the candidate timestamp. Correlations whose absolute value meets the configured threshold count toward the correlated-exposure budget. Missing historical exposure data produces an explicit `EXPOSURE_DATA_UNAVAILABLE` block; exceeding the correlated budget produces `CORRELATED_EXPOSURE_LIMIT`. This is deliberately a conservative V1 limit, not a full covariance optimiser.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.exposure data\predictions\portfolio_risk.csv --history NIFTY=data\historical\nifty.csv --history BANKNIFTY=data\historical\banknifty.csv --output data\predictions\portfolio_exposure.json
+```
+
+Default exposure controls are 50% maximum per symbol, 50% maximum exposure to the high-correlation group, a 0.70 absolute-correlation threshold and a 60-return lookback. These are engineering defaults, not claims of optimality.
 
 ## Historical learning pipeline
 
@@ -198,6 +200,7 @@ The main training modules are:
 - `portfolio.py` — deterministic confidence-aware sizing and gross-exposure controls.
 - `risk.py` — point-in-time ATR/stop-distance risk budgeting.
 - `backtest.py` — causal risk-weighted, drawdown-aware V1 portfolio accounting.
+- `exposure.py` — cross-instrument exposure attribution and correlation-aware limits.
 - `train_meta.py` — conservative calibration/meta layer.
 - `embed_events.py` — research-document vector memory.
 
@@ -247,9 +250,9 @@ The repository contains Python tests under `training/tests`. Recommended local v
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-The backtest tests cover drawdown-throttle boundaries, invalid thresholds, causal ATR/risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking. The latest test fixture was corrected so ATR has sufficient point-in-time history before the first risk-sized signal.
+The risk tests cover point-in-time ATR sizing and missing-risk-data handling. The backtest tests cover drawdown-throttle boundaries, causal risk-weighted sizing, next-close execution, overlap prevention, bad-history rejection and hard-drawdown blocking. The exposure tests cover correlation limits, uncorrelated instruments, missing history and configuration validation.
 
-**Verification status:** the GitHub changes were committed, but the Windows test suite has not been executed in this environment. Do not treat the new backtest/risk tests as passing until the command above is run locally or by CI.
+**Verification status:** the GitHub changes were committed, but the Windows test suite has not been executed in this environment. Do not treat the new tests as passing until the command above is run locally or by CI.
 
 ## Product boundaries
 
