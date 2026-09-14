@@ -29,9 +29,13 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [x] Deterministic signal-quality / `NO_TRADE` primitive and tests.
 - [x] Cross-stock point-in-time validation harness and confidence/regime report generation.
 - [x] Hardened CI tests for the portfolio confidence boundary and floating-point position P&L assertions.
+- [x] Lightweight purge-aware OOS model comparison diagnostic.
 
 ### Next gates
 
+- [ ] Establish the current OOS baseline across the six-stock harness before selecting any new model.
+- [ ] Compare lightweight classical candidates on identical walk-forward folds and horizons.
+- [ ] Select a candidate only through an independent promotion protocol; comparison results alone never promote a model.
 - [ ] Integrate distribution/thesis into the OOS prediction pipeline without using future outcomes.
 - [ ] Validate target/stop probability calibration independently OOS.
 - [ ] Measure return-distribution coverage, interval width and conditional calibration by horizon/regime/confidence.
@@ -43,6 +47,27 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - [ ] Human-vs-model game mode.
 - [ ] Sustained-shadow promotion gate.
 - [ ] Automated execution only after all gates pass.
+
+## Accuracy-first model comparison
+
+`training/model_compare.py` benchmarks four lightweight classical candidates using the same expanding-window, purge-aware OOS folds as the baseline:
+
+- `hist_gradient_boosting` — current production baseline.
+- `extra_trees` — randomized tree ensemble.
+- `random_forest` — conservative bagged tree ensemble.
+- `logistic_ridge` — linear classification/regression baseline with scaling.
+
+The comparison reports classification accuracy, balanced accuracy and log loss plus return MAE/RMSE for every fold. Tree ensembles are deliberately bounded to keep the research path comfortable on a simple CPU laptop.
+
+Example:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.model_compare --symbols RELIANCE ONGC LT ADANIPORTS SBI HDFCBANK --horizons 1d 3d 5d --folds 5
+```
+
+The output is written to `data/reports/*_model_comparison.json`.
+
+**Important:** this is an OOS diagnostic, not an automatic model selector. Choosing the best candidate after looking at the same OOS results would contaminate the evaluation. A later promotion step must use an independent selection/holdout protocol and must compare the complete trade thesis, not just classifier accuracy.
 
 ## MarketState
 
@@ -186,6 +211,7 @@ MARKET DATA
 - `training/cross_stock_validation.py` — six-stock point-in-time executable validation/report.
 - `training/train_baseline.py` — classical classifier/regressor.
 - `training/walk_forward.py` — expanding-window OOS direction and return forecasts.
+- `training/model_compare.py` — bounded classical model comparison on identical purge-aware OOS folds.
 - `training/return_distribution.py` — leakage-free OOS residual distribution and thesis construction.
 - `training/score_prediction_ledger.py` — probability/accuracy metrics.
 - `training/score_realized_outcomes.py` — independent realized outcomes.
@@ -207,10 +233,10 @@ Local verification remains:
 .\collector\.venv\Scripts\python.exe -m pytest training/tests
 ```
 
-Then run the harness:
+Then run the model comparison after the required local datasets exist:
 
 ```powershell
-.\collector\.venv\Scripts\python.exe -m training.cross_stock_validation --horizon 1d
+.\collector\.venv\Scripts\python.exe -m training.model_compare --symbols RELIANCE ONGC LT ADANIPORTS SBI HDFCBANK --horizons 1d 3d 5d --folds 5
 ```
 
 Do not treat generated reports as evidence of model improvement until the artifacts are present, the tests pass, and the report is reviewed for missing-data failures and point-in-time integrity.
@@ -227,6 +253,7 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [x] OOS predicted-return ledger foundation.
 - [x] Leakage-free return-distribution primitive.
 - [x] Leakage/adversarial distribution tests.
+- [x] Lightweight purge-aware model comparison diagnostic.
 - [ ] Versioned feature registry.
 - [ ] Versioned label registry.
 - [ ] Context/state/quality integration into OOS datasets.
@@ -236,6 +263,7 @@ Do not treat generated reports as evidence of model improvement until the artifa
 - [ ] Distribution coverage and interval-width validation.
 - [ ] Complete production Trade Thesis integration.
 - [ ] Executable-outcome confidence calibration.
+- [ ] Independent model-selection/promotion protocol.
 - [ ] Human-readable + machine-readable research report review against baseline.
 
 ### Shadow / risk / runtime
