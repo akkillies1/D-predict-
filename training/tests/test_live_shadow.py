@@ -28,7 +28,7 @@ def prediction(day, value="UP"):
     }
 
 
-def test_prediction_resolves_only_after_future_bars():
+def test_prediction_resolves_only_after_executable_future_window():
     state = load_session(Path("unused.json"), session_id="test")
     observe_bar(state, bar(1, 100))
     record_prediction(state, prediction(1))
@@ -36,9 +36,29 @@ def test_prediction_resolves_only_after_future_bars():
     assert state["predictions"][0]["outcome_status"] == "PENDING"
     observe_bar(state, bar(3, 102))
     assert state["predictions"][0]["outcome_status"] == "SCORED"
+    assert state["predictions"][0]["entry_price"] == pytest.approx(101.0)
+    assert state["predictions"][0]["exit_price"] == pytest.approx(102.0)
+    assert state["predictions"][0]["realized_return"] == pytest.approx(102 / 101 - 1)
     assert state["predictions"][0]["realized_class"] == "UP"
     assert summary(state)["accuracy"] == pytest.approx(1.0)
     assert summary(state)["live_orders_sent"] == 0
+
+
+def test_prediction_score_and_trade_pnl_share_same_window():
+    state = load_session(Path("unused.json"), session_id="adversarial")
+    observe_bar(state, bar(1, 100))
+    record_prediction(state, prediction(1, "UP"))
+    observe_bar(state, bar(2, 102))
+    assert state["predictions"][0]["outcome_status"] == "PENDING"
+    observe_bar(state, bar(3, 98))
+
+    scored = state["predictions"][0]
+    assert scored["entry_price"] == pytest.approx(102.0)
+    assert scored["exit_price"] == pytest.approx(98.0)
+    assert scored["realized_class"] == "DOWN"
+    assert scored["accuracy_after"] == pytest.approx(0.0)
+    assert scored["portfolio_return"] < 0
+    assert summary(state)["accuracy"] == pytest.approx(0.0)
 
 
 def test_session_is_restart_safe(tmp_path):
