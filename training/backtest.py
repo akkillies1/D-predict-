@@ -61,8 +61,13 @@ def load_inputs(prediction_path: Path, history_path: Path) -> tuple[pd.DataFrame
 
     predictions["timestamp"] = pd.to_datetime(predictions["timestamp"], utc=True)
     history["timestamp"] = pd.to_datetime(history["timestamp"], utc=True)
-    if predictions["timestamp"].duplicated().any():
-        raise ValueError("Prediction timestamps must be unique")
+    prediction_key = ["timestamp"]
+    if "symbol" in predictions.columns:
+        prediction_key.append("symbol")
+    if "horizon" in predictions.columns:
+        prediction_key.append("horizon")
+    if predictions.duplicated(subset=prediction_key).any():
+        raise ValueError(f"Prediction keys must be unique: {prediction_key}")
     if history["timestamp"].duplicated().any():
         raise ValueError("Historical timestamps must be unique")
     for column in ("high", "low", "close"):
@@ -78,7 +83,7 @@ def load_inputs(prediction_path: Path, history_path: Path) -> tuple[pd.DataFrame
     if not predictions["horizon"].isin(HORIZON_ROWS).all():
         raise ValueError("Unsupported horizon; use 1d, 3d or 5d")
 
-    return predictions.sort_values("timestamp"), history.sort_values("timestamp")
+    return predictions.sort_values(["timestamp"] + (["symbol"] if "symbol" in predictions.columns else [])), history.sort_values("timestamp")
 
 
 def _net_return(direction: str, entry: float, exit_price: float, cost_bps: float, slippage_bps: float) -> float:
