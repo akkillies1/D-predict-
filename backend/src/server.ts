@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { Pool } from "pg";
+import { classifyFreshness, normalizeQuote } from "./marketDataContract.js";
 
 const port = Number(process.env.API_PORT ?? 4100);
 const databaseUrl = process.env.DATABASE_URL;
@@ -85,7 +86,6 @@ app.get("/api/instruments/discover", async (req, res) => {
     const local = await pool.query(`select symbol, exchange, lot_size as "lotSize", is_active as "isActive", name, 'local' as source from instruments where is_active and (upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or upper(symbol) like $2 or upper(coalesce(name,'')) like $2) order by case when upper(symbol) = $3 then 0 when upper(symbol) like $1 then 1 when upper(coalesce(name,'')) like $1 then 2 else 3 end, symbol limit 20`, [`${upper}%`, `%${upper}%`, upper]);
     const localRows = local.rows;
     if (query.length < 2 || localRows.length >= 10) return res.json({ ok: true, instruments: localRows.slice(0, 20) });
-
     let remoteRows: any[] = [];
     try {
       const payload = await fetchJson(`${YAHOO_SEARCH}?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`);
@@ -98,7 +98,6 @@ app.get("/api/instruments/discover", async (req, res) => {
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return res.status(504).json({ ok: false, error: "DISCOVERY_TIMEOUT" });
     }
-
     const seen = new Set(localRows.map(row => row.symbol));
     const merged = [...localRows];
     for (const row of remoteRows) if (!seen.has(row.symbol)) { seen.add(row.symbol); merged.push(row); }
@@ -127,11 +126,21 @@ app.get("/api/market/:symbol/live", async (req, res) => {
     const result = payload?.chart?.result?.[0];
     const meta = result?.meta;
     if (!meta) return res.status(404).json({ ok: false, error: "NO_LIVE_QUOTE" });
-    const price = Number(meta.regularMarketPrice ?? meta.chartPreviousClose);
-    if (!Number.isFinite(price)) return res.status(404).json({ ok: false, error: "NO_LIVE_QUOTE" });
-    const previous = Number(meta.previousClose ?? meta.chartPreviousClose ?? price);
+    const close = Number(meta.regularMarketPrice ?? meta.chartPreviousClose);
+    if (!Number.isFinite(close)) return res.status(404).json({ ok: false, error: "NO_LIVE_QUOTE" });
+    const previousClose = Number(meta.previousClose ?? meta.chartPreviousClose);
     const marketTime = meta.regularMarketTime ? new Date(Number(meta.regularMarketTime) * 1000).toISOString() : new Date().toISOString();
-    return res.json({ ok: true, symbol, timestamp: marketTime, collectedAt: new Date().toISOString(), open: previous, high: price, low: price, close: price, volume: meta.regularMarketVolume == null ? null : Number(meta.regularMarketVolume), source: "yahoo-live" });
+    const quote = normalizeQuote({
+      symbol,
+      timestamp: marketTime,
+      collectedAt: new Date().toISOString(),
+      close,
+      previousClose: Number.isFinite(previousClose) ? previousClose : null,
+      volume: meta.regularMarketVolume == null ? null : Number(meta.regularMarketVolume),
+      source: "yahoo-live",
+      status: classifyFreshness(marketTime),
+    });
+    return res.json({ ok: true, ...quote });
   } catch (error) { return res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "upstream_failed" }); }
 });
 
@@ -141,7 +150,9 @@ app.get("/api/market/:symbol/overview", async (req, res) => {
   try {
     const result = await pool.query(`select i.symbol, pb.market_timestamp, pb.collected_at, pb.open, pb.high, pb.low, pb.close, pb.volume, pb.source from instruments i left join lateral (select market_timestamp, collected_at, open, high, low, close, volume, source from price_bars where instrument_id=i.instrument_id and timeframe='1m' order by market_timestamp desc limit 1) pb on true where i.symbol=$1 limit 1`, [symbol]);
     if (!result.rows.length || !result.rows[0].market_timestamp) return res.status(404).json({ ok: false, error: "NO_MARKET_DATA" });
-    const row = result.rows[0]; return res.json({ ok: true, symbol: row.symbol, timestamp: iso(row.market_timestamp), collectedAt: iso(row.collected_at), open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: row.volume === null ? null : Number(row.volume), source: row.source });
+    const row = result.rows[0];
+    const quote = normalizeQuote({ symbol: row.symbol, timestamp: iso(row.market_timestamp) as string, collectedAt: iso(row.collected_at) as string, open: Number(row.open), high: Number(row.high), low: Number(row.low), close: Number(row.close), volume: row.volume === null ? null : Number(row.volume), source: row.source, status: classifyFreshness(iso(row.market_timestamp) as string) });
+    return res.json({ ok: true, ...quote });
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 
@@ -202,7 +213,7 @@ app.get("/api/forecast", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "query_failed" }); }
 });
 
-const server = app.listen(port, "127.0.0.1", () => console.log(`D-predict local API listening on 127.0.0.1:${port}`));
+const server = app.listen(port, "0.0.0.0", () => console.log(`D-predict local API listening on 0.0.0.0:${port}`));
 const shutdown = async () => { server.close(); await pool?.end(); };
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
