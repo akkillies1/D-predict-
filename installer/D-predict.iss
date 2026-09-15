@@ -21,6 +21,7 @@ UninstallDisplayIcon={app}\D-Predict Launcher.lnk
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: "historicaldata"; Description: "Download initial historical market data and run validation after installation"; GroupDescription: "First-run research:"; Flags: unchecked
 
 [Files]
 Source: "..\bootstrap-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -35,6 +36,7 @@ Name: "{commondesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoP
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap-windows.ps1"" -InstallDir ""{app}"" -InstallerMode"; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict and verifying the local environment..."; Flags: waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Downloading historical market data and running validation..."; Flags: waituntilterminated; Tasks: historicaldata
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Description: "Launch D-Predict now"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
