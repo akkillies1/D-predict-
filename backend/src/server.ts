@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import pg from "pg";
-import { buildCausalTradeThesis } from "../src/tradeThesis.js";
+import { buildCausalTradeThesis } from "./tradeThesis.js";
 
 dotenv.config();
 
@@ -24,7 +24,7 @@ function noDb(res: express.Response) {
   return res.status(503).json({ ok: false, error: "DATABASE_NOT_CONFIGURED" });
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => res.json({ ok: true, database: pool ? "configured" : "not_configured" }));
 
 let thesisCache = new Map<string, { expiresAt: number; value: any }>();
 app.get("/api/signals/latest", async (req, res) => {
