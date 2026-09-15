@@ -101,12 +101,71 @@ function Ensure-Docker {
     }
     throw 'Docker Desktop is installed but the Docker engine did not become ready. Check WSL 2/virtualization and Docker Desktop, then run Repair & Check.'
 }
+function Read-StateValue([string]$Name) {
+    $path = Join-Path $StateRoot $Name
+    if (-not (Test-Path $path)) { return $null }
+    return (Get-Content $path -Raw).Trim()
+}
+function Sync-Source([string]$RequestedRef) {
+    $trainingMarker = Join-Path $InstallDir 'training'
+    $envExample = Join-Path $InstallDir '.env.example'
+    $installedRef = Read-StateValue 'source-ref.txt'
+    $sourceMissing = (-not (Test-Path $trainingMarker)) -or (-not (Test-Path $envExample))
+    $refChanged = [bool]$RequestedRef -and ($installedRef -ne $RequestedRef)
+    if (-not $sourceMissing -and -not $refChanged) {
+        Log "Source already present at requested ref: $installedRef"
+        return
+    }
+
+    $reason = if ($sourceMissing) { 'source is missing/incomplete' } else { "source ref changed from '$installedRef' to '$RequestedRef'" }
+    Step "Synchronizing D-Predict source ($reason)"
+    $staging = "$InstallDir.__source"
+    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+    $cloneArgs = @('clone','--depth','1')
+    if ($RequestedRef) { $cloneArgs += @('--branch',$RequestedRef) }
+    $cloneArgs += @('https://github.com/akkillies1/D-predict-.git',$staging)
+    Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
+
+    $preserveTopLevel = @('.env','data','collector')
+    $preserveFiles = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
+
+    Get-ChildItem -Force $staging | ForEach-Object {
+        if ($_.Name -eq '.git') { return }
+        if ($preserveTopLevel -contains $_.Name) {
+            if ($_.Name -eq 'collector') {
+                $targetCollector = Join-Path $InstallDir 'collector'
+                New-Item -ItemType Directory -Force -Path $targetCollector | Out-Null
+                Get-ChildItem -Force $_.FullName | ForEach-Object {
+                    if ($_.Name -ne '.venv') {
+                        Remove-Item (Join-Path $targetCollector $_.Name) -Recurse -Force -ErrorAction SilentlyContinue
+                        Copy-Item $_.FullName (Join-Path $targetCollector $_.Name) -Recurse -Force
+                    }
+                }
+            }
+            return
+        }
+        if ($preserveFiles -contains $_.Name) { return }
+        $target = Join-Path $InstallDir $_.Name
+        Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item $_.FullName $target -Recurse -Force
+    }
+
+    Remove-Item $staging -Recurse -Force
+    if (-not (Test-Path $envExample)) { throw 'Downloaded D-Predict source is incomplete: .env.example is missing.' }
+    if ($RequestedRef) { Set-Content -Path (Join-Path $StateRoot 'source-ref.txt') -Value $RequestedRef -Encoding UTF8 }
+    Log "Source synchronization completed at ref: $RequestedRef"
+}
 
 try {
     Log "D-Predict bootstrap starting. InstallerMode=$InstallerMode SourceRef=$SourceRef InstallDir=$InstallDir"
     if (-not $InstallDir) { $InstallDir = if ($PSScriptRoot) { $PSScriptRoot } else { Join-Path $HOME 'D-predict-' } }
     $InstallDir = [IO.Path]::GetFullPath($InstallDir)
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+    if (-not $SourceRef) {
+        $storedRef = Read-StateValue 'source-ref.txt'
+        if ($storedRef) { $SourceRef = $storedRef; Log "Using stored release ref for repair: $SourceRef" }
+    }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -125,25 +184,10 @@ try {
     Ensure-Python312
     Ensure-Node22Plus
     Ensure-Docker
-
-    $trainingMarker = Join-Path $InstallDir 'training'
-    if (-not (Test-Path $trainingMarker)) {
-        Step 'Downloading D-Predict source'
-        $staging = "$InstallDir.__source"
-        if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-        $cloneArgs = @('clone','--depth','1')
-        if ($SourceRef) { $cloneArgs += @('--branch',$SourceRef) }
-        $cloneArgs += @('https://github.com/akkillies1/D-predict-.git',$staging)
-        Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
-        $preserve = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
-        Get-ChildItem -Force $staging | ForEach-Object {
-            if ($preserve -notcontains $_.Name) { Move-Item $_.FullName $InstallDir -Force }
-        }
-        Remove-Item $staging -Recurse -Force
-    }
+    Sync-Source $SourceRef
 
     Set-Location $InstallDir
-    if (-not (Test-Path (Join-Path $InstallDir '.env.example'))) { throw 'Downloaded D-Predict source is incomplete: .env.example is missing.' }
+    if (-not (Test-Path (Join-Path $InstallDir '.env.example'))) { throw 'D-Predict source is incomplete: .env.example is missing.' }
 
     $venv = Join-Path $InstallDir 'collector\.venv'
     $python = Join-Path $venv 'Scripts\python.exe'
