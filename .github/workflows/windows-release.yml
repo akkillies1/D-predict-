@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, for example 0.1.1'
+        description: 'Release version, for example 0.1.2'
         required: true
-        default: '0.1.1'
+        default: '0.1.2'
   push:
     tags:
       - 'v*.*.*'
@@ -46,14 +46,18 @@ jobs:
         run: |
           & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DMyAppVersion=${{ steps.release.outputs.version }}' 'installer/D-predict.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path 'installer/dist/D-Predict Installer.exe')) { throw 'Installer executable was not produced.' }
+          $versioned = "installer/dist/D-Predict-Setup-v${{ steps.release.outputs.version }}.exe"
+          if (-not (Test-Path $versioned)) { throw "Versioned installer was not produced: $versioned" }
+          Copy-Item $versioned 'installer/dist/D-Predict-Setup.exe' -Force
 
-      - name: Create GitHub release and upload installer
+      - name: Create GitHub release and upload installers
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ steps.release.outputs.tag }}'
+          $versioned = 'installer/dist/D-Predict-Setup-v${{ steps.release.outputs.version }}.exe'
+          $stable = 'installer/dist/D-Predict-Setup.exe'
           $releaseExists = $false
           try {
             gh release view $tag *> $null
@@ -63,7 +67,7 @@ jobs:
           }
 
           if ($releaseExists) {
-            gh release upload $tag 'installer/dist/D-Predict Installer.exe' --clobber
+            gh release upload $tag $versioned $stable --clobber
           } else {
-            gh release create $tag 'installer/dist/D-Predict Installer.exe' --title "D-Predict $tag" --generate-notes
+            gh release create $tag $versioned $stable --title "D-Predict $tag" --generate-notes
           }
