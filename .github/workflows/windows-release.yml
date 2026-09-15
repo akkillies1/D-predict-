@@ -30,8 +30,8 @@ jobs:
           } else {
             $tag = 'v${{ github.event.inputs.version }}'
           }
-          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-            throw "Invalid release tag: $tag"
+          if ($tag -notmatch '^v\d+(\.\d+){3}$') {
+            throw "Invalid release tag: $tag. Expected four-part version such as v0.1.8.1"
           }
           $version = $tag.Substring(1)
           "tag=$tag" >> $env:GITHUB_OUTPUT
