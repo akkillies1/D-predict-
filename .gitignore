@@ -13,3 +13,14 @@ releases/*.tar.gz
 releases/SHA256SUMS
 .run/
 dashboard-local.log
+
+# Local market/research artifacts: source code and schemas stay in Git,
+# downloaded data and embeddings stay on the research machine.
+data/historical/
+data/training/
+data/predictions/
+data/backtests/
+data/validation/
+data/derivatives/
+data/research/
+data/manifests/
