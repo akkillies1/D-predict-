@@ -44,16 +44,16 @@ jobs:
       - name: Compile installer
         shell: powershell
         run: |
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DMyAppVersion=0.1.8' 'installer/D-predict.iss'
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DMyAppVersion=0.1.8.1' 'installer/D-predict.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $installer = 'installer/dist/D-Predict-Setup-v0.1.8.exe'
+          $installer = 'installer/dist/D-Predict-Setup-v0.1.8.1.exe'
           if (-not (Test-Path $installer)) { throw "Installer executable was not produced: $installer" }
           Get-Item $installer | Format-List FullName,Length,LastWriteTime
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: D-Predict Installer v0.1.8
-          path: 'installer/dist/D-Predict-Setup-v0.1.8.exe'
+          name: D-Predict Installer v0.1.8.1
+          path: 'installer/dist/D-Predict-Setup-v0.1.8.1.exe'
           if-no-files-found: error
           retention-days: 30
