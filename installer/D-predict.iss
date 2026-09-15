@@ -1,6 +1,6 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.4"
+#define MyAppVersion "0.1.5"
 #endif
 #define MyAppPublisher "D-Predict"
 
@@ -44,20 +44,18 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 var
   BootstrapSucceeded: Boolean;
 
-function IsBootstrapSucceeded: Boolean;
-begin
-  Result := BootstrapSucceeded;
-end;
-
 procedure RunBootstrap;
 var
   ResultCode: Integer;
   Params: String;
 begin
   BootstrapSucceeded := False;
-  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bootstrap-windows.ps1') + '" -InstallDir "' + ExpandConstant('{app}') + '" -InstallerMode';
+  { Installation must provision dependencies, not run the full research/test suite.
+    The bootstrap script's default verification is intentionally skipped here because
+    any test/build failure must not make the Windows installer report installation failure. }
+  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bootstrap-windows.ps1') + '" -InstallDir "' + ExpandConstant('{app}') + '" -InstallerMode -SkipChecks';
   WizardForm.StatusLabel.Caption := 'Preparing your computer and installing D-Predict...';
-  Log('Starting D-Predict prerequisite bootstrap.');
+  Log('Starting D-Predict prerequisite bootstrap in installer mode with checks skipped.');
   if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, ExpandConstant('{app}'), SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then begin
     Log('D-Predict bootstrap exited with code ' + IntToStr(ResultCode) + '.');
     if ResultCode = 0 then begin
@@ -67,7 +65,7 @@ begin
   end else begin
     Log('D-Predict bootstrap could not be started. Error code ' + IntToStr(ResultCode) + '.');
   end;
-  MsgBox('D-Predict could not finish installing its required components.' + #13#10#13#10 + 'The installer will finish without launching D-Predict. Use "D-Predict Repair & Check" after fixing the prerequisite problem.', mbError, MB_OK);
+  MsgBox('D-Predict could not finish installing its required components.' + #13#10#13#10 + 'The Windows installation itself is complete, but prerequisite setup failed.' + #13#10#13#10 + 'Use "D-Predict Repair & Check" after fixing the prerequisite problem.', mbError, MB_OK);
 end;
 
 procedure LaunchDpredict;
