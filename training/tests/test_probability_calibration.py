@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -33,7 +34,7 @@ def test_calibration_preserves_probability_simplex():
     result = calibrate_oos(_frame(), CalibrationConfig(min_history=20))
     calibrated = result[result["calibration_status"] == "CALIBRATED"]
     sums = calibrated[["calibrated_probability_down", "calibrated_probability_flat", "calibrated_probability_up"]].sum(axis=1)
-    assert (sums == pytest.approx(1.0)).all()
+    assert np.allclose(sums.to_numpy(), 1.0, atol=1e-12)
 
 
 def test_calibration_report_is_oos_only():
