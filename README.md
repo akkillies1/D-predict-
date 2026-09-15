@@ -41,49 +41,9 @@ A sprint is only considered **implemented** when its code path, tests and docume
 
 The comparison is diagnostic rather than an automatic promotion mechanism. The final model must be selected on development OOS evidence and then evaluated once on an untouched temporal holdout.
 
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.model_compare --symbols RELIANCE ONGC LT ADANIPORTS SBI HDFCBANK --horizons 1d 3d 5d --folds 5
-```
-
 ## End-to-end real-artifact accuracy comparison
 
 `training/run_accuracy_pipeline.py` accepts explicit OOS prediction ledgers and compares the canonical raw probability score with leakage-safe calibrated probabilities. It does **not** generate synthetic data, retune thresholds or promote a model.
-
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.run_accuracy_pipeline `
-  --ledger data\predictions\RELIANCE_1d_walk_forward.csv `
-  --ledger data\predictions\HDFCBANK_1d_walk_forward.csv `
-  --ledger data\predictions\ICICIBANK_1d_walk_forward.csv `
-  --ledger data\predictions\INFY_1d_walk_forward.csv `
-  --ledger data\predictions\TCS_1d_walk_forward.csv `
-  --ledger data\predictions\SBIN_1d_walk_forward.csv `
-  --min-calibration-history 100 `
-  --output data\reports\accuracy_comparison.json
-```
-
-The actual universe can be any sufficiently liquid equities, indices or options for which D-Predict has reliable historical artifacts. Options should be evaluated separately by contract/expiry/horizon and must not be mixed into an equity model merely because their labels look similar.
-
-The comparison is:
-
-```text
-RAW PROBABILITY
-      ↓
-CALIBRATED PROBABILITY
-      ↓
-RETURN FORECAST
-      ↓
-TARGET / STOP DISTRIBUTION
-      ↓
-TIME-TO-TARGET
-      ↓
-EXECUTABLE ENTRY/EXIT
-      ↓
-FRICTION-ADJUSTED P&L
-```
 
 No conclusion about calibration improvement is valid until this runner has been executed on real OOS artifacts.
 
@@ -91,47 +51,23 @@ No conclusion about calibration improvement is valid until this runner has been 
 
 `training/temporal_holdout.py` provides the final model-selection boundary. Development OOS data is evaluated separately from a later temporal holdout. The holdout must begin strictly after the latest scored development observation, must contain enough scored examples, and is evaluated without retraining or threshold retuning.
 
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.temporal_holdout data\predictions\development_realized.csv data\predictions\holdout_realized.csv --min-examples 100 --output data\reports\temporal_holdout.json
-```
-
-The holdout reports accuracy, balanced accuracy, majority-baseline lift, log loss and directional accuracy. `HOLDOUT_ONLY` means the artifact was evaluated under the holdout contract; it is not a claim that the model is profitable or ready for live trading.
-
 ## OOS probability calibration
 
-`training/probability_calibration.py` calibrates class probabilities using **only observations strictly prior to each prediction**. The current row can never contribute to its own calibration model. Isotonic calibration is applied separately to DOWN, FLAT and UP probabilities and the calibrated vector is renormalized to sum to one.
-
-Rows without sufficient prior history remain explicitly `UNCALIBRATED`. The calibration report is evaluation-only: it reports log loss, multiclass Brier score, mean confidence, empirical accuracy and calibration gap. It does not retune thresholds from the same outcomes or claim that calibrated probabilities are accurate until independent future validation confirms them.
-
-Example:
-
-```powershell
-.\collector\.venv\Scripts\python.exe -m training.probability_calibration data\predictions\realized.csv --min-history 100 --output data\reports\probability_calibration.json
-```
+`training/probability_calibration.py` calibrates class probabilities using **only observations strictly prior to each prediction**. The current row can never contribute to its own calibration model. Rows without sufficient prior history remain explicitly `UNCALIBRATED`.
 
 ## Target price + time-to-target
 
-The trade thesis treats **target price** and **time-to-target** as two separate predictions. `training/return_distribution.py` determines the target price and its hit probability from the OOS return distribution. `training/target_timing.py` estimates the time required to reach that exact target using an empirical first-passage-time distribution from historical bars.
+The trade thesis treats **target price** and **time-to-target** as two separate predictions. `training/return_distribution.py` determines target price and hit probability from the OOS return distribution. `training/target_timing.py` estimates time to reach that target from historical bars.
 
-The timing engine reports median ETA (`p50`), probable ETA range (`p25`–`p75`), seconds, minutes, hours, days, historical target-hit sample count and data resolution.
-
-`training/trade_thesis_timing.py` attaches this information to every T1/T2/T3 target without changing the target price itself.
-
-If the source data is daily, D-Predict cannot honestly claim minute/second precision. Minute/second ETA requires minute/second historical bars and sufficient first-passage observations. Insufficient evidence is explicitly reported rather than filled with a guess.
+Minute/second ETA requires minute/second historical bars and sufficient first-passage observations. Daily data cannot honestly provide minute/second precision.
 
 ## Live causal trade-thesis integration
 
-The previous dashboard-only implementation has now been connected to the actual local API path.
+`backend/src/tradeThesis.ts` builds a thesis from the latest point-in-time forecast, strictly prior realized-vs-forecast residuals, an expanding residual distribution, distribution-derived targets/stops and historical 1-minute first-passage events.
 
-`backend/src/tradeThesis.ts` builds a thesis from the latest point-in-time `prediction_ledger` forecast, strictly prior realized-vs-forecast residuals, an expanding residual distribution, distribution-derived target/stop levels and historical 1-minute first-passage events.
+`GET /api/signals/latest?symbol=...` enriches the latest stored signal with `tradeThesis`. The timing-history query is explicitly cutoff at the signal timestamp, so future 1-minute bars cannot influence a historical thesis. This causal cutoff is required for trustworthy ETA estimation.
 
-`GET /api/signals/latest?symbol=...` now enriches the latest stored signal with `tradeThesis` automatically. The result is cached briefly so the dashboard's frequent refresh does not repeatedly perform the full timing scan.
-
-The API refuses to invent a thesis: fewer than 60 prior realized residuals returns `NO_TRADE / RETURN_DISTRIBUTION_UNCALIBRATED`. Fewer than 20 historical first-passage events with 1-minute bars returns `INSUFFICIENT_HISTORY` for ETA.
-
-The terminal displays entry, expected move, probability, horizon, T1/T2/T3, target probabilities, ETA, ETA range, stop and risk/reward.
+The API refuses to invent a thesis: fewer than 60 prior realized residuals returns `NO_TRADE / RETURN_DISTRIBUTION_UNCALIBRATED`. Fewer than 20 historical first-passage events returns `INSUFFICIENT_HISTORY` for ETA.
 
 ## Return distribution and trade thesis
 
@@ -139,50 +75,27 @@ D-Predict does not use arbitrary fixed-percentage targets. `training/return_dist
 
 `realized_return - predicted_return`
 
-The current row is added only after its own distribution is constructed, preventing same-row leakage. Production requires the default minimum history of 60 observations before a distribution becomes calibrated.
-
-Targets and stops are derived from the calibrated return distribution and remain `NO_TRADE` when there is insufficient economic edge. The target probabilities are hypotheses until independently validated.
+The current row is added only after its own distribution is constructed, preventing same-row leakage. Targets and stops are derived from the calibrated distribution and remain `NO_TRADE` when there is insufficient economic edge.
 
 ## Independent target/stop calibration
 
 `training/target_calibration.py` scores predicted target and stop probabilities without retuning them from the same outcomes. It reports examples, mean predicted probability, realized hit rate, Brier score and calibration gap for T1/T2/T3 and stop events.
 
-A calibration report never promotes or changes probabilities automatically. If a 65% target only hits 42% out of sample, the system records that failure rather than tuning the number until it looks correct.
-
 ## IPO analysis
 
-D-Predict now includes a **Primary Market / IPO analyzer** in the dashboard.
+D-Predict includes a **Primary Market / IPO analyzer** in the dashboard.
 
-The API endpoint is:
+`POST /api/ipo/analyze` accepts verified IPO/DRHP/prospectus inputs and calculates P/E, enterprise value, EV/EBITDA, EBITDA margin, profit margin, fresh-issue ratio, valuation score, business-quality score, issue-structure score, composite score, verdict and quantitative risk flags.
 
-`POST /api/ipo/analyze`
+`db/migrations/005_ipo_analysis.sql` persists supplied inputs and generated analysis for reproducibility.
 
-It accepts verified IPO/DRHP/prospectus inputs and calculates:
-
-- P/E
-- enterprise value
-- EV/EBITDA
-- EBITDA margin
-- profit margin
-- fresh-issue ratio
-- valuation score
-- business-quality score
-- issue-structure score
-- composite score
-- `ATTRACTIVE`, `WATCH` or `CAUTION` verdict
-- quantitative risk flags
-
-The migration `db/migrations/005_ipo_analysis.sql` persists the supplied inputs and generated analysis for reproducibility.
-
-The IPO analyzer does **not** fabricate missing information. It is a screening model, not an automatic investment recommendation. Grey-market premium, subscription demand, anchor allocation, peer valuation, promoter quality, litigation and prospectus-specific qualitative risks must be supplied from verified sources before they can influence the analysis.
+The analyzer does **not** fabricate missing information. Grey-market premium, subscription demand, anchor allocation, peer valuation and prospectus-specific qualitative risks must be supplied from verified sources before they can influence analysis.
 
 ## Multi-instrument and trade-event backtest integrity
 
-The backtest prediction ledger treats `(timestamp, symbol, horizon)` as the prediction identity when symbol metadata is present. This permits simultaneous predictions for different instruments while still rejecting duplicate predictions for the same instrument and horizon.
+The backtest prediction identity is `(timestamp, symbol, horizon)` when symbol metadata exists. This permits simultaneous predictions for different instruments while rejecting duplicate predictions for the same instrument and horizon.
 
-When a prediction carries a calibrated return distribution, the backtest derives T1 and stop prices from that distribution and resolves the **same entry-to-exit economic event** for target/stop outcome and P&L. It records target-hit, stop-hit, MAE and MFE. If both stop and target are printed in the same OHLC bar, the conservative rule is stop-first because intrabar ordering is unknown.
-
-If an older prediction ledger has no calibrated distribution, the legacy requested-horizon close exit remains available for compatibility. It must not be interpreted as distribution-aware validation.
+When a calibrated return distribution exists, the same entry-to-exit economic event drives target/stop outcome and P&L, including MAE/MFE. If both stop and target are printed in the same OHLC bar, the conservative rule is stop-first because intrabar ordering is unknown.
 
 ## Risk and shadow gates
 
@@ -231,6 +144,7 @@ PROMOTION GATE
 - [x] Empirical first-passage time-to-target estimator
 - [x] T1/T2/T3 ETA integration
 - [x] Live API trade-thesis integration
+- [x] Causal cutoff for live first-passage timing
 - [x] Dashboard target/ETA presentation
 - [x] MAE/MFE and first-hit target/stop event recording
 - [ ] Persist deterministic forecast/model/dataset provenance end-to-end
@@ -258,9 +172,5 @@ PROMOTION GATE
 - [ ] Reinforcement learning / FinRL
 - [ ] Large deep-learning models
 - [ ] LLM-generated trading recommendations
-- [ ] Automated live broker execution
+- [ ] Live broker execution
 - [ ] Complex options strategy engine
-
-## Verification
-
-CI runs backend tests, dashboard tests/typecheck/build, collector compilation and the full Python training test suite. A green CI run proves engineering integrity; it does not by itself prove predictive accuracy or trading profitability.
