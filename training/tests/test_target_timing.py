@@ -19,8 +19,10 @@ def test_target_timing_reports_empirical_eta():
         config=TargetTimingConfig(min_events=5, max_bars=3, resolution="1m"),
     )
     assert result["status"] == "ESTIMATED"
-    assert result["eta"]["seconds"] == 180
-    assert result["eta"]["minutes"] == 3
+    # First-passage events from the 100-price bars occur after 1 or 2 minutes;
+    # the empirical median is therefore 90 seconds.
+    assert result["eta"]["seconds"] == 90
+    assert result["eta"]["minutes"] == 1.5
     assert result["eta_range"]["p25"]["seconds"] <= result["eta_range"]["p50"]["seconds"] <= result["eta_range"]["p75"]["seconds"]
 
 
