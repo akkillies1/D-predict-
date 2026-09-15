@@ -1,9 +1,9 @@
 """Score prediction ledgers against independently loaded historical prices.
 
-A prediction at T is evaluated on the same economic window used by execution:
-entry at the next available bar, then hold for the requested trading-row
-horizon. This prevents the validation layer from calling a signal correct on a
-price move that the simulated trade could not actually capture.
+A prediction at T is evaluated from the prediction bar close through the
+requested forward trading-row horizon. This matches the ledger's prediction
+semantics: a 1d forecast is the next trading-day close-to-close move, while
+longer horizons extend the exit further into the future.
 """
 from __future__ import annotations
 
@@ -93,12 +93,10 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
             )
 
         horizon = str(record["horizon"]).lower()
-        entry_position = position + 1
-        # A 1d horizon means enter on the next bar and exit on that bar;
-        # longer horizons extend the holding window by additional bars.
-        exit_position = entry_position + HORIZON_ROWS[horizon] - 1
+        entry_position = position
+        exit_position = position + HORIZON_ROWS[horizon]
         scored = dict(record)
-        if entry_position >= len(history) or exit_position >= len(history):
+        if exit_position >= len(history):
             scored.update({
                 "outcome_status": "PENDING",
                 "entry_timestamp": None,
@@ -131,7 +129,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
             "history_file": str(history_path),
             "examples": 0,
             "pending": int((result["outcome_status"] == "PENDING").sum()),
-            "economic_window": "next_bar_entry_plus_horizon_rows",
+            "economic_window": "prediction_close_to_forward_horizon",
         }
     else:
         y_true = scored["realized_class"].map(CLASS_MAP)
@@ -148,7 +146,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
             "balanced_accuracy": round(float(balanced_accuracy_score(y_true, y_pred)), 6),
             "log_loss": round(float(log_loss(y_true, proba, labels=[0, 1, 2])), 6),
             "realized_mean_return": round(float(scored["realized_return"].mean()), 8),
-            "economic_window": "next_bar_entry_plus_horizon_rows",
+            "economic_window": "prediction_close_to_forward_horizon",
         }
 
     if output_path:
@@ -158,7 +156,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Score D-Predict predictions on the executable economic window")
+    parser = argparse.ArgumentParser(description="Score D-Predict predictions on the forward economic window")
     parser.add_argument("ledger", type=Path)
     parser.add_argument("--history", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
