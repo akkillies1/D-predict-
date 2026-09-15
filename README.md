@@ -8,12 +8,14 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 
 Normal Windows users do **not** need to run PowerShell commands.
 
-1. Download the **D-Predict Installer** artifact produced by the **Windows Installer** GitHub Actions workflow.
-2. Double-click **D-Predict Installer.exe**.
-3. Choose where to install D-Predict and select any optional setup you want.
-4. Click **Install**.
-5. The installer checks/prepares the required Windows environment, installs/checks Git, Python 3.12, Node.js 22+, and Docker Desktop, downloads the D-predict source, creates the Python environment, installs backend/dashboard dependencies, creates research-data directories, and runs local verification.
-6. At the final page, choose **Launch D-Predict now**. The launcher starts PostgreSQL, API, research service, dashboard and collector, then opens `http://127.0.0.1:3000`.
+1. Download the **D-Predict Windows Installer** from the latest GitHub Release.
+2. Double-click the versioned `D-Predict-Setup-vX.Y.Z.exe`.
+3. Choose where to install D-Predict.
+4. Click **Install**. The installer provisions the Windows prerequisites and local D-Predict environment, with a visible bootstrap log if anything fails.
+5. After provisioning succeeds, D-Predict launches automatically and opens the local dashboard in your browser.
+6. If provisioning cannot complete, the installer leaves the software files in place and records the exact bootstrap failure in `%LOCALAPPDATA%\D-Predict\logs\bootstrap.log`. Use **D-Predict Repair & Check** after correcting the prerequisite issue.
+
+The installer pins its source download to the release being installed rather than silently cloning whatever happens to be on `main` later. Software provisioning is also separate from historical research-data validation.
 
 ### Set Up Market Data
 
@@ -39,3 +41,11 @@ The repository does not claim model accuracy until real historical data has been
 ## Developer / recovery commands
 
 The canonical Windows wrapper is `run.ps1`:
+
+```powershell
+.\run.ps1 doctor
+.\run.ps1 start
+.\run.ps1 status
+.\run.ps1 stop
+.\run.ps1 test
+```
