@@ -23,7 +23,7 @@ UninstallDisplayIcon={sys}\WindowsPowerShell\v1.0\powershell.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
-Name: "historicaldata"; Description: "Set up market data for research (recommended)"; GroupDescription: "Set up market data:"; Flags: unchecked
+Name: "historicaldata"; Description: "Set up market data for research (recommended)"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
 Source: "..\bootstrap-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -38,59 +38,14 @@ Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters
 Name: "{commondesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Setting up market data for research..."; Flags: waituntilterminated; Tasks: historicaldata
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap-windows.ps1"" -InstallDir ""{app}"" -InstallerMode -SkipChecks -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Preparing D-Predict and installing required components..."; Flags: waituntilterminated runasoriginaluser postinstall
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Setting up market data for research..."; Flags: waituntilterminated runasoriginaluser postinstall; Tasks: historicaldata
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Description: "Launch D-Predict now"; Flags: nowait runasoriginaluser postinstall; Check: IsBootstrapComplete
 
 [Code]
-var
-  BootstrapSucceeded: Boolean;
-
-procedure RunBootstrap;
-var
-  ResultCode: Integer;
-  Params: String;
+function IsBootstrapComplete: Boolean;
 begin
-  BootstrapSucceeded := False;
-  { Installation must provision dependencies, not run the full research/test suite.
-    The bootstrap script's default verification is intentionally skipped here because
-    any test/build failure must not make the Windows installer report installation failure. }
-  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\bootstrap-windows.ps1') + '" -InstallDir "' + ExpandConstant('{app}') + '" -InstallerMode -SkipChecks';
-  WizardForm.StatusLabel.Caption := 'Preparing your computer and installing D-Predict...';
-  Log('Starting D-Predict prerequisite bootstrap in installer mode with checks skipped.');
-  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, ExpandConstant('{app}'), SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then begin
-    Log('D-Predict bootstrap exited with code ' + IntToStr(ResultCode) + '.');
-    if ResultCode = 0 then begin
-      BootstrapSucceeded := True;
-      exit;
-    end;
-  end else begin
-    Log('D-Predict bootstrap could not be started. Error code ' + IntToStr(ResultCode) + '.');
-  end;
-  MsgBox('D-Predict could not finish installing its required components.' + #13#10#13#10 + 'The Windows installation itself is complete, but prerequisite setup failed.' + #13#10#13#10 + 'Use "D-Predict Repair & Check" after fixing the prerequisite problem.', mbError, MB_OK);
-end;
-
-procedure LaunchDpredict;
-var
-  ResultCode: Integer;
-  Params: String;
-begin
-  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\launch-dpredict.ps1') + '"';
-  Log('Launching D-Predict as the original Windows user.');
-  if not ExecAsOriginalUser(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode) then begin
-    Log('D-Predict launch failed. Error code ' + IntToStr(ResultCode) + '.');
-    MsgBox('D-Predict was installed, but Windows could not start it automatically.' + #13#10#13#10 + 'Use the D-Predict shortcut in the Start Menu to launch it.', mbError, MB_OK);
-  end;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then begin
-    RunBootstrap;
-  end;
-  if CurStep = ssDone then begin
-    if BootstrapSucceeded then begin
-      LaunchDpredict;
-    end;
-  end;
+  Result := FileExists(ExpandConstant('{localappdata}\D-Predict\.install-complete'));
 end;
 
 [Messages]
