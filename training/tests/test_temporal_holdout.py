@@ -8,16 +8,19 @@ from training.temporal_holdout import evaluate_holdout
 
 def _write(path: Path, timestamps, prediction=None):
     actual = ["UP", "DOWN", "FLAT", "UP"]
-    prediction = prediction or actual
+    size = len(timestamps)
+    if size > len(actual):
+        raise ValueError("fixture supports at most four rows")
+    prediction = prediction or actual[:size]
     frame = pd.DataFrame({
         "timestamp": timestamps,
-        "symbol": ["NIFTY"] * len(timestamps),
+        "symbol": ["NIFTY"] * size,
         "prediction": prediction,
-        "realized_class": actual[: len(timestamps)],
-        "outcome_status": ["SCORED"] * len(timestamps),
-        "market_probability_down": [0.1] * len(timestamps),
-        "market_probability_flat": [0.1] * len(timestamps),
-        "market_probability_up": [0.8] * len(timestamps),
+        "realized_class": actual[:size],
+        "outcome_status": ["SCORED"] * size,
+        "market_probability_down": [0.1] * size,
+        "market_probability_flat": [0.1] * size,
+        "market_probability_up": [0.8] * size,
     })
     # Make probabilities consistent with the actual class while retaining a
     # deliberately simple fixture.
