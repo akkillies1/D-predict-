@@ -1,0 +1,58 @@
+name: Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - 'bootstrap-windows.ps1'
+      - 'dp.ps1'
+      - 'run.ps1'
+      - 'launch-dpredict.ps1'
+      - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+
+      - name: Validate installer inputs
+        shell: powershell
+        run: |
+          $required = @(
+            'installer/D-predict.iss',
+            'bootstrap-windows.ps1',
+            'dp.ps1',
+            'run.ps1',
+            'launch-dpredict.ps1'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing installer input: $file" }
+          }
+
+      - name: Compile installer
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'installer/D-predict.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'installer/dist/D-Predict-Setup.exe')) { throw 'Installer executable was not produced.' }
+          Get-Item 'installer/dist/D-Predict-Setup.exe' | Format-List FullName,Length,LastWriteTime
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: D-Predict-Windows-Installer
+          path: installer/dist/D-Predict-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
