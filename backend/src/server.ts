@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import pg from "pg";
-import { buildCausalTradeThesis } from "./services/tradeThesis.js";
+import { buildCausalTradeThesis } from "../src/tradeThesis.js";
 
 dotenv.config();
 
