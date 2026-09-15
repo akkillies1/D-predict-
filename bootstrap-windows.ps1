@@ -101,7 +101,7 @@ try {
 
     $repoMarker = Join-Path $InstallDir '.git'
     $trainingMarker = Join-Path $InstallDir 'training'
-    if (-not (Test-Path $repoMarker) -or -not (Test-Path $trainingMarker)) {
+    if (-not (Test-Path $trainingMarker)) {
         Step 'Downloading D-Predict source'
         $staging = "$InstallDir.__source"
         if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
