@@ -3,6 +3,7 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $StateRoot = Join-Path $env:LOCALAPPDATA 'D-Predict'
 $LogDir = Join-Path $StateRoot 'logs'
 $LogFile = Join-Path $LogDir 'launcher.log'
+$BootstrapLog = Join-Path $LogDir 'bootstrap.log'
 Set-Location $Root
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 
@@ -14,7 +15,14 @@ function Log([string]$Message) {
 try {
   Log 'D-Predict launcher starting.'
   & (Join-Path $Root 'run.ps1') start *>&1 | Tee-Object -FilePath $LogFile -Append
-  if ($LASTEXITCODE -ne 0) { throw "D-Predict services failed to start (exit code $LASTEXITCODE)." }
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    if (Test-Path $BootstrapLog) {
+      $dockerFailure = Get-Content $BootstrapLog -Tail 40 | Where-Object { $_ -match 'Docker|docker' } | Select-Object -Last 1
+      if ($dockerFailure) { throw "D-Predict prerequisites could not start. $dockerFailure`nSee: $BootstrapLog" }
+    }
+    throw "D-Predict services failed to start (exit code $exitCode). See $LogFile"
+  }
 
   Log 'Waiting for dashboard on http://127.0.0.1:3000 ...'
   $ready = $false
@@ -33,8 +41,9 @@ try {
 } catch {
   Log "ERROR: $($_.Exception.Message)"
   Write-Host "`nD-Predict could not start." -ForegroundColor Red
-  Write-Host "Log: $LogFile" -ForegroundColor Yellow
-  Write-Host $_.Exception.Message -ForegroundColor Red
+  Write-Host "`n$($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "`nLauncher log: $LogFile" -ForegroundColor Yellow
+  if (Test-Path $BootstrapLog) { Write-Host "Bootstrap log: $BootstrapLog" -ForegroundColor Yellow }
   Read-Host 'Press Enter to close'
   exit 1
 }
