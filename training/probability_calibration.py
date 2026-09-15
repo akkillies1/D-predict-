@@ -44,10 +44,7 @@ def _validate(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"ledger is missing columns: {', '.join(missing)}")
     frame = frame.copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="raise")
-    if "symbol" in frame.columns:
-        key = ["timestamp", "symbol"]
-    else:
-        key = ["timestamp"]
+    key = ["timestamp", "symbol"] if "symbol" in frame.columns else ["timestamp"]
     if frame.duplicated(key).any():
         raise ValueError(f"calibration keys must be unique: {key}")
     if not frame["prediction"].isin(CLASSES).all() or not frame["realized_class"].isin(CLASSES).all():
@@ -89,9 +86,16 @@ def calibrate_oos(frame: pd.DataFrame, config: CalibrationConfig = CalibrationCo
             calibrated = raw.copy()
             status = "UNCALIBRATED"
         else:
-            calibrated = np.array([calibrators[j].predict([raw[j]])[0] for j in range(3)])
+            calibrated = np.array([calibrators[j].predict([raw[j]])[0] for j in range(3)], dtype=float)
             total = calibrated.sum()
-            calibrated = calibrated / total if total > 0 else raw
+            if total > 0:
+                calibrated /= total
+                # Force the simplex invariant to survive floating-point serialization.
+                calibrated[-1] = 1.0 - float(calibrated[:-1].sum())
+                calibrated[-1] = max(0.0, min(1.0, calibrated[-1]))
+                calibrated[:-1] /= float(calibrated.sum())
+            else:
+                calibrated = raw
             status = "CALIBRATED"
         output = row.to_dict()
         for cls, value in zip(CLASSES, calibrated):
