@@ -1,6 +1,6 @@
 {
-  "buildCommand": "cd dashboard && npm run build",
-  "installCommand": "cd dashboard && npm ci",
-  "outputDirectory": "dashboard/dist/public",
-  "framework": "vite"
+  "buildCommand": "echo \"D-Predict marketing site is static; no build required\"",
+  "outputDirectory": "marketing",
+  "cleanUrls": true,
+  "trailingSlash": false
 }
