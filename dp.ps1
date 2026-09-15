@@ -2,30 +2,75 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $StateRoot = Join-Path $env:LOCALAPPDATA "D-Predict"
 $Run = Join-Path $StateRoot ".run"
-$EnvFile = Join-Path $Root ".env"
+$EnvFile = Join-Path $StateRoot ".env"
 
 function Info($m) { Write-Host "[d-predict] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[d-predict] $m" -ForegroundColor Yellow }
 function Die($m) { Write-Host "[d-predict] $m" -ForegroundColor Red; exit 1 }
 function Need($name) { if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Die "Missing '$name'. Run D-Predict Repair & Check." } }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
-function Ensure-Env {
-  if (Test-Path $EnvFile) { return }
-  try {
-    Copy-Item (Join-Path $Root ".env.example") $EnvFile -ErrorAction Stop
-    Info "Created .env from .env.example"
-  } catch {
-    Warn "Install directory is not writable; using environment defaults without creating .env."
-    $example = Join-Path $Root ".env.example"
-    if (-not (Test-Path $example)) { Die "Missing .env.example." }
-    Get-Content $example | ForEach-Object {
-      $line = $_.Trim()
-      if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
-        $parts = $line.Split('=',2)
-        [Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process')
-      }
+function Import-EnvFile([string]$Path) {
+  if (-not (Test-Path $Path)) { return $false }
+  Get-Content $Path | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
+      $parts = $line.Split('=',2)
+      [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
     }
   }
+  return $true
+}
+function Ensure-Env {
+  New-Item -ItemType Directory -Force $StateRoot | Out-Null
+  if (Test-Path $EnvFile) {
+    [void](Import-EnvFile $EnvFile)
+    return
+  }
+  $rootEnv = Join-Path $Root ".env"
+  if (Test-Path $rootEnv) {
+    Copy-Item $rootEnv $EnvFile -Force
+    [void](Import-EnvFile $EnvFile)
+    Info "Loaded local environment configuration."
+    return
+  }
+  $example = Join-Path $Root ".env.example"
+  if (Test-Path $example) {
+    Copy-Item $example $EnvFile -Force
+    [void](Import-EnvFile $EnvFile)
+    Info "Created runtime environment from .env.example."
+    return
+  }
+  Warn "Install source does not contain .env.example; using built-in local defaults."
+  $defaults = @{
+    DATABASE_URL = 'postgresql://postgres:localdev@localhost:5433/nifty'
+    NIFTY_DB_PORT = '5433'
+    POSTGRES_PORT = '5433'
+    POSTGRES_PASSWORD = 'localdev'
+    API_PORT = '4100'
+    RESEARCH_PORT = '4200'
+    PORT = '3000'
+    CORS_ORIGIN = 'http://127.0.0.1:3000,http://localhost:3000'
+    VITE_API_BASE_URL = 'http://127.0.0.1:4100'
+    VITE_RESEARCH_BASE_URL = 'http://127.0.0.1:4200'
+    OPTION_CHAIN_POLL_SECONDS = '15'
+    PRICE_BAR_POLL_SECONDS = '15'
+    COLLECTOR_INSTRUMENTS = 'NIFTY,BANKNIFTY'
+    RESEARCH_NEWS_ENABLED = 'true'
+    RESEARCH_CACHE_SECONDS = '60'
+    GDELT_TIMESPAN = '3d'
+    RESEARCH_MAX_ARTICLES = '30'
+    EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
+    FEATURE_SET_VERSION = 'v1'
+    STRATEGY_VERSION = 'v1'
+    MODEL_VERSION = 'phase1-rule-engine-v1'
+    AI_MODE = 'disabled'
+    AI_PROVIDER = ''
+    AI_BASE_URL = ''
+    AI_API_KEY = ''
+    AI_MODEL = ''
+  }
+  $defaults.GetEnumerator() | ForEach-Object { [Environment]::SetEnvironmentVariable($_.Key, $_.Value, 'Process') }
+  $defaults.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value } | Set-Content -Path $EnvFile -Encoding UTF8
 }
 function Ensure-DockerReady {
   docker info *> $null
@@ -62,8 +107,9 @@ function Invoke-Init {
   Info "Initialization complete."
 }
 function Invoke-Doctor {
+  Ensure-Env
   foreach ($c in @('node','npm','python','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "${c}: available" } else { Warn "${c}: missing" } }
-  if (Test-Path $EnvFile) { Info ".env: present" } else { Warn ".env: using process defaults" }
+  Info ".env: $EnvFile"
   if (Test-Path (Join-Path $Root "backend\node_modules")) { Info "backend dependencies: installed" } else { Warn "backend dependencies: missing" }
   if (Test-Path (Join-Path $Root "dashboard\node_modules")) { Info "dashboard dependencies: installed" } else { Warn "dashboard dependencies: missing" }
   if (Test-Path (Join-Path $Root "collector\.venv\Scripts\python.exe")) { Info "collector Python environment: installed" } else { Warn "collector Python environment: missing" }
@@ -103,6 +149,7 @@ function Invoke-Stop {
   if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose stop postgres | Out-Host }
 }
 function Invoke-Status {
+  Ensure-Env
   if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose ps | Out-Host }
   foreach ($name in @('api','research','ui','collector')) {
     $pidFile = Join-Path $Run "$name.pid"
