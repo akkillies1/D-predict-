@@ -150,6 +150,46 @@ D-Predict includes a **Primary Market / IPO analyzer** in the dashboard.
 
 The analyzer does **not** fabricate missing information. Grey-market premium, subscription demand, anchor allocation, peer valuation and prospectus-specific qualitative risks must be supplied from verified sources before they can influence analysis.
 
+## Decision-maker visual dashboard
+
+`dashboard/client/src/components/DecisionDashboard.tsx` is now the primary dashboard surface.
+
+The dashboard is designed as a **decision cockpit**, not merely a chart screen. It visually separates:
+
+```text
+MARKET STATE
+    ↓
+MODEL SIGNAL
+    ↓
+FORECAST / DISTRIBUTION
+    ↓
+TRADE THESIS
+    ↓
+DATA + EVIDENCE
+    ↓
+RISK / BLOCKERS
+    ↓
+EXECUTION GATE
+```
+
+It provides:
+
+- Executive **PRIMARY ACTION** with explicit `EXECUTABLE` versus `WAIT / NO TRADE`.
+- Decision blockers explaining why a forecast cannot become a trade.
+- Live spot, data freshness and source status.
+- Interactive price-area chart using returned local market bars only.
+- Model direction, confidence, regime and reason codes.
+- Entry, expected return, horizon, risk/reward, targets, stop and ETA when supplied by the causal trade thesis.
+- Confidence/evidence ladder for forecast, research, agreement and data quality.
+- NIFTY/BANKNIFTY option-chain visualisation when a real snapshot exists.
+- Research evidence, themes and invalidation/watch items.
+- Explicit missing-data states instead of placeholder market numbers.
+- Responsive layout for laptop and larger screens.
+
+The dashboard does not create targets, probabilities or prices when the backend has not supplied them. This is intentional: visual completeness must not become data fabrication.
+
+The previous `Terminal.tsx` remains available as a lower-level terminal implementation, while `DecisionDashboard.tsx` is the primary application surface.
+
 ## Multi-instrument and trade-event backtest integrity
 
 The backtest prediction identity is `(timestamp, symbol, horizon)` when symbol metadata exists. This permits simultaneous predictions for different instruments while rejecting duplicate predictions for the same instrument and horizon.
@@ -209,6 +249,7 @@ PROMOTION GATE
 - [x] Live API trade-thesis integration
 - [x] Causal cutoff for live first-passage timing
 - [x] Dashboard target/ETA presentation
+- [x] Decision-maker dashboard with visual execution gates
 - [x] MAE/MFE and first-hit target/stop event recording
 - [ ] Persist deterministic forecast/model/dataset provenance end-to-end
 - [ ] Validate target probabilities on independent future periods
