@@ -21,7 +21,7 @@ A fresh installation can bootstrap the complete real-data research/validation ch
   --horizons 1d 3d 5d
 ```
 
-The orchestrator downloads real daily history only when the selected local CSV is missing, validates the raw history, builds point-in-time datasets, runs purge-aware expanding walk-forward evaluation, independently scores the **executable economic window**, and runs the causal backtest. It never generates synthetic market data and never promotes a model.
+The orchestrator downloads real daily history only when the selected local CSV is missing, validates the raw history, builds point-in-time datasets, runs purge-aware expanding walk-forward evaluation, independently scores the **executable economic window**, evaluates leakage-safe probability calibration and OOS stability, and runs the causal backtest. It never generates synthetic market data and never promotes a model.
 
 The economic validation invariant is:
 
@@ -52,14 +52,16 @@ data/
     ├── registry.json            # cheap persistent cache index
     ├── latest.json              # current bundle pointer
     ├── bundles/<bundle-id>/     # immutable validation report
-    └── *_backtest.json          # versioned backtest evidence
+    ├── *_probability_calibration.json
+    ├── *_stability.json
+    └── *_backtest.json          # versioned validation evidence
 ```
 
 These generated market-data and validation artifacts are local research state; they are not source code and should not be committed to GitHub by default.
 
 ### Reuse instead of rerunning everything
 
-Subsequent invocations calculate a deterministic fingerprint from the selected real historical files, dataset manifests, configuration, and validation contract. If the fingerprint and required artifacts are unchanged, the runner returns `REUSED` and does not repeat the expensive walk-forward/backtest.
+Subsequent invocations calculate a deterministic fingerprint from the selected real historical files, dataset manifests, configuration, and validation contract. If the fingerprint and required artifacts are unchanged, the runner returns `REUSED` and does not repeat the expensive walk-forward/calibration/stability/backtest work.
 
 Use `--force` to deliberately rebuild the validation bundle. Use `--refresh-data` when you intentionally want to redownload the selected historical source.
 
@@ -188,6 +190,7 @@ PROMOTION GATE
 - [x] First-run real historical-data bootstrap orchestrator
 - [x] Executable economic-window realized outcome scoring
 - [x] Persistent validation bundle fingerprint/reuse
+- [x] OOS probability calibration and stability included in bootstrap bundle
 - [x] Untouched temporal holdout evaluator
 - [x] Leakage-safe OOS probability calibration primitive
 - [x] Real-artifact raw-vs-calibrated comparison runner
