@@ -19,18 +19,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Inno Setup
-        shell: powershell
-        run: choco install innosetup -y --no-progress
-
-      - name: Compile installer
-        shell: powershell
-        run: |
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'installer/D-predict.iss'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path 'installer/dist/D-Predict Installer.exe')) { throw 'Installer executable was not produced.' }
+        uses: actions/checkout@v7
 
       - name: Determine release tag
         id: release
@@ -41,7 +30,23 @@ jobs:
           } else {
             $tag = 'v${{ github.event.inputs.version }}'
           }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Invalid release tag: $tag"
+          }
+          $version = $tag.Substring(1)
           "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: powershell
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DMyAppVersion=${{ steps.release.outputs.version }}' 'installer/D-predict.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'installer/dist/D-Predict Installer.exe')) { throw 'Installer executable was not produced.' }
 
       - name: Create GitHub release and upload installer
         shell: powershell
@@ -49,8 +54,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ steps.release.outputs.tag }}'
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $releaseExists = $false
+          try {
+            gh release view $tag *> $null
+            $releaseExists = ($LASTEXITCODE -eq 0)
+          } catch {
+            $releaseExists = $false
+          }
+
+          if ($releaseExists) {
             gh release upload $tag 'installer/dist/D-Predict Installer.exe' --clobber
           } else {
             gh release create $tag 'installer/dist/D-Predict Installer.exe' --title "D-Predict $tag" --generate-notes
