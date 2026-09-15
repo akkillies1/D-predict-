@@ -82,6 +82,13 @@ function Find-DockerDesktop {
     )
     return ($candidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
 }
+function Test-DockerEngine {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+    # PowerShell 5.1 can surface native stderr as an error record. Use cmd so a
+    # normal "daemon not ready" state never aborts the bootstrap unexpectedly.
+    $null = & cmd.exe /c 'docker info >nul 2>&1'
+    return ($LASTEXITCODE -eq 0)
+}
 function Ensure-Docker {
     Refresh-Path
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -90,16 +97,43 @@ function Ensure-Docker {
         Refresh-Path
     }
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is unavailable after installation. Check Docker Desktop installation.' }
-    & docker info *> $null
-    if ($LASTEXITCODE -eq 0) { return }
-    $desktop = Find-DockerDesktop
-    if ($desktop) { Log "Starting Docker Desktop: $desktop"; Start-Process -FilePath $desktop | Out-Null }
-    for ($i = 0; $i -lt 60; $i++) {
-        Start-Sleep -Seconds 2
-        & docker info *> $null
-        if ($LASTEXITCODE -eq 0) { return }
+
+    if (Test-DockerEngine) {
+        Log 'Docker engine is already ready.'
+        return
     }
-    throw 'Docker Desktop is installed but the Docker engine did not become ready. Check WSL 2/virtualization and Docker Desktop, then run Repair & Check.'
+
+    $desktop = Find-DockerDesktop
+    if (-not $desktop) {
+        throw 'Docker CLI is installed, but Docker Desktop was not found. Install Docker Desktop and run Repair & Check again.'
+    }
+
+    $process = Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $process) {
+        Step 'Starting Docker Desktop'
+        Log "Starting Docker Desktop: $desktop"
+        Start-Process -FilePath $desktop -WorkingDirectory (Split-Path -Parent $desktop) | Out-Null
+    } else {
+        Log 'Docker Desktop process is already running; waiting for the engine.'
+    }
+
+    Step 'Waiting for Docker engine'
+    $lastDetail = ''
+    for ($i = 0; $i -lt 90; $i++) {
+        Start-Sleep -Seconds 2
+        if (Test-DockerEngine) {
+            Log "Docker engine became ready after $((($i + 1) * 2)) seconds."
+            return
+        }
+        if (($i % 10) -eq 0) {
+            try {
+                $lastDetail = (& docker info 2>&1 | Select-Object -First 1)
+            } catch { $lastDetail = $_.Exception.Message }
+            if ($lastDetail) { Log "Docker not ready yet: $lastDetail" }
+        }
+    }
+
+    throw 'Docker Desktop is installed but the Docker engine did not become ready within 180 seconds. Open Docker Desktop and ensure WSL 2/virtualization is enabled, then run D-Predict Repair & Check again.'
 }
 function Read-StateValue([string]$Name) {
     $path = Join-Path $StateRoot $Name
@@ -116,7 +150,6 @@ function Sync-Source([string]$RequestedRef) {
         Log "Source already present at requested ref: $installedRef"
         return
     }
-
     $reason = if ($sourceMissing) { 'source is missing/incomplete' } else { "source ref changed from '$installedRef' to '$RequestedRef'" }
     Step "Synchronizing D-Predict source ($reason)"
     $staging = "$InstallDir.__source"
@@ -125,10 +158,8 @@ function Sync-Source([string]$RequestedRef) {
     if ($RequestedRef) { $cloneArgs += @('--branch',$RequestedRef) }
     $cloneArgs += @('https://github.com/akkillies1/D-predict-.git',$staging)
     Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
-
     $preserveTopLevel = @('.env','data','collector')
     $preserveFiles = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
-
     Get-ChildItem -Force $staging | ForEach-Object {
         if ($_.Name -eq '.git') { return }
         if ($preserveTopLevel -contains $_.Name) {
@@ -149,7 +180,6 @@ function Sync-Source([string]$RequestedRef) {
         Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item $_.FullName $target -Recurse -Force
     }
-
     Remove-Item $staging -Recurse -Force
     if (-not (Test-Path $envExample)) { throw 'Downloaded D-Predict source is incomplete: .env.example is missing.' }
     if ($RequestedRef) { Set-Content -Path (Join-Path $StateRoot 'source-ref.txt') -Value $RequestedRef -Encoding UTF8 }
@@ -161,12 +191,10 @@ try {
     if (-not $InstallDir) { $InstallDir = if ($PSScriptRoot) { $PSScriptRoot } else { Join-Path $HOME 'D-predict-' } }
     $InstallDir = [IO.Path]::GetFullPath($InstallDir)
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-
     if (-not $SourceRef) {
         $storedRef = Read-StateValue 'source-ref.txt'
         if ($storedRef) { $SourceRef = $storedRef; Log "Using stored release ref for repair: $SourceRef" }
     }
-
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and -not $ElevatedChild) {
@@ -178,17 +206,14 @@ try {
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
         exit $p.ExitCode
     }
-
     Ensure-Winget
     Ensure-Git
     Ensure-Python312
     Ensure-Node22Plus
     Ensure-Docker
     Sync-Source $SourceRef
-
     Set-Location $InstallDir
     if (-not (Test-Path (Join-Path $InstallDir '.env.example'))) { throw 'D-Predict source is incomplete: .env.example is missing.' }
-
     $venv = Join-Path $InstallDir 'collector\.venv'
     $python = Join-Path $venv 'Scripts\python.exe'
     if (-not (Test-Path $python)) { Invoke-Native 'Creating Python environment' { py -3.12 -m venv $venv } }
@@ -200,12 +225,10 @@ try {
     Invoke-Native 'Enabling Corepack' { corepack enable }
     Invoke-Native 'Activating pnpm 10.4.1' { corepack prepare pnpm@10.4.1 --activate }
     Invoke-Native 'Installing dashboard dependencies' { pnpm --dir (Join-Path $InstallDir 'dashboard') install --frozen-lockfile }
-
     foreach ($dir in @('data\historical','data\manifests','data\training','data\predictions','data\validation')) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $dir) | Out-Null }
     New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
     Set-Content -Path (Join-Path $StateRoot 'install-root.txt') -Value $InstallDir -Encoding UTF8
     if ($SourceRef) { Set-Content -Path (Join-Path $StateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8 }
-
     if (-not $SkipChecks) {
         Invoke-Native 'Python compile verification' { & $python -m compileall -q (Join-Path $InstallDir 'collector') (Join-Path $InstallDir 'training') }
         Invoke-Native 'Training tests' { & $python -m pytest (Join-Path $InstallDir 'training\tests') -q }
@@ -214,7 +237,6 @@ try {
         Invoke-Native 'Dashboard type check' { npm run check --prefix (Join-Path $InstallDir 'dashboard') }
         Invoke-Native 'Dashboard production build' { npm run build --prefix (Join-Path $InstallDir 'dashboard') }
     }
-
     Set-Content -Path $CompleteMarker -Value (Get-Date -Format o) -Encoding UTF8
     Log 'D-Predict bootstrap completed successfully.'
     Write-Host "`nD-Predict installation complete." -ForegroundColor Green
