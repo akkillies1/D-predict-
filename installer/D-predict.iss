@@ -1,5 +1,7 @@
 #define MyAppName "D-Predict"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+#define MyAppVersion "0.1.1"
+#endif
 #define MyAppPublisher "D-Predict"
 
 [Setup]
@@ -7,7 +9,7 @@ AppId={{8A8A0F2E-9A1C-4C4B-8E9C-4F7F8C1D2A11}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\D-Predict
+DefaultDirName={localappdata}\Programs\D-Predict
 DefaultGroupName=D-Predict
 DisableProgramGroupPage=no
 OutputDir=dist
