@@ -1,12 +1,23 @@
 param(
     [string]$InstallDir,
+    [string]$SourceRef,
     [switch]$InstallerMode,
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+    [switch]$ElevatedChild
 )
 
 $ErrorActionPreference = 'Stop'
+$StateRoot = Join-Path $env:LOCALAPPDATA 'D-Predict'
+$LogDir = Join-Path $StateRoot 'logs'
+$LogFile = Join-Path $LogDir 'bootstrap.log'
+$CompleteMarker = Join-Path $StateRoot '.install-complete'
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-function Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
+function Log([string]$Message) {
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
+    $line | Tee-Object -FilePath $LogFile -Append
+}
+function Step([string]$Message) { Log "==> $Message"; Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
     $user = [Environment]::GetEnvironmentVariable('Path','User')
@@ -15,9 +26,16 @@ function Refresh-Path {
         (Join-Path ${env:ProgramFiles(x86)} 'nodejs'),
         (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
         (Join-Path $env:ProgramFiles 'Git\cmd'),
-        (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin')
+        (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin')
     )
     $env:Path = (($machine -split ';') + ($user -split ';') + $extra | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'
+}
+function Invoke-Native([string]$Label, [scriptblock]$Action) {
+    Step $Label
+    & $Action 2>&1 | Tee-Object -FilePath $LogFile -Append
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { throw "$Label failed (exit code $code). See $LogFile" }
 }
 function Ensure-Winget {
     Refresh-Path
@@ -26,22 +44,18 @@ function Ensure-Winget {
 function Ensure-Git {
     Refresh-Path
     if (Get-Command git -ErrorAction SilentlyContinue) { return }
-    Step 'Installing Git'
     Ensure-Winget
-    & winget install --id Git.Git --exact --accept-source-agreements --accept-package-agreements --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { throw "Git installation failed (exit code $LASTEXITCODE)." }
+    Invoke-Native 'Installing Git' { winget install --id Git.Git --exact --scope machine --accept-source-agreements --accept-package-agreements --disable-interactivity }
     Refresh-Path
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git was installed but is not available on PATH. Restart Windows and rerun the installer.' }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git was installed but is not available on PATH.' }
 }
 function Ensure-Python312 {
     Refresh-Path
     if (Get-Command py -ErrorAction SilentlyContinue) { try { & py -3.12 --version *> $null; if ($LASTEXITCODE -eq 0) { return } } catch {} }
-    Step 'Installing Python 3.12'
     Ensure-Winget
-    & winget install --id Python.Python.3.12 --exact --accept-source-agreements --accept-package-agreements --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { throw "Python 3.12 installation failed (exit code $LASTEXITCODE)." }
+    Invoke-Native 'Installing Python 3.12' { winget install --id Python.Python.3.12 --exact --scope machine --accept-source-agreements --accept-package-agreements --disable-interactivity }
     Refresh-Path
-    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { throw 'Python launcher was installed but is not available. Restart Windows and rerun the installer.' }
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { throw 'Python launcher was installed but is not available on PATH.' }
     & py -3.12 --version *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Python 3.12 is not available after installation.' }
 }
@@ -50,63 +64,77 @@ function Ensure-Node22Plus {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if ($node) {
         $major = [int]((& node --version).TrimStart('v').Split('.')[0])
-        if ($major -ge 22) { return }
+        if ($major -ge 22 -and (Get-Command npm -ErrorAction SilentlyContinue)) { return }
     }
-    Step 'Installing Node.js LTS'
     Ensure-Winget
-    & winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { throw "Node.js LTS installation failed (exit code $LASTEXITCODE)." }
+    Invoke-Native 'Installing Node.js LTS' { winget install --id OpenJS.NodeJS.LTS --exact --scope machine --accept-source-agreements --accept-package-agreements --disable-interactivity }
     Refresh-Path
     $node = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $node) { throw 'Node.js was installed but is not available on PATH. Restart Windows and rerun the installer.' }
+    if (-not $node) { throw 'Node.js was installed but is not available on PATH.' }
     $major = [int]((& node --version).TrimStart('v').Split('.')[0])
     if ($major -lt 22) { throw "Node.js 22+ is required; detected $(& node --version)." }
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm was not found with Node.js. Repair Node.js and rerun the installer.' }
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm was not found with Node.js.' }
+}
+function Find-DockerDesktop {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe')
+    )
+    return ($candidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
 }
 function Ensure-Docker {
     Refresh-Path
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        Step 'Installing Docker Desktop'
         Ensure-Winget
-        & winget install --id Docker.DockerDesktop --exact --accept-source-agreements --accept-package-agreements --disable-interactivity
-        if ($LASTEXITCODE -ne 0) { throw "Docker Desktop installation failed (exit code $LASTEXITCODE)." }
+        Invoke-Native 'Installing Docker Desktop' { winget install --id Docker.DockerDesktop --exact --scope machine --accept-source-agreements --accept-package-agreements --disable-interactivity }
         Refresh-Path
     }
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop was installed but docker is not available on PATH. Restart Windows and rerun the installer.' }
-    Step 'Checking Docker Desktop'
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker CLI is unavailable after installation. Check Docker Desktop installation.' }
     & docker info *> $null
     if ($LASTEXITCODE -eq 0) { return }
-    $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-    if (Test-Path $desktop) { Start-Process $desktop | Out-Null }
-    for ($i = 0; $i -lt 45; $i++) {
+    $desktop = Find-DockerDesktop
+    if ($desktop) { Log "Starting Docker Desktop: $desktop"; Start-Process -FilePath $desktop | Out-Null }
+    for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Seconds 2
         & docker info *> $null
         if ($LASTEXITCODE -eq 0) { return }
     }
-    throw 'Docker Desktop is installed but the Docker engine is not ready. Start Docker Desktop and rerun the installer.'
+    throw 'Docker Desktop is installed but the Docker engine did not become ready. Check WSL 2/virtualization and Docker Desktop, then run Repair & Check.'
 }
 
-Write-Host 'D-Predict Windows bootstrap' -ForegroundColor Green
-if ($InstallerMode) { Write-Host 'Installer mode: installing prerequisites, source and local dependencies.' }
-if (-not $InstallDir) { $InstallDir = if ($PSScriptRoot) { $PSScriptRoot } else { Join-Path $HOME 'D-predict-' } }
-$InstallDir = [IO.Path]::GetFullPath($InstallDir)
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-
 try {
+    Log "D-Predict bootstrap starting. InstallerMode=$InstallerMode SourceRef=$SourceRef InstallDir=$InstallDir"
+    if (-not $InstallDir) { $InstallDir = if ($PSScriptRoot) { $PSScriptRoot } else { Join-Path $HOME 'D-predict-' } }
+    $InstallDir = [IO.Path]::GetFullPath($InstallDir)
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and -not $ElevatedChild) {
+        Step 'Requesting administrator permission for prerequisite installation'
+        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",'-InstallDir',"`"$InstallDir`"",'-ElevatedChild')
+        if ($InstallerMode) { $args += '-InstallerMode' }
+        if ($SkipChecks) { $args += '-SkipChecks' }
+        if ($SourceRef) { $args += @('-SourceRef',"`"$SourceRef`"") }
+        $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
+        exit $p.ExitCode
+    }
+
     Ensure-Winget
     Ensure-Git
     Ensure-Python312
     Ensure-Node22Plus
     Ensure-Docker
 
-    $repoMarker = Join-Path $InstallDir '.git'
     $trainingMarker = Join-Path $InstallDir 'training'
     if (-not (Test-Path $trainingMarker)) {
         Step 'Downloading D-Predict source'
         $staging = "$InstallDir.__source"
         if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-        & git clone --depth 1 https://github.com/akkillies1/D-predict-.git $staging
-        if ($LASTEXITCODE -ne 0) { throw "D-Predict source download failed (exit code $LASTEXITCODE)." }
+        $cloneArgs = @('clone','--depth','1')
+        if ($SourceRef) { $cloneArgs += @('--branch',$SourceRef) }
+        $cloneArgs += @('https://github.com/akkillies1/D-predict-.git',$staging)
+        Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
         $preserve = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
         Get-ChildItem -Force $staging | ForEach-Object {
             if ($preserve -notcontains $_.Name) { Move-Item $_.FullName $InstallDir -Force }
@@ -115,61 +143,46 @@ try {
     }
 
     Set-Location $InstallDir
+    if (-not (Test-Path (Join-Path $InstallDir '.env.example'))) { throw 'Downloaded D-Predict source is incomplete: .env.example is missing.' }
 
-    Step 'Creating Python virtual environment'
     $venv = Join-Path $InstallDir 'collector\.venv'
     $python = Join-Path $venv 'Scripts\python.exe'
-    if (-not (Test-Path $python)) { & py -3.12 -m venv $venv }
-    if (-not (Test-Path $python)) { throw 'Collector Python virtual environment could not be created.' }
-    & $python -m pip install --upgrade pip
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to upgrade pip.' }
-    & $python -m pip install -r (Join-Path $InstallDir 'collector\requirements.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to install collector Python dependencies.' }
-    & $python -m pip install pytest scikit-learn
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to install local Python test dependencies.' }
+    if (-not (Test-Path $python)) { Invoke-Native 'Creating Python environment' { py -3.12 -m venv $venv } }
+    if (-not (Test-Path $python)) { throw 'Collector Python environment could not be created.' }
+    Invoke-Native 'Installing collector Python dependencies' { & $python -m pip install --upgrade pip }
+    Invoke-Native 'Installing collector requirements' { & $python -m pip install -r (Join-Path $InstallDir 'collector\requirements.txt') }
+    Invoke-Native 'Installing local Python test dependencies' { & $python -m pip install pytest scikit-learn }
+    Invoke-Native 'Installing backend dependencies' { npm ci --prefix (Join-Path $InstallDir 'backend') }
+    Invoke-Native 'Enabling Corepack' { corepack enable }
+    Invoke-Native 'Activating pnpm 10.4.1' { corepack prepare pnpm@10.4.1 --activate }
+    Invoke-Native 'Installing dashboard dependencies' { pnpm --dir (Join-Path $InstallDir 'dashboard') install --frozen-lockfile }
 
-    Step 'Installing backend dependencies'
-    & npm ci --prefix (Join-Path $InstallDir 'backend')
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to install backend dependencies.' }
-
-    Step 'Installing dashboard dependencies'
-    & corepack enable
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to enable Corepack.' }
-    & corepack prepare pnpm@10.4.1 --activate
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to activate pnpm 10.4.1.' }
-    & pnpm --dir (Join-Path $InstallDir 'dashboard') install --frozen-lockfile
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to install dashboard dependencies.' }
-
-    Step 'Creating local research-data directories'
     foreach ($dir in @('data\historical','data\manifests','data\training','data\predictions','data\validation')) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $dir) | Out-Null }
+    New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+    Set-Content -Path (Join-Path $StateRoot 'install-root.txt') -Value $InstallDir -Encoding UTF8
+    if ($SourceRef) { Set-Content -Path (Join-Path $StateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8 }
 
     if (-not $SkipChecks) {
-        Step 'Running local verification'
-        & $python -m compileall -q (Join-Path $InstallDir 'collector') (Join-Path $InstallDir 'training')
-        if ($LASTEXITCODE -ne 0) { throw 'Python compile verification failed.' }
-        & $python -m pytest (Join-Path $InstallDir 'training\tests') -q
-        if ($LASTEXITCODE -ne 0) { throw 'Training tests failed.' }
-        & npm test --prefix (Join-Path $InstallDir 'backend')
-        if ($LASTEXITCODE -ne 0) { throw 'Backend tests failed.' }
-        & npm test --prefix (Join-Path $InstallDir 'dashboard')
-        if ($LASTEXITCODE -ne 0) { throw 'Dashboard tests failed.' }
-        & npm run check --prefix (Join-Path $InstallDir 'dashboard')
-        if ($LASTEXITCODE -ne 0) { throw 'Dashboard type/check verification failed.' }
-        & npm run build --prefix (Join-Path $InstallDir 'dashboard')
-        if ($LASTEXITCODE -ne 0) { throw 'Dashboard production build failed.' }
+        Invoke-Native 'Python compile verification' { & $python -m compileall -q (Join-Path $InstallDir 'collector') (Join-Path $InstallDir 'training') }
+        Invoke-Native 'Training tests' { & $python -m pytest (Join-Path $InstallDir 'training\tests') -q }
+        Invoke-Native 'Backend tests' { npm test --prefix (Join-Path $InstallDir 'backend') }
+        Invoke-Native 'Dashboard tests' { npm test --prefix (Join-Path $InstallDir 'dashboard') }
+        Invoke-Native 'Dashboard type check' { npm run check --prefix (Join-Path $InstallDir 'dashboard') }
+        Invoke-Native 'Dashboard production build' { npm run build --prefix (Join-Path $InstallDir 'dashboard') }
     }
 
+    Set-Content -Path $CompleteMarker -Value (Get-Date -Format o) -Encoding UTF8
+    Log 'D-Predict bootstrap completed successfully.'
     Write-Host "`nD-Predict installation complete." -ForegroundColor Green
     Write-Host "Location: $InstallDir"
-    Write-Host "Python:   $(& $python --version)"
-    Write-Host "Node:     $(& node --version)"
-    Write-Host "Docker:   $(& docker --version)"
-    Write-Host "`nHistorical market data is NOT downloaded during installation." -ForegroundColor Yellow
-    Write-Host "Run .\run.ps1 bootstrap when you want the real historical validation pipeline."
+    Write-Host "Bootstrap log: $LogFile"
     exit 0
 }
 catch {
-    Write-Host "`nD-Predict installation failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host 'No partial success is reported. Fix the prerequisite shown above and run the installer again.' -ForegroundColor Yellow
+    Remove-Item $CompleteMarker -Force -ErrorAction SilentlyContinue
+    Log "ERROR: $($_.Exception.Message)"
+    Write-Host "`nD-Predict installation failed." -ForegroundColor Red
+    Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Bootstrap log: $LogFile" -ForegroundColor Yellow
     exit 1
 }
