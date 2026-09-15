@@ -1,9 +1,9 @@
-"""Score prediction ledgers against independently loaded historical closes.
+"""Score prediction ledgers against independently loaded historical prices.
 
-This is intentionally separate from dataset target generation. A prediction is
-considered scored only when the future trading-day close exists in the supplied
-historical source. That makes prediction aging explicit and gives the ledger an
-independent realized outcome that can be audited later.
+A prediction at T is evaluated on the same economic window used by execution:
+entry at the next available bar, then hold for the requested trading-row
+horizon. This prevents the validation layer from calling a signal correct on a
+price move that the simulated trade could not actually capture.
 """
 from __future__ import annotations
 
@@ -84,30 +84,38 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
 
     rows: list[dict] = []
     for record in ledger.to_dict("records"):
-        timestamp = pd.Timestamp(record["timestamp"])
-        positions = timestamps.get_indexer([timestamp])
+        prediction_time = pd.Timestamp(record["timestamp"])
+        positions = timestamps.get_indexer([prediction_time])
         position = int(positions[0])
         if position < 0:
             raise ValueError(
-                f"prediction timestamp {timestamp.isoformat()} is absent from historical source {history_path}"
+                f"prediction timestamp {prediction_time.isoformat()} is absent from historical source {history_path}"
             )
+
         horizon = str(record["horizon"]).lower()
-        future_position = position + HORIZON_ROWS[horizon]
+        entry_position = position + 1
+        exit_position = entry_position + HORIZON_ROWS[horizon]
         scored = dict(record)
-        if future_position >= len(history):
+        if exit_position >= len(history):
             scored.update({
                 "outcome_status": "PENDING",
+                "entry_timestamp": None,
+                "entry_close": None,
+                "exit_timestamp": None,
                 "realized_close": None,
                 "realized_return": None,
                 "realized_class": None,
             })
         else:
-            current_close = float(history.iloc[position]["close"])
-            future_close = float(history.iloc[future_position]["close"])
-            realized_return = future_close / current_close - 1.0
+            entry_close = float(history.iloc[entry_position]["close"])
+            exit_close = float(history.iloc[exit_position]["close"])
+            realized_return = exit_close / entry_close - 1.0
             scored.update({
                 "outcome_status": "SCORED",
-                "realized_close": future_close,
+                "entry_timestamp": history.iloc[entry_position]["timestamp"].isoformat(),
+                "entry_close": entry_close,
+                "exit_timestamp": history.iloc[exit_position]["timestamp"].isoformat(),
+                "realized_close": exit_close,
                 "realized_return": realized_return,
                 "realized_class": _classify(realized_return),
             })
@@ -121,6 +129,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
             "history_file": str(history_path),
             "examples": 0,
             "pending": int((result["outcome_status"] == "PENDING").sum()),
+            "economic_window": "next_bar_entry_plus_horizon_rows",
         }
     else:
         y_true = scored["realized_class"].map(CLASS_MAP)
@@ -137,6 +146,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
             "balanced_accuracy": round(float(balanced_accuracy_score(y_true, y_pred)), 6),
             "log_loss": round(float(log_loss(y_true, proba, labels=[0, 1, 2])), 6),
             "realized_mean_return": round(float(scored["realized_return"].mean()), 8),
+            "economic_window": "next_bar_entry_plus_horizon_rows",
         }
 
     if output_path:
@@ -146,7 +156,7 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Score D-Predict predictions against realized historical outcomes")
+    parser = argparse.ArgumentParser(description="Score D-Predict predictions on the executable economic window")
     parser.add_argument("ledger", type=Path)
     parser.add_argument("--history", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
