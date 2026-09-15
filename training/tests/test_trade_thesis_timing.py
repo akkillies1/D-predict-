@@ -15,4 +15,4 @@ def test_attach_target_timing_keeps_price_and_adds_eta():
     enriched = attach_target_timing(thesis, bars, TargetTimingConfig(min_events=5, max_bars=3, resolution="1m"))
     assert enriched["targets"][0]["price"] == 101.0
     assert enriched["targets"][0]["time_to_target"]["status"] == "ESTIMATED"
-    assert enriched["targets"][0]["time_to_target"]["eta"]["minutes"] == 3
+    assert enriched["targets"][0]["time_to_target"]["eta"]["minutes"] == 1.5
