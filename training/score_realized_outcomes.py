@@ -94,9 +94,11 @@ def score_file(ledger_path: Path, history_path: Path, output_path: Path | None =
 
         horizon = str(record["horizon"]).lower()
         entry_position = position + 1
-        exit_position = entry_position + HORIZON_ROWS[horizon]
+        # A 1d horizon means enter on the next bar and exit on that bar;
+        # longer horizons extend the holding window by additional bars.
+        exit_position = entry_position + HORIZON_ROWS[horizon] - 1
         scored = dict(record)
-        if exit_position >= len(history):
+        if entry_position >= len(history) or exit_position >= len(history):
             scored.update({
                 "outcome_status": "PENDING",
                 "entry_timestamp": None,
