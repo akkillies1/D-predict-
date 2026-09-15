@@ -45,11 +45,9 @@ WelcomeLabel2=Let’s get D-Predict ready on your computer.
 SelectDirLabel3=Choose where to install D-Predict
 SelectTasksLabel2=Choose any additional setup you want D-Predict to do.
 PreparingDesc=Preparing your computer
-PreparingLabel2=Please wait while D-Predict checks your computer and installs the required components.
-FinishedLabel= D-Predict is ready
+FinishedLabel=D-Predict is ready
 FinishedHeadingLabel=D-Predict is ready
-FinishedLabelNoIcons= D-Predict is ready
-FinishedLabel2=You can launch D-Predict now.
+FinishedLabelNoIcons=D-Predict is ready
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"
