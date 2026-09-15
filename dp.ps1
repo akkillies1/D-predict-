@@ -3,6 +3,7 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $StateRoot = Join-Path $env:LOCALAPPDATA "D-Predict"
 $Run = Join-Path $StateRoot ".run"
 $EnvFile = Join-Path $StateRoot ".env"
+$ComposeFile = Join-Path $Root "docker-compose.yml"
 
 function Info($m) { Write-Host "[d-predict] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[d-predict] $m" -ForegroundColor Yellow }
@@ -24,6 +25,14 @@ function Refresh-Path {
 function Need($name) {
   Refresh-Path
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Die "Missing '$name'. Run D-Predict Repair & Check." }
+}
+function Ensure-ComposeFile {
+  if (-not (Test-Path $ComposeFile)) { Die "D-Predict installation is incomplete: docker-compose.yml is missing from $Root. Run D-Predict Repair & Check." }
+}
+function Invoke-Compose([string[]]$ComposeArgs) {
+  Ensure-ComposeFile
+  & docker compose -f $ComposeFile @ComposeArgs
+  if ($LASTEXITCODE -ne 0) { Die "Docker Compose command failed (exit code $LASTEXITCODE)." }
 }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
 function Import-EnvFile([string]$Path) {
@@ -162,16 +171,16 @@ function Invoke-Doctor {
   if (Test-Path (Join-Path $Root "backend\node_modules")) { Info "backend dependencies: installed" } else { Warn "backend dependencies: missing" }
   if (Test-Path (Join-Path $Root "dashboard\node_modules")) { Info "dashboard dependencies: installed" } else { Warn "dashboard dependencies: missing" }
   if (Test-Path (Join-Path $Root "collector\.venv\Scripts\python.exe")) { Info "collector Python environment: installed" } else { Warn "collector Python environment: missing" }
-  if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose version | Out-Host }
+  if (Get-Command docker -ErrorAction SilentlyContinue) { Ensure-ComposeFile; docker compose -f $ComposeFile version | Out-Host }
 }
 function Invoke-Start {
   Ensure-Env
   Ensure-Tooling
   Ensure-DockerReady
+  Ensure-ComposeFile
   Ensure-RunDir
   Info "Starting PostgreSQL..."
-  docker compose up -d postgres
-  if ($LASTEXITCODE -ne 0) { Die "PostgreSQL could not be started." }
+  Invoke-Compose @('up','-d','postgres')
   Info "Starting API..."
   Start-Detached "api" "npm --prefix backend run dev"
   Info "Starting research service..."
@@ -195,11 +204,11 @@ function Invoke-Stop {
       Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     }
   }
-  if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose stop postgres | Out-Host }
+  if (Get-Command docker -ErrorAction SilentlyContinue) { Ensure-ComposeFile; docker compose -f $ComposeFile stop postgres | Out-Host }
 }
 function Invoke-Status {
   Ensure-Env
-  if (Get-Command docker -ErrorAction SilentlyContinue) { docker compose ps | Out-Host }
+  if (Get-Command docker -ErrorAction SilentlyContinue) { Ensure-ComposeFile; docker compose -f $ComposeFile ps | Out-Host }
   foreach ($name in @('api','research','ui','collector')) {
     $pidFile = Join-Path $Run "$name.pid"
     if (Test-Path $pidFile) {
