@@ -4,48 +4,77 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 
 **Principle:** point-in-time data, reproducible research, explicit uncertainty, executable trade validation, and no automated live orders until research gates pass.
 
-## Windows one-command bootstrap
+## Windows installer — recommended
 
-From PowerShell, the development installation can be bootstrapped with one command:
+Normal Windows users do **not** need to run PowerShell commands.
+
+1. Download the `D-Predict-Setup` artifact produced by the **Windows Installer** GitHub Actions workflow.
+2. Double-click `D-Predict-Setup.exe`.
+3. Choose the installation folder and shortcut options.
+4. Click **Install**.
+5. The installer installs/checks Git, Python 3.12, Node.js 22+, Docker Desktop, downloads the D-predict source, creates the Python environment, installs backend/dashboard dependencies, creates research-data directories, and runs local verification.
+6. At the final page choose **Launch D-Predict**. The launcher starts PostgreSQL, API, research service, dashboard and collector, then opens `http://127.0.0.1:3000`.
+
+The installer intentionally does **not** download historical market data. That is a separate first-run research operation because it can take substantial time and must remain distinguishable from software installation.
+
+### First-run historical research bootstrap
+
+After installation, open **D-Predict Setup / Doctor** or a PowerShell window in the installation directory and run:
+
+```powershell
+.\run.ps1 bootstrap
+```
+
+This downloads real historical data when required and runs the complete validation chain. Use `-Force` to rebuild validation artifacts or `-RefreshData` to intentionally redownload historical data:
+
+```powershell
+.\run.ps1 bootstrap -Force
+.\run.ps1 bootstrap -RefreshData
+```
+
+The repository does not claim model accuracy until real historical data has been downloaded and evaluated.
+
+## Developer / recovery commands
+
+The canonical Windows wrapper is `run.ps1`:
+
+```text
+run.ps1 doctor
+run.ps1 init
+run.ps1 start
+run.ps1 stop
+run.ps1 restart
+run.ps1 status
+run.ps1 test
+run.ps1 bootstrap
+run.ps1 update
+```
+
+`dp.ps1` remains the lower-level service launcher. The double-click `launch-dpredict.ps1` entry point is what the installer shortcuts use.
+
+## Windows one-command bootstrap (fallback)
+
+For development machines where an installer is not desired:
 
 ```powershell
 irm https://raw.githubusercontent.com/akkillies1/D-predict-/main/bootstrap-windows.ps1 | iex
 ```
 
-The bootstrap installs/checks Git, Python 3.12 and Node.js 22+, creates `collector\\.venv`, installs Python/backend/dashboard dependencies, creates local research-data directories, and runs the existing compile/test/build checks. It **does not download market history**.
-
-If you already have the repository locally, run the same script from the repository instead:
-
-```powershell
-.\\bootstrap-windows.ps1
-```
-
-After installation, the local launcher provides the deliberate data/validation boundary:
-
-```powershell
-.\\run.ps1 bootstrap
-```
-
-This downloads real historical data and runs the complete validation chain. Use `--force` to rebuild validation artifacts or `--refresh-data` to intentionally redownload historical data:
-
-```powershell
-.\\run.ps1 bootstrap -Force
-.\\run.ps1 bootstrap -RefreshData
-```
+The bootstrap installs/checks Git, Python 3.12, Node.js 22+ and Docker Desktop, prepares the local source/dependencies and runs compile/test/build checks. It does **not** download market history.
 
 ## Status
 
 - Primary branch: `main`
 - Active roadmap: Sprint 1 — Local Research Terminal & Data Foundation, followed by accuracy/trade-thesis and shadow-promotion gates.
 - Execution: research/evaluation/simulation only; no broker orders.
-- Historical-artifact state: **bootstrap required** on a fresh installation. The repository does not claim model accuracy until real historical data has been downloaded and evaluated.
+- Historical-artifact state: **bootstrap required** on a fresh installation.
 
 ## First-run real-data validation
 
 A fresh installation can bootstrap the complete real-data research/validation chain with:
 
 ```powershell
-.\\collector\\.venv\\Scripts\\python.exe -m training.run_full_validation `
+.\collector\.venv\Scripts\python.exe -m training.run_full_validation `
   --symbols RELIANCE HDFCBANK ICICIBANK INFY TCS SBIN `
   --horizons 1d 3d 5d
 ```
