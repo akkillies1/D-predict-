@@ -1,14 +1,14 @@
 """Bootstrap and persist D-Predict's real-data validation pipeline.
 
-This is the first-run orchestrator for a from-scratch installation. It may
-acquire real historical daily data when local history is missing, then runs
-raw-data validation, point-in-time dataset construction, expanding walk-forward
-prediction, independent executable-window outcome scoring, accuracy comparison,
-and a causal backtest. Nothing is synthesized and nothing is promoted.
+This is the first-run orchestrator for a from-scratch installation. It acquires
+real historical daily data when local history is missing, validates it, builds
+point-in-time datasets, runs expanding walk-forward prediction, independently
+scores the executable economic window, and runs the causal backtest.
 
 Expensive work is persisted under data/validation/. A deterministic fingerprint
 of the exact historical inputs, dataset manifests, configuration, and pipeline
 contract allows later invocations to reuse an unchanged validation bundle.
+Nothing is synthesized and nothing is promoted.
 """
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
-import pandas as pd
 
 from training.backtest import backtest
 from training.score_realized_outcomes import score_file as score_realized
@@ -75,14 +73,14 @@ def _load_registry() -> dict:
 def _write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
 
 
 def _find_reusable(fingerprint: str) -> dict | None:
     registry = _load_registry()
     for bundle in reversed(registry["bundles"]):
-        if bundle.get("fingerprint") != fingerprint:
+        if bundle.get("fingerprint") != fingerprint or bundle.get("status") != "VALIDATED":
             continue
         paths = [ROOT / item for item in bundle.get("artifacts", [])]
         if all(path.exists() for path in paths):
@@ -107,8 +105,7 @@ def _download_missing(symbols: list[str], start: str, end: str | None, refresh: 
 
 def _validate_raw(symbols: list[str]) -> None:
     for symbol in symbols:
-        path = HIST_DIR / f"{symbol.lower()}.csv"
-        _run("training.validate_history", str(path), "--frequency", "1d")
+        _run("training.validate_history", str(HIST_DIR / f"{symbol.lower()}.csv"), "--frequency", "1d")
 
 
 def _build_datasets(symbols: list[str], min_rows: int) -> None:
@@ -142,7 +139,7 @@ def run(
     invalid = sorted(set(horizons) - {"1d", "3d", "5d"})
     if invalid:
         raise ValueError(f"unsupported horizons: {invalid}")
-    if len(symbols) == 0:
+    if not symbols:
         raise ValueError("at least one symbol is required")
     if folds < 2:
         raise ValueError("folds must be >= 2")
@@ -161,9 +158,17 @@ def run(
         raise FileNotFoundError(f"real historical artifacts missing: {missing}")
 
     config = _bundle_config(symbols, horizons, folds, min_rows, start, end)
-    input_files = list(history_files)
-    fingerprint = _fingerprint(input_files, config)
-    reusable = None if force else _find_reusable(fingerprint)
+    manifest_files = [
+        DATASET_DIR / f"{symbol.lower()}_{horizon}.manifest.json"
+        for symbol in symbols
+        for horizon in horizons
+    ]
+    # Existing dataset manifests are part of the cache key. If any are absent,
+    # this is a bootstrap/rebuild rather than a reusable validation run.
+    cache_inputs = history_files + [path for path in manifest_files if path.exists()]
+    cache_complete = len(cache_inputs) == len(history_files) + len(manifest_files)
+    fingerprint = _fingerprint(cache_inputs, config) if cache_complete else None
+    reusable = None if force or fingerprint is None else _find_reusable(fingerprint)
     if reusable:
         print(f"REUSED validation bundle {reusable['bundle_id']} ({reusable['created_at']})")
         return reusable
@@ -173,28 +178,29 @@ def run(
 
     records = []
     artifacts: list[Path] = []
+    input_files = history_files + manifest_files
     for symbol in symbols:
         for horizon in horizons:
             dataset_manifest = DATASET_DIR / f"{symbol.lower()}_{horizon}.manifest.json"
             if not dataset_manifest.exists():
                 raise FileNotFoundError(f"dataset manifest missing after build: {dataset_manifest}")
-            input_files.append(dataset_manifest)
             _run("training.walk_forward", "--symbols", symbol, "--horizons", horizon, "--folds", str(folds))
             ledger = PRED_DIR / f"{symbol.lower()}_{horizon}_walk_forward.csv"
             realized = PRED_DIR / f"{symbol.lower()}_{horizon}_realized.csv"
             raw_score = PRED_DIR / f"{symbol.lower()}_{horizon}_ledger_score.json"
-            realized_summary = score_realized(ledger, HIST_DIR / f"{symbol.lower()}.csv", realized)
+            history = HIST_DIR / f"{symbol.lower()}.csv"
+            realized_summary = score_realized(ledger, history, realized)
             ledger_summary = score_ledger(ledger)
             raw_score.write_text(json.dumps(ledger_summary, indent=2) + "\n", encoding="utf-8")
 
             if realized_summary.get("examples", 0) == 0:
                 raise RuntimeError(f"No scored OOS outcomes for {symbol} {horizon}")
 
-            bt = backtest(ledger, HIST_DIR / f"{symbol.lower()}.csv")
+            bt = backtest(ledger, history)
             backtest_path = VALIDATION_DIR / f"{symbol.lower()}_{horizon}_backtest.json"
-            backtest_path.write_text(json.dumps(bt, indent=2, default=str) + "\n", encoding="utf-8")
+            _write_json(backtest_path, bt)
 
-            record = {
+            records.append({
                 "symbol": symbol,
                 "horizon": horizon,
                 "ledger": str(ledger.relative_to(ROOT)),
@@ -202,14 +208,9 @@ def run(
                 "ledger_score": ledger_summary,
                 "realized_score": realized_summary,
                 "backtest": bt,
-            }
-            records.append(record)
+            })
             artifacts.extend([ledger, realized, raw_score, backtest_path])
 
-    # The final fingerprint includes the dataset manifests actually used to
-    # construct the OOS predictions. This is deliberately computed only after
-    # the first successful build, so a changed feature/data contract invalidates
-    # subsequent reuse.
     final_fingerprint = _fingerprint(input_files, config)
     bundle_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{final_fingerprint[:12]}"
     bundle_dir = VALIDATION_DIR / "bundles" / bundle_id
@@ -236,9 +237,6 @@ def run(
     _write_json(report_path, report)
     artifacts.append(report_path)
 
-    # Store an immutable compact copy of the report in the bundle and maintain a
-    # small registry/pointer for cheap startup lookups. Large CSV artifacts stay
-    # in data/predictions rather than being duplicated into the bundle.
     registry = _load_registry()
     registry["bundles"].append({
         "bundle_id": bundle_id,
@@ -249,7 +247,11 @@ def run(
         "report": str(report_path.relative_to(ROOT)),
     })
     _write_json(REGISTRY_PATH, registry)
-    _write_json(LATEST_PATH, {"bundle_id": bundle_id, "report": str(report_path.relative_to(ROOT)), "fingerprint": final_fingerprint})
+    _write_json(LATEST_PATH, {
+        "bundle_id": bundle_id,
+        "report": str(report_path.relative_to(ROOT)),
+        "fingerprint": final_fingerprint,
+    })
 
     print(json.dumps(report, indent=2, default=str))
     return report
