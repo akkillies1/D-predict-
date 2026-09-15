@@ -11,17 +11,17 @@ DefaultDirName={autopf}\D-Predict
 DefaultGroupName=D-Predict
 DisableProgramGroupPage=no
 OutputDir=dist
-OutputBaseFilename=D-Predict-Setup
+OutputBaseFilename=D-Predict Installer
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\D-Predict Launcher.lnk
+UninstallDisplayIcon={sys}\WindowsPowerShell\v1.0\powershell.exe
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
-Name: "historicaldata"; Description: "Download initial historical market data and run validation after installation"; GroupDescription: "First-run research:"; Flags: unchecked
+Name: "historicaldata"; Description: "Set up market data for research (recommended)"; GroupDescription: "Set up market data:"; Flags: unchecked
 
 [Files]
 Source: "..\bootstrap-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -31,13 +31,25 @@ Source: "..\launch-dpredict.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
-Name: "{group}\D-Predict Setup / Doctor"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"
+Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check and repair D-Predict"
 Name: "{commondesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap-windows.ps1"" -InstallDir ""{app}"" -InstallerMode"; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict and verifying the local environment..."; Flags: waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Downloading historical market data and running validation..."; Flags: waituntilterminated; Tasks: historicaldata
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bootstrap-windows.ps1"" -InstallDir ""{app}"" -InstallerMode"; WorkingDir: "{app}"; StatusMsg: "Preparing your computer and installing D-Predict..."; Flags: waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Setting up market data for research..."; Flags: waituntilterminated; Tasks: historicaldata
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Description: "Launch D-Predict now"; Flags: nowait postinstall skipifsilent
+
+[Messages]
+WelcomeLabel1=Welcome to D-Predict
+WelcomeLabel2=Let’s get D-Predict ready on your computer.
+SelectDirLabel3=Choose where to install D-Predict
+SelectTasksLabel2=Choose any additional setup you want D-Predict to do.
+PreparingDesc=Preparing your computer
+PreparingLabel2=Please wait while D-Predict checks your computer and installs the required components.
+FinishedLabel= D-Predict is ready
+FinishedHeadingLabel=D-Predict is ready
+FinishedLabelNoIcons= D-Predict is ready
+FinishedLabel2=You can launch D-Predict now.
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"
