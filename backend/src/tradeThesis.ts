@@ -34,14 +34,33 @@ function quantile(values: number[], p: number): number {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
 }
 
-async function firstPassageTiming(pool: Pool, symbol: string, targetReturn: number, direction: "LONG" | "SHORT"): Promise<Timing> {
+async function firstPassageTiming(
+  pool: Pool,
+  symbol: string,
+  targetReturn: number,
+  direction: "LONG" | "SHORT",
+  cutoff: Date | string,
+): Promise<Timing> {
+  const cutoffDate = new Date(cutoff);
+  if (!Number.isFinite(cutoffDate.getTime())) {
+    return {
+      status: "INSUFFICIENT_HISTORY",
+      samples: 0,
+      resolution: "1m",
+      method: "empirical_first_passage_time",
+      warning: "Invalid signal timestamp; minute-level ETA is withheld.",
+    };
+  }
+
   const result = await pool.query(
     `select pb.market_timestamp, pb.close
        from price_bars pb
        join instruments i on i.instrument_id=pb.instrument_id
-      where i.symbol=$1 and pb.timeframe='1m'
+      where i.symbol=$1
+        and pb.timeframe='1m'
+        and pb.market_timestamp <= $2
       order by pb.market_timestamp desc limit 5000`,
-    [symbol],
+    [symbol, cutoffDate],
   );
   const bars = result.rows.reverse().map(row => ({
     timestamp: new Date(row.market_timestamp).getTime(),
@@ -153,7 +172,7 @@ export async function buildCausalTradeThesis(pool: Pool, signal: SignalRow, entr
   const reward = Math.abs(targets[0].price - entryPrice);
   const thesisTargets = [];
   for (const target of targets) {
-    const timing = await firstPassageTiming(pool, signal.symbol, target.return, direction);
+    const timing = await firstPassageTiming(pool, signal.symbol, target.return, direction, signal.timestamp);
     thesisTargets.push({ ...target, timing });
   }
 
