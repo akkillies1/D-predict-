@@ -1,6 +1,6 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #endif
 #define MyAppPublisher "D-Predict"
 
@@ -30,6 +30,7 @@ Source: "..\bootstrap-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\run.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\launch-dpredict.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
