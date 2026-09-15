@@ -9,6 +9,61 @@ D-predict is a local-first research and market-analysis cockpit for Indian equit
 - Primary branch: `main`
 - Active roadmap: Sprint 1 — Local Research Terminal & Data Foundation, followed by accuracy/trade-thesis and shadow-promotion gates.
 - Execution: research/evaluation/simulation only; no broker orders.
+- Historical-artifact state: **bootstrap required** on a fresh installation. The repository does not claim model accuracy until real historical data has been downloaded and evaluated.
+
+## First-run real-data validation
+
+A fresh installation can bootstrap the complete real-data research/validation chain with:
+
+```powershell
+.\collector\.venv\Scripts\python.exe -m training.run_full_validation `
+  --symbols RELIANCE HDFCBANK ICICIBANK INFY TCS SBIN `
+  --horizons 1d 3d 5d
+```
+
+The orchestrator downloads real daily history only when the selected local CSV is missing, validates the raw history, builds point-in-time datasets, runs purge-aware expanding walk-forward evaluation, independently scores the **executable economic window**, and runs the causal backtest. It never generates synthetic market data and never promotes a model.
+
+The economic validation invariant is:
+
+```text
+prediction at T
+    ↓
+entry at next available historical bar
+    ↓
+hold requested trading-row horizon
+    ↓
+exit
+    ↓
+ONE realized outcome used for validation/backtest
+```
+
+This prevents a prediction from being counted as correct using a price move that the simulated trade could not have captured.
+
+### Persistent local artifacts
+
+The first run creates:
+
+```text
+data/
+├── historical/                  # real downloaded/source OHLCV
+├── training/                    # point-in-time datasets + manifests
+├── predictions/                 # OOS prediction + realized ledgers
+└── validation/
+    ├── registry.json            # cheap persistent cache index
+    ├── latest.json              # current bundle pointer
+    ├── bundles/<bundle-id>/     # immutable validation report
+    └── *_backtest.json          # versioned backtest evidence
+```
+
+These generated market-data and validation artifacts are local research state; they are not source code and should not be committed to GitHub by default.
+
+### Reuse instead of rerunning everything
+
+Subsequent invocations calculate a deterministic fingerprint from the selected real historical files, dataset manifests, configuration, and validation contract. If the fingerprint and required artifacts are unchanged, the runner returns `REUSED` and does not repeat the expensive walk-forward/backtest.
+
+Use `--force` to deliberately rebuild the validation bundle. Use `--refresh-data` when you intentionally want to redownload the selected historical source.
+
+A live quote refresh does **not** invalidate the historical validation bundle. Validation should be rerun when historical inputs, dataset/feature definitions, model/validation contract, or strategy/risk configuration changes, or on a deliberate scheduled review.
 
 ## Sprint completion policy
 
@@ -17,6 +72,8 @@ A sprint is only considered **implemented** when its code path, tests and docume
 ### Sprint 1 — Local Research Terminal & Data Foundation
 
 **Engineering scope: implemented.** The repository contains canonical instruments, market-data freshness, historical validation, point-in-time datasets, purge-aware walk-forward evaluation, prediction/realized-outcome scoring, risk/backtest, shadow simulation, MarketState, context primitives, signal quality, active-position primitives and the six-stock validation harness.
+
+**Real-data validation: bootstrap pending.** `training/run_full_validation.py` is now the first-run entry point for creating the real OOS evidence required by later promotion gates.
 
 ### Sprint 2 — Accuracy & Trade Thesis
 
@@ -128,10 +185,13 @@ PROMOTION GATE
 ## Future improvement checklist
 
 ### Accuracy
+- [x] First-run real historical-data bootstrap orchestrator
+- [x] Executable economic-window realized outcome scoring
+- [x] Persistent validation bundle fingerprint/reuse
 - [x] Untouched temporal holdout evaluator
 - [x] Leakage-safe OOS probability calibration primitive
 - [x] Real-artifact raw-vs-calibrated comparison runner
-- [ ] Execute comparison on real historical artifacts
+- [ ] Execute first bootstrap on real historical artifacts locally
 - [ ] Validate calibrated probabilities on an untouched future period
 - [ ] Use an untouched temporal holdout for final model selection on real historical artifacts
 - [ ] Compare candidates using trade-level and return-level metrics, not accuracy alone
