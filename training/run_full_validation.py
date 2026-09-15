@@ -3,7 +3,8 @@
 This is the first-run orchestrator for a from-scratch installation. It acquires
 real historical daily data when local history is missing, validates it, builds
 point-in-time datasets, runs expanding walk-forward prediction, independently
-scores the executable economic window, and runs the causal backtest.
+scores the executable economic window, evaluates calibration/stability, and
+runs the causal backtest.
 
 Expensive work is persisted under data/validation/. A deterministic fingerprint
 of the exact historical inputs, dataset manifests, configuration, and pipeline
@@ -20,9 +21,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
+
+from training.analyze_prediction_stability import analyze as analyze_stability
 from training.backtest import backtest
-from training.score_realized_outcomes import score_file as score_realized
+from training.probability_calibration import CalibrationConfig, calibrate_oos, score_calibration
 from training.score_prediction_ledger import score_file as score_ledger
+from training.score_realized_outcomes import score_file as score_realized
 
 ROOT = Path(__file__).resolve().parents[1]
 HIST_DIR = ROOT / "data" / "historical"
@@ -31,7 +36,7 @@ PRED_DIR = ROOT / "data" / "predictions"
 VALIDATION_DIR = ROOT / "data" / "validation"
 REGISTRY_PATH = VALIDATION_DIR / "registry.json"
 LATEST_PATH = VALIDATION_DIR / "latest.json"
-CONTRACT_VERSION = "full-validation-v1"
+CONTRACT_VERSION = "full-validation-v2"
 
 DEFAULT_SYMBOLS = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN"]
 DEFAULT_HORIZONS = ["1d", "3d", "5d"]
@@ -120,6 +125,7 @@ def _bundle_config(symbols: list[str], horizons: list[str], folds: int, min_rows
         "min_rows": min_rows,
         "history_start": start,
         "history_end": end,
+        "calibration_min_history": 100,
         "contract_version": CONTRACT_VERSION,
     }
 
@@ -163,8 +169,6 @@ def run(
         for symbol in symbols
         for horizon in horizons
     ]
-    # Existing dataset manifests are part of the cache key. If any are absent,
-    # this is a bootstrap/rebuild rather than a reusable validation run.
     cache_inputs = history_files + [path for path in manifest_files if path.exists()]
     cache_complete = len(cache_inputs) == len(history_files) + len(manifest_files)
     fingerprint = _fingerprint(cache_inputs, config) if cache_complete else None
@@ -184,20 +188,30 @@ def run(
             dataset_manifest = DATASET_DIR / f"{symbol.lower()}_{horizon}.manifest.json"
             if not dataset_manifest.exists():
                 raise FileNotFoundError(f"dataset manifest missing after build: {dataset_manifest}")
+
             _run("training.walk_forward", "--symbols", symbol, "--horizons", horizon, "--folds", str(folds))
             ledger = PRED_DIR / f"{symbol.lower()}_{horizon}_walk_forward.csv"
             realized = PRED_DIR / f"{symbol.lower()}_{horizon}_realized.csv"
             raw_score = PRED_DIR / f"{symbol.lower()}_{horizon}_ledger_score.json"
+            calibration_path = VALIDATION_DIR / f"{symbol.lower()}_{horizon}_probability_calibration.json"
+            stability_path = VALIDATION_DIR / f"{symbol.lower()}_{horizon}_stability.json"
+            backtest_path = VALIDATION_DIR / f"{symbol.lower()}_{horizon}_backtest.json"
             history = HIST_DIR / f"{symbol.lower()}.csv"
+
             realized_summary = score_realized(ledger, history, realized)
             ledger_summary = score_ledger(ledger)
             raw_score.write_text(json.dumps(ledger_summary, indent=2) + "\n", encoding="utf-8")
-
             if realized_summary.get("examples", 0) == 0:
                 raise RuntimeError(f"No scored OOS outcomes for {symbol} {horizon}")
 
+            realized_frame = pd.read_csv(realized, parse_dates=["timestamp"])
+            calibrated = calibrate_oos(realized_frame, CalibrationConfig(min_history=100))
+            calibration_summary = score_calibration(calibrated)
+            _write_json(calibration_path, calibration_summary)
+            stability_summary = analyze_stability(realized, history)
+            _write_json(stability_path, stability_summary)
+
             bt = backtest(ledger, history)
-            backtest_path = VALIDATION_DIR / f"{symbol.lower()}_{horizon}_backtest.json"
             _write_json(backtest_path, bt)
 
             records.append({
@@ -207,9 +221,11 @@ def run(
                 "realized_ledger": str(realized.relative_to(ROOT)),
                 "ledger_score": ledger_summary,
                 "realized_score": realized_summary,
+                "probability_calibration": calibration_summary,
+                "stability": stability_summary,
                 "backtest": bt,
             })
-            artifacts.extend([ledger, realized, raw_score, backtest_path])
+            artifacts.extend([ledger, realized, raw_score, calibration_path, stability_path, backtest_path])
 
     final_fingerprint = _fingerprint(input_files, config)
     bundle_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{final_fingerprint[:12]}"
@@ -217,7 +233,7 @@ def run(
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     report = {
-        "schema_version": "validation-bundle-v1",
+        "schema_version": "validation-bundle-v2",
         "bundle_id": bundle_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "fingerprint": final_fingerprint,
@@ -227,10 +243,11 @@ def run(
         "status": "VALIDATED",
         "records": records,
         "notes": [
-            "First-run bootstrap uses real historical market data only.",
+            "Bootstrap uses real historical market data only.",
             "Independent outcome scoring uses next-bar entry plus requested trading-row horizon.",
-            "This bundle is evaluation evidence, not model promotion.",
-            "Future invocations reuse the bundle when its fingerprint is unchanged.",
+            "Calibration is leakage-safe and uses only observations strictly prior to each prediction.",
+            "Validation evidence does not imply model promotion.",
+            "Future invocations reuse the bundle when its fingerprint and required artifacts are unchanged.",
         ],
     }
     report_path = bundle_dir / "report.json"
