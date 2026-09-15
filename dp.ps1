@@ -7,7 +7,24 @@ $EnvFile = Join-Path $StateRoot ".env"
 function Info($m) { Write-Host "[d-predict] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "[d-predict] $m" -ForegroundColor Yellow }
 function Die($m) { Write-Host "[d-predict] $m" -ForegroundColor Red; exit 1 }
-function Need($name) { if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Die "Missing '$name'. Run D-Predict Repair & Check." } }
+function Refresh-Path {
+  $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+  $user = [Environment]::GetEnvironmentVariable('Path','User')
+  $env:Path = "$machine;$user"
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'nodejs'),
+    (Join-Path ${env:ProgramFiles(x86)} 'nodejs'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
+    (Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin')
+  )
+  foreach ($dir in $candidates) {
+    if ($dir -and (Test-Path $dir) -and (($env:Path -split ';') -notcontains $dir)) { $env:Path = "$dir;$env:Path" }
+  }
+}
+function Need($name) {
+  Refresh-Path
+  if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Die "Missing '$name'. Run D-Predict Repair & Check." }
+}
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
 function Import-EnvFile([string]$Path) {
   if (-not (Test-Path $Path)) { return $false }
@@ -73,6 +90,16 @@ function Ensure-Env {
   $defaults.GetEnumerator() | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value } | Set-Content -Path $EnvFile -Encoding UTF8
 }
 function Ensure-DockerReady {
+  Refresh-Path
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
+    if (Test-Path $bootstrap) {
+      Info "Docker is not on PATH; repairing local prerequisites..."
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -InstallerMode -SkipChecks
+      Refresh-Path
+    }
+  }
+  Need docker
   docker info *> $null
   if ($LASTEXITCODE -eq 0) { return }
   $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
@@ -87,15 +114,36 @@ function Ensure-DockerReady {
   }
   Die "Docker Desktop is installed but the Docker engine is not ready. Start Docker Desktop and try again."
 }
+function Ensure-Tooling {
+  Refresh-Path
+  $missing = @()
+  foreach ($name in @('node','npm','docker')) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { $missing += $name }
+  }
+  $pythonExe = Join-Path $Root 'collector\.venv\Scripts\python.exe'
+  if ($missing.Count -gt 0 -or -not (Test-Path $pythonExe)) {
+    $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
+    if (-not (Test-Path $bootstrap)) { Die "D-Predict installation is incomplete: bootstrap-windows.ps1 is missing." }
+    Info "Required local components are missing; running automatic repair..."
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -InstallerMode -SkipChecks
+    if ($LASTEXITCODE -ne 0) { Die "Automatic prerequisite repair failed. Run D-Predict Repair & Check." }
+    Refresh-Path
+  }
+  Need node
+  Need npm
+  Need docker
+  if (-not (Test-Path $pythonExe)) { Die "Collector Python environment is missing. Run D-Predict Repair & Check." }
+}
 function Start-Detached($name, $command) {
   Ensure-RunDir
+  Refresh-Path
   $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-Command',$command -WorkingDirectory $Root -PassThru
   Set-Content -Path (Join-Path $Run "$name.pid") -Value $p.Id
   Info "$name started (PID $($p.Id))"
 }
 function Invoke-Init {
   Ensure-Env
-  Need node; Need npm; Need python; Need docker
+  Ensure-Tooling
   Info "Installing backend dependencies..."
   npm --prefix backend install
   Info "Installing dashboard dependencies..."
@@ -108,7 +156,8 @@ function Invoke-Init {
 }
 function Invoke-Doctor {
   Ensure-Env
-  foreach ($c in @('node','npm','python','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "${c}: available" } else { Warn "${c}: missing" } }
+  Refresh-Path
+  foreach ($c in @('node','npm','python','py','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "${c}: available" } else { Warn "${c}: missing" } }
   Info ".env: $EnvFile"
   if (Test-Path (Join-Path $Root "backend\node_modules")) { Info "backend dependencies: installed" } else { Warn "backend dependencies: missing" }
   if (Test-Path (Join-Path $Root "dashboard\node_modules")) { Info "dashboard dependencies: installed" } else { Warn "dashboard dependencies: missing" }
@@ -117,7 +166,7 @@ function Invoke-Doctor {
 }
 function Invoke-Start {
   Ensure-Env
-  Need node; Need npm; Need python; Need docker
+  Ensure-Tooling
   Ensure-DockerReady
   Ensure-RunDir
   Info "Starting PostgreSQL..."
@@ -162,7 +211,7 @@ function Invoke-Status {
   }
 }
 function Invoke-Test {
-  Need npm
+  Ensure-Tooling
   npm --prefix backend test
   npm --prefix dashboard run check
   npm --prefix dashboard run build
@@ -177,10 +226,10 @@ switch ($Command) {
   "stop" { Invoke-Stop }
   "status" { Invoke-Status }
   "test" { Invoke-Test }
-  "api" { Need npm; npm --prefix backend run dev }
-  "research" { Need npm; npm --prefix backend exec -- tsx src/research-server.ts }
-  "ui" { Need npm; npm --prefix dashboard run dev }
-  "collect" { $python = Join-Path $Root "collector\.venv\Scripts\python.exe"; if (-not (Test-Path $python)) { Die "Run D-Predict Repair & Check first." }; & $python -m collector.main }
+  "api" { Ensure-Tooling; npm --prefix backend run dev }
+  "research" { Ensure-Tooling; npm --prefix backend exec -- tsx src/research-server.ts }
+  "ui" { Ensure-Tooling; npm --prefix dashboard run dev }
+  "collect" { Ensure-Tooling; $python = Join-Path $Root "collector\.venv\Scripts\python.exe"; & $python -m collector.main }
   default {
     Write-Host "D-Predict Windows launcher"
     Write-Host "Usage: .\dp.ps1 <command>"
