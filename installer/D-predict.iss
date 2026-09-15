@@ -39,11 +39,16 @@ Name: "{commondesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoP
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" bootstrap"; WorkingDir: "{app}"; StatusMsg: "Setting up market data for research..."; Flags: waituntilterminated; Tasks: historicaldata
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Description: "Launch D-Predict now"; Flags: nowait postinstall skipifsilent; Check: BootstrapSucceeded
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Description: "Launch D-Predict now"; Flags: nowait postinstall skipifsilent; Check: IsBootstrapSucceeded
 
 [Code]
 var
   BootstrapSucceeded: Boolean;
+
+function IsBootstrapSucceeded: Boolean;
+begin
+  Result := BootstrapSucceeded;
+end;
 
 procedure RunBootstrap;
 var
