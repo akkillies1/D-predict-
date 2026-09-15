@@ -80,7 +80,6 @@ def calibrate_return_distributions(ledger: pd.DataFrame, config: ReturnDistribut
                     item[key] = float(row.predicted_return + residual_quantile)
                 item["distribution_status"] = "CALIBRATED"
             output.append(item)
-            # Current outcome enters history only after its own distribution.
             residuals.append(float(row.target_return - row.predicted_return))
     return pd.DataFrame(output)
 
@@ -114,8 +113,9 @@ def construct_trade_thesis(row: pd.Series, entry_price: float, config: ReturnDis
     stop_quantile_probability = config.stop_probability if direction == "LONG" else 1.0 - config.stop_probability
     stop_return = _distribution_quantile(row, stop_quantile_probability)
     stop_is_valid = (direction == "LONG" and stop_return < 0) or (direction == "SHORT" and stop_return > 0)
+    expected_return = float(row.get("predicted_return", row.get("return_p55", 0.0)))
     if not stop_is_valid or not target_returns:
-        return {"symbol": str(row["symbol"]), "timestamp": pd.Timestamp(row["timestamp"]).isoformat(), "direction": direction, "signal": "NO_TRADE", "decision": "NO_TRADE", "reason": "INSUFFICIENT_ECONOMIC_EDGE", "expected_return": float(row["predicted_return"]), "distribution_status": "CALIBRATED"}
+        return {"symbol": str(row["symbol"]), "timestamp": pd.Timestamp(row["timestamp"]).isoformat(), "direction": direction, "signal": "NO_TRADE", "decision": "NO_TRADE", "reason": "INSUFFICIENT_ECONOMIC_EDGE", "expected_return": expected_return, "distribution_status": "CALIBRATED"}
     targets = [{"return": float(r), "price": float(entry_price * (1.0 + r)), "probability": float(p)} for r, p in zip(target_returns, config.target_probabilities)]
     stop_price = float(entry_price * (1.0 + stop_return))
     risk = abs(entry_price - stop_price)
@@ -125,7 +125,7 @@ def construct_trade_thesis(row: pd.Series, entry_price: float, config: ReturnDis
     signal = "STRONG BUY" if direction == "LONG" and confidence >= 0.70 else "BUY" if direction == "LONG" else "STRONG SELL" if confidence >= 0.70 else "SELL"
     return {
         "symbol": str(row["symbol"]), "timestamp": pd.Timestamp(row["timestamp"]).isoformat(), "direction": direction,
-        "signal": signal, "decision": "EXECUTABLE", "entry_price": float(entry_price), "expected_return": float(row["predicted_return"]),
+        "signal": signal, "decision": "EXECUTABLE", "entry_price": float(entry_price), "expected_return": expected_return,
         "horizon": str(row["horizon"]), "targets": targets,
         "stop": {"price": stop_price, "probability": float(config.stop_probability), "return": float(stop_return)},
         "risk_reward_to_target_1": float(risk_reward) if risk_reward is not None else None,
