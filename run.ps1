@@ -12,7 +12,7 @@ Set-Location $Root
 switch ($Command) {
     'bootstrap' {
         $Python = Join-Path $Root 'collector\.venv\Scripts\python.exe'
-        if (-not (Test-Path $Python)) { throw 'D-Predict is not installed. Run the Windows installer first.' }
+        if (-not (Test-Path $Python)) { throw 'D-Predict is not installed. Run install-dpredict.ps1 or the Windows installer first.' }
         $args = @('-m','training.run_full_validation','--symbols','RELIANCE','HDFCBANK','ICICIBANK','INFY','TCS','SBIN','--horizons','1d','3d','5d')
         if ($Force) { $args += '--force' }
         if ($RefreshData) { $args += '--refresh-data' }
