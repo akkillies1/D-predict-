@@ -63,11 +63,13 @@ function Ensure-Tooling {
   if (-not (Test-Path $python)) { Die 'Collector Python environment is missing. Run Repair & Check.' }
 }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
-function Compose([string[]]$Args) {
+function Invoke-Compose([string[]]$ComposeArgs) {
   Ensure-ComposeFile
-  & docker compose -f $ComposeFile @Args
+  $dockerArgs = @('-f', $ComposeFile) + $ComposeArgs
+  & docker compose @dockerArgs
   if ($LASTEXITCODE -ne 0) { Die "Docker Compose failed (exit code $LASTEXITCODE)." }
 }
+function Compose([string[]]$ComposeArgs) { Invoke-Compose $ComposeArgs }
 function Start-Detached($name,$command) {
   Ensure-RunDir
   $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-Command',$command -WorkingDirectory $Root -PassThru
@@ -85,7 +87,7 @@ function Invoke-Start {
   if ($profile -eq 'local') { Info "Starting local PostgreSQL at $($env:D_PREDICT_DATA_DIR)" } else { Info "Using user-owned $($env:DATABASE_MODE) database" }
   if ($profile -eq 'local') {
     Info 'Starting PostgreSQL...'
-    Compose @('--profile','local','up','-d','--build','postgres')
+    Compose @('--profile','local','up','-d','postgres')
     $postgresReady = $false
     for ($i = 0; $i -lt 60; $i++) {
       & docker compose -f $ComposeFile exec -T postgres pg_isready -U postgres -d nifty *> $null
