@@ -4,6 +4,7 @@ import { runBacktest } from "./backtest/backtestHarness.js";
 import { runTradeConstructionEngine } from "./construction/tradeConstructionEngine.js";
 import { runConstructionBacktest } from "./backtest/constructionBacktest.js";
 import { runForecastEngine } from "./forecast/forecastEngine.js";
+import { runShadowTradingEngine } from "./shadow/shadowTradingEngine.js";
 import { pool } from "./db.js";
 
 async function main() {
@@ -28,6 +29,9 @@ async function main() {
     case "forecast":
       await runForecastEngine();
       break;
+    case "shadow":
+      await runShadowTradingEngine();
+      break;
     case "worker": {
       const intervalMs = Math.max(10_000, Number(process.env.ENGINE_POLL_SECONDS ?? 60) * 1000);
       console.log(`[engine] worker started; polling every ${intervalMs / 1000}s`);
@@ -35,6 +39,8 @@ async function main() {
         try {
           await runFeatureEngine();
           await runSignalEngine();
+          await runTradeConstructionEngine();
+          await runShadowTradingEngine();
         } catch (error) {
           console.error("[engine] worker cycle failed; will retry", error);
         }
@@ -42,7 +48,7 @@ async function main() {
       }
     }
     default:
-      console.log("Usage: tsx src/index.ts <features|signal|backtest|construct|backtest-construction|forecast|worker>");
+      console.log("Usage: tsx src/index.ts <features|signal|backtest|construct|backtest-construction|forecast|shadow|worker>");
       process.exitCode = 1;
   }
 
