@@ -9,7 +9,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - nifty-db:/var/lib/postgresql/data
+      - ${D_PREDICT_DATA_DIR:-./data/runtime}/postgres:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
       - ./db/migrations/002_prediction_ml.sql:/docker-entrypoint-initdb.d/002-prediction-ml.sql:ro
       - ./db/migrations/003_instrument_metadata.sql:/docker-entrypoint-initdb.d/003-instrument-metadata.sql:ro
@@ -42,13 +42,12 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     command: ["npm", "run", "worker"]
-    environment:
-      ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
 
   api:
     build:
@@ -80,6 +79,3 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-volumes:
-  nifty-db:
