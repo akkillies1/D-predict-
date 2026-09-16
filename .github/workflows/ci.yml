@@ -19,11 +19,17 @@ jobs:
           python-version: "3.12"
       - name: Backend install and test
         run: npm ci --prefix backend && npm test --prefix backend
+      - name: Engine install, test and build
+        run: npm ci --prefix engine && npm test --prefix engine && npm run build --prefix engine
       - name: Dashboard install, test, typecheck and build
         run: npm ci --legacy-peer-deps --prefix dashboard && npm test --prefix dashboard && npm run check --prefix dashboard && npm run build --prefix dashboard
       - name: Python dependencies
-        run: python -m pip install -r collector/requirements.txt pytest scikit-learn
+        run: python -m pip install -r collector/requirements.txt -r ml-service/requirements.txt pytest scikit-learn
       - name: Collector compile check
         run: python -m compileall -q collector
+      - name: ML inference compile check
+        run: python -m compileall -q ml-service
       - name: Training compile and test
         run: python -m compileall -q training && python -m pytest training/tests -q
+      - name: Build ML inference image
+        run: docker build -f ml-service/Dockerfile -t d-predict-ml:ci .
