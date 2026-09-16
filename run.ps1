@@ -20,6 +20,19 @@ switch ($Command) {
         exit $LASTEXITCODE
     }
     'validate' { & $MyInvocation.MyCommand.Path -Command bootstrap -Force:$Force -RefreshData:$RefreshData; exit $LASTEXITCODE }
+    'doctor' {
+        $marker = Join-Path $env:LOCALAPPDATA 'D-Predict\.install-complete'
+        if (-not (Test-Path $marker)) {
+            $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
+            if (-not (Test-Path $bootstrap)) { throw 'Windows bootstrap script is missing from the installation.' }
+            Write-Host 'Installation is incomplete; starting D-Predict prerequisite repair...' -ForegroundColor Yellow
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -SourceRef main
+            if ($LASTEXITCODE -ne 0) { throw "D-Predict repair failed (exit code $LASTEXITCODE). See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
+            if (-not (Test-Path $marker)) { throw "D-Predict repair finished without creating the completion marker. See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
+        }
+        & (Join-Path $Root 'dp.ps1') doctor
+        exit $LASTEXITCODE
+    }
     'update' {
         if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required for update.' }
         git pull --ff-only
