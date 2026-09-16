@@ -41,6 +41,13 @@ jobs:
         shell: powershell
         run: choco install innosetup -y --no-progress
 
+      - name: Validate dashboard lockfile
+        shell: powershell
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+          pnpm --dir dashboard install --frozen-lockfile --ignore-scripts
+
       - name: Compile installer
         shell: powershell
         run: |
