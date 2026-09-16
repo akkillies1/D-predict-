@@ -4,6 +4,7 @@ $StateRoot = Join-Path $env:LOCALAPPDATA 'D-Predict'
 $LogDir = Join-Path $StateRoot 'logs'
 $LogFile = Join-Path $LogDir 'launcher.log'
 $BootstrapLog = Join-Path $LogDir 'bootstrap.log'
+$CompleteMarker = Join-Path $StateRoot '.install-complete'
 Set-Location $Root
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 
@@ -14,6 +15,11 @@ function Log([string]$Message) {
 
 try {
   Log 'D-Predict launcher starting.'
+
+  if (-not (Test-Path $CompleteMarker)) {
+    throw "D-Predict installation is incomplete. Run 'D-Predict Setup & Repair' first. See $BootstrapLog"
+  }
+
   & (Join-Path $Root 'run.ps1') start *>&1 | Tee-Object -FilePath $LogFile -Append
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
