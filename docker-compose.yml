@@ -20,6 +20,7 @@ services:
       - ./db/migrations/006_seed_instruments.sql:/docker-entrypoint-initdb.d/006-seed-instruments.sql:ro
       - ./db/migrations/007_live_ml_ledger.sql:/docker-entrypoint-initdb.d/007-live-ml-ledger.sql:ro
       - ./db/migrations/008_shadow_trading.sql:/docker-entrypoint-initdb.d/008-shadow-trading.sql:ro
+      - ./db/migrations/009_option_paper_trading.sql:/docker-entrypoint-initdb.d/009-option-paper-trading.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
       interval: 5s
