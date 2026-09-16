@@ -52,13 +52,17 @@ async function firstPassageTiming(
     };
   }
 
+  // Calibration is intentionally point-in-time: each historical entry is
+  // before the signal cutoff, while bars after that entry provide its future
+  // first-passage outcome. Never include bars at or after the live signal
+  // timestamp, because those observations would leak the current outcome.
   const result = await pool.query(
     `select pb.market_timestamp, pb.close
        from price_bars pb
        join instruments i on i.instrument_id=pb.instrument_id
       where i.symbol=$1
         and pb.timeframe='1m'
-        and pb.market_timestamp <= $2
+        and pb.market_timestamp < $2
       order by pb.market_timestamp desc limit 5000`,
     [symbol, cutoffDate],
   );

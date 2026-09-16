@@ -16,8 +16,8 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
 fi
 
-log "Starting PostgreSQL, API, research service, collector and engine..."
-docker compose up -d postgres api research collector engine
+log "Starting local PostgreSQL..."
+docker compose --profile local up -d postgres
 
 log "Waiting for PostgreSQL..."
 for i in {1..60}; do
@@ -25,6 +25,9 @@ for i in {1..60}; do
   [[ "$i" == 60 ]] && fail "PostgreSQL did not become ready. Run: docker compose logs postgres --tail=100"
   sleep 1
 done
+
+log "Starting API, research service, collector and engine..."
+docker compose --profile local up -d api research collector engine
 
 log "Waiting for API on http://127.0.0.1:4100..."
 for i in {1..60}; do

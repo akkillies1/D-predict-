@@ -31,6 +31,7 @@ FEATURE_COLUMNS = [
 ]
 CLASS_MAP = {"DOWN": 0, "FLAT": 1, "UP": 2}
 CLASS_NAMES = ["DOWN", "FLAT", "UP"]
+DEFAULT_VALIDATION_FRACTION = 0.20
 
 
 def load_dataset(symbol: str, horizon: str, test_fraction: float) -> PointInTimeDataset:
@@ -53,7 +54,15 @@ def load_dataset(symbol: str, horizon: str, test_fraction: float) -> PointInTime
         label_horizon=horizon,
     )
     purge_rows = {"1d": 1, "3d": 3, "5d": 5}.get(horizon, 1)
-    segments = make_segments(df.index, train_fraction=1 - test_fraction, purge_rows=purge_rows)
+    train_fraction = 1.0 - test_fraction - DEFAULT_VALIDATION_FRACTION
+    if train_fraction <= 0:
+        raise ValueError("test fraction leaves no room for the training and validation splits")
+    segments = make_segments(
+        df.index,
+        train_fraction=train_fraction,
+        validation_fraction=DEFAULT_VALIDATION_FRACTION,
+        purge_rows=purge_rows,
+    )
     dataset = PointInTimeDataset(spec, df, segments)
     dataset.validate()
     return dataset

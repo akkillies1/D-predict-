@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from training.dataset import DatasetSpec, PointInTimeDataset, make_segments
+from training.train_baseline import DEFAULT_VALIDATION_FRACTION
 
 
 def sample_frame() -> pd.DataFrame:
@@ -27,6 +28,24 @@ def test_segments_are_chronological_and_purged() -> None:
     assert [segment.name for segment in segments] == ["train", "validation", "test"]
     assert segments[0].end <= segments[1].start
     assert segments[1].end <= segments[2].start
+
+
+def test_baseline_default_fractions_leave_a_test_segment() -> None:
+    index = sample_frame().index
+    test_fraction = 0.20
+    train_fraction = 1.0 - test_fraction - DEFAULT_VALIDATION_FRACTION
+    segments = make_segments(
+        index,
+        train_fraction=train_fraction,
+        validation_fraction=DEFAULT_VALIDATION_FRACTION,
+        purge_rows=1,
+    )
+    assert train_fraction == pytest.approx(0.60)
+    assert segments[0].name == "train"
+    assert segments[1].name == "validation"
+    assert segments[2].name == "test"
+    assert segments[0].start < segments[0].end <= segments[1].start
+    assert segments[1].start < segments[1].end <= segments[2].start
 
 
 def test_dataset_rejects_future_source_cutoff() -> None:

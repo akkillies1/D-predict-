@@ -83,7 +83,20 @@ function Invoke-Start {
   $profile = if ($env:DATABASE_MODE -eq 'local_postgres') { 'local' } else { 'remote' }
   $env:COMPOSE_DATABASE_URL = if ($profile -eq 'local') { 'postgresql://postgres:localdev@postgres:5432/nifty' } else { $env:DATABASE_URL }
   if ($profile -eq 'local') { Info "Starting local PostgreSQL at $($env:D_PREDICT_DATA_DIR)" } else { Info "Using user-owned $($env:DATABASE_MODE) database" }
-  Compose @('--profile',$profile,'up','-d','--build')
+  if ($profile -eq 'local') {
+    Info 'Starting PostgreSQL...'
+    Compose @('--profile','local','up','-d','--build','postgres')
+    $postgresReady = $false
+    for ($i = 0; $i -lt 60; $i++) {
+      & docker compose -f $ComposeFile exec -T postgres pg_isready -U postgres -d nifty *> $null
+      if ($LASTEXITCODE -eq 0) { $postgresReady = $true; break }
+      Start-Sleep -Seconds 1
+    }
+    if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
+    Compose @('--profile','local','up','-d','--build','api','research','collector','engine')
+  } else {
+    Compose @('--profile',$profile,'up','-d','--build')
+  }
   Ensure-RunDir
   Info 'Starting dashboard...'
   Start-Detached 'ui' 'npm --prefix dashboard run dev'
