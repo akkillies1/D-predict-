@@ -8,7 +8,7 @@ dotenv.config();
 
 const { Pool } = pg;
 const app = express();
-const port = Number(process.env.PORT ?? 8787);
+const port = Number(process.env.API_PORT ?? process.env.PORT ?? 8787);
 const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false } }) : null;
 
 app.use(cors());
