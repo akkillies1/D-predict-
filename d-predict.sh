@@ -26,6 +26,9 @@ for i in {1..60}; do
   sleep 1
 done
 
+log "Applying idempotent shadow trading migration..."
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/008-shadow-trading.sql >/dev/null
+
 log "Starting API, research, ML inference, collector and engine..."
 docker compose --profile local up -d api research ml collector engine
 
@@ -84,7 +87,7 @@ done
 [[ -n "$DASHBOARD_URL" ]] || { tail -n 100 "$DASHBOARD_LOG" || true; fail "Dashboard did not start."; }
 
 log "D-Predict is ready."
-printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  Research  : http://127.0.0.1:4200/health\n  ML model  : http://127.0.0.1:4300/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
+printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  Shadow API: http://127.0.0.1:4100/api/shadow/portfolio\n  Research  : http://127.0.0.1:4200/health\n  ML model  : http://127.0.0.1:4300/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
 
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$DASHBOARD_URL" >/dev/null 2>&1 || true
