@@ -12,6 +12,7 @@
     "construct": "tsx src/index.ts construct",
     "backtest-construction": "tsx src/index.ts backtest-construction",
     "forecast": "tsx src/index.ts forecast",
+    "shadow": "tsx src/index.ts shadow",
     "worker": "node dist/index.js worker"
   },
   "dependencies": {
