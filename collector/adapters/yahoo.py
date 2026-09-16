@@ -20,6 +20,17 @@ ADAPTER_VERSION = "yahoo_adapter_v2"
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _provider_symbol(symbol: str) -> str:
+    """Map canonical local symbols to Yahoo identifiers without inventing data."""
+    canonical = symbol.strip().upper()
+    mapped = config.yahoo_symbol_map.get(canonical)
+    if mapped:
+        return mapped
+    if canonical.endswith((".NS", ".BO")) or canonical.startswith("^"):
+        return canonical
+    return f"{canonical}.NS"
+
+
 def _number(row, column: str) -> float | None:
     value = row[column]
     # yfinance can return a one-element Series when a DataFrame has a
@@ -37,7 +48,7 @@ class YahooAdapter:
     def fetch_price_bars(
         self, symbol: str, period: str = "1d", interval: str = "1m"
     ) -> list[CanonicalPriceBar]:
-        yahoo_symbol = config.yahoo_symbol_map.get(symbol, symbol)
+        yahoo_symbol = _provider_symbol(symbol)
         try:
             df = yf.download(
                 yahoo_symbol,

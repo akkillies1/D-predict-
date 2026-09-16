@@ -69,7 +69,7 @@ app.get("/api/research/:symbol", async (req, res) => {
   }
 });
 
-const server = app.listen(port, "127.0.0.1", () => console.log(`D-predict research service listening on 127.0.0.1:${port}`));
+const server = app.listen(port, "0.0.0.0", () => console.log(`D-predict research service listening on 0.0.0.0:${port}`));
 const shutdown = async () => { server.close(); await pool?.end(); process.exit(0); };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

@@ -28,8 +28,21 @@ async function main() {
     case "forecast":
       await runForecastEngine();
       break;
+    case "worker": {
+      const intervalMs = Math.max(10_000, Number(process.env.ENGINE_POLL_SECONDS ?? 60) * 1000);
+      console.log(`[engine] worker started; polling every ${intervalMs / 1000}s`);
+      while (true) {
+        try {
+          await runFeatureEngine();
+          await runSignalEngine();
+        } catch (error) {
+          console.error("[engine] worker cycle failed; will retry", error);
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
     default:
-      console.log("Usage: tsx src/index.ts <features|signal|backtest|construct|backtest-construction|forecast>");
+      console.log("Usage: tsx src/index.ts <features|signal|backtest|construct|backtest-construction|forecast|worker>");
       process.exitCode = 1;
   }
 

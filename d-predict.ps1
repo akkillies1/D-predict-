@@ -27,8 +27,8 @@ if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
 }
 
-Write-Step "Starting PostgreSQL, market API and collector in background..."
-docker compose up -d postgres api collector
+Write-Step "Starting PostgreSQL, market API, research, collector and engine in background..."
+docker compose up -d postgres api research collector engine
 
 Write-Step "Waiting for market API health..."
 $healthy = $false
@@ -44,6 +44,22 @@ for ($i = 0; $i -lt 60; $i++) {
 if (-not $healthy) {
   docker compose ps
   throw "Market API did not become healthy on port 4100. Check: docker compose logs api --tail=100"
+}
+
+Write-Step "Waiting for research API health..."
+$researchHealthy = $false
+for ($i = 0; $i -lt 60; $i++) {
+  if (Test-TcpPort "127.0.0.1" 4200) {
+    try {
+      $researchHealth = Invoke-RestMethod "http://127.0.0.1:4200/health" -TimeoutSec 2
+      if ($researchHealth.ok -eq $true) { $researchHealthy = $true; break }
+    } catch {}
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $researchHealthy) {
+  docker compose ps
+  throw "Research API did not become healthy on port 4200. Check: docker compose logs research --tail=100"
 }
 
 if (-not (Get-Command corepack -ErrorAction SilentlyContinue)) {
@@ -88,6 +104,7 @@ Write-Step "D-Predict is ready."
 Write-Host ""
 Write-Host "  Dashboard : $dashboardUrl" -ForegroundColor Green
 Write-Host "  Market API: http://127.0.0.1:4100/health" -ForegroundColor Green
+Write-Host "  Research  : http://127.0.0.1:4200/health" -ForegroundColor Green
 Write-Host "  PostgreSQL: localhost:5433" -ForegroundColor Green
 Write-Host ""
 Write-Step "Opening browser..."

@@ -16,8 +16,8 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
 fi
 
-log "Starting PostgreSQL, API, research service and collector..."
-docker compose up -d postgres api research collector
+log "Starting PostgreSQL, API, research service, collector and engine..."
+docker compose up -d postgres api research collector engine
 
 log "Waiting for PostgreSQL..."
 for i in {1..60}; do

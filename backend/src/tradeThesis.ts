@@ -137,10 +137,10 @@ export async function buildCausalTradeThesis(pool: Pool, signal: SignalRow, entr
       signal: signal.direction === "NEUTRAL" ? "HOLD" : "NO_TRADE",
       decision: "NO_TRADE",
       reason: "RETURN_DISTRIBUTION_UNCALIBRATED",
-      distribution_status: "UNCALIBRATED",
-      residual_history: residuals.length,
-      required_residual_history: MIN_RESIDUAL_HISTORY,
-      expected_return: Number(forecast.expected_return),
+      distributionStatus: "UNCALIBRATED",
+      residualHistory: residuals.length,
+      requiredResidualHistory: MIN_RESIDUAL_HISTORY,
+      expectedReturn: Number(forecast.expected_return),
       horizon,
     };
   }
@@ -164,7 +164,7 @@ export async function buildCausalTradeThesis(pool: Pool, signal: SignalRow, entr
   const stopReturn = predictedReturn + stopResidual;
   const stopValid = direction === "LONG" ? stopReturn < 0 : stopReturn > 0;
   if (!targets.length || !stopValid) {
-    return { symbol: signal.symbol, timestamp: new Date(signal.timestamp).toISOString(), direction, signal: "NO_TRADE", decision: "NO_TRADE", reason: "INSUFFICIENT_ECONOMIC_EDGE", distribution_status: "CALIBRATED", residual_history: residuals.length, expected_return: predictedReturn, horizon };
+      return { symbol: signal.symbol, timestamp: new Date(signal.timestamp).toISOString(), direction, signal: "NO_TRADE", decision: "NO_TRADE", reason: "INSUFFICIENT_ECONOMIC_EDGE", distributionStatus: "CALIBRATED", residualHistory: residuals.length, expectedReturn: predictedReturn, horizon };
   }
 
   const stopPrice = entryPrice * (1 + stopReturn);
@@ -182,16 +182,16 @@ export async function buildCausalTradeThesis(pool: Pool, signal: SignalRow, entr
     signal: direction === "LONG" ? signal.confidence >= 0.7 ? "STRONG BUY" : "BUY" : signal.confidence >= 0.7 ? "STRONG SELL" : "SELL",
     decision: "EXECUTABLE",
     direction,
-    entry_price: entryPrice,
-    expected_return: predictedReturn,
+    entryPrice,
+    expectedReturn: predictedReturn,
     horizon,
     targets: thesisTargets,
     stop: { price: stopPrice, probability: stopProbability, return: stopReturn },
-    risk_reward_to_target_1: risk > 0 ? reward / risk : null,
+    riskRewardToTarget1: risk > 0 ? reward / risk : null,
     probability: signal.confidence,
-    confidence: Number((signal.confidence * 100).toFixed(2)),
-    distribution_status: "CALIBRATED",
-    residual_history: residuals.length,
-    trade_thesis_version: "return-distribution-v1-live",
+    confidence: signal.confidence,
+    distributionStatus: "CALIBRATED",
+    residualHistory: residuals.length,
+    tradeThesisVersion: "return-distribution-v1-live",
   };
 }

@@ -14,6 +14,8 @@ services:
       - ./db/migrations/002_prediction_ml.sql:/docker-entrypoint-initdb.d/002-prediction-ml.sql:ro
       - ./db/migrations/003_instrument_metadata.sql:/docker-entrypoint-initdb.d/003-instrument-metadata.sql:ro
       - ./db/migrations/004_canonical_instrument_metadata.sql:/docker-entrypoint-initdb.d/004-canonical-instrument-metadata.sql:ro
+      - ./db/migrations/005_ipo_analysis.sql:/docker-entrypoint-initdb.d/005-ipo-analysis.sql:ro
+      - ./db/migrations/006_research_data.sql:/docker-entrypoint-initdb.d/006-research-data.sql:ro
       - ./db/migrations/006_seed_instruments.sql:/docker-entrypoint-initdb.d/006-seed-instruments.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
@@ -43,7 +45,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles: ["engine"]
+    restart: unless-stopped
+    command: ["npm", "run", "worker"]
+    environment:
+      ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
 
   api:
     build:

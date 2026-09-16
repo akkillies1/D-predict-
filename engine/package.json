@@ -11,7 +11,8 @@
     "backtest": "tsx src/index.ts backtest",
     "construct": "tsx src/index.ts construct",
     "backtest-construction": "tsx src/index.ts backtest-construction",
-    "forecast": "tsx src/index.ts forecast"
+    "forecast": "tsx src/index.ts forecast",
+    "worker": "node dist/index.js worker"
   },
   "dependencies": {
     "pg": "^8.11.5",

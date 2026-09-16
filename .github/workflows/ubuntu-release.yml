@@ -51,6 +51,11 @@ jobs:
           bash -n d-predict.sh db/setup.sh
           npm --prefix backend ci
           npm --prefix backend test
+          npm --prefix dashboard ci
+          npm --prefix dashboard run check
+          npm --prefix dashboard test -- --run
+          python3 -m pip install -r training/requirements.txt
+          python3 -m pytest -q training/tests
           test -f db/migrations/006_seed_instruments.sql
           grep -q 'research:' docker-compose.yml
 

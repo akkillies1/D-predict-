@@ -32,8 +32,11 @@ done
 
 createdb -h localhost -p "$PORT" -U postgres nifty
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/schema.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/002_prediction_ml.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/003_instrument_metadata.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/004_canonical_instrument_metadata.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/005_ipo_analysis.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/006_research_data.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/006_seed_instruments.sql"
 
 pg_ctl -D "$DATA_DIR" stop
