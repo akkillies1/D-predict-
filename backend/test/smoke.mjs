@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 const port = 4199;
 const child = spawn(process.execPath, ["dist/server.js"], {
-  env: { ...process.env, PORT: String(port), DATABASE_URL: "" },
+  env: { ...process.env, API_PORT: String(port), PORT: "3000", DATABASE_URL: "" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 
@@ -27,9 +27,9 @@ try {
   });
 
   const response = await fetch(`http://127.0.0.1:${port}/health`);
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 503);
   const payload = await response.json();
-  assert.equal(payload.ok, true);
+  assert.equal(payload.ok, false);
   assert.equal(payload.database, "not_configured");
   console.log("backend health smoke test passed");
 } finally {

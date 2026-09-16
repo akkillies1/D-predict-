@@ -16,8 +16,8 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
 fi
 
-log "Starting PostgreSQL, API and collector..."
-docker compose up -d postgres api collector
+log "Starting PostgreSQL, API, research service and collector..."
+docker compose up -d postgres api research collector
 
 log "Waiting for PostgreSQL..."
 for i in {1..60}; do
@@ -30,6 +30,13 @@ log "Waiting for API on http://127.0.0.1:4100..."
 for i in {1..60}; do
   if curl -fsS --max-time 2 http://127.0.0.1:4100/health >/dev/null 2>&1; then break; fi
   [[ "$i" == 60 ]] && { docker compose logs api --tail=100; fail "Market API did not become healthy on port 4100."; }
+  sleep 1
+done
+
+log "Waiting for research API on http://127.0.0.1:4200..."
+for i in {1..60}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:4200/health >/dev/null 2>&1; then break; fi
+  [[ "$i" == 60 ]] && { docker compose logs research --tail=100; fail "Research API did not become healthy on port 4200."; }
   sleep 1
 done
 
@@ -67,7 +74,7 @@ done
 [[ -n "$DASHBOARD_URL" ]] || { tail -n 100 "$DASHBOARD_LOG" || true; fail "Dashboard did not start."; }
 
 log "D-Predict is ready."
-printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
+printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  Research  : http://127.0.0.1:4200/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
 
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$DASHBOARD_URL" >/dev/null 2>&1 || true

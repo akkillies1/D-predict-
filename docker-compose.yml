@@ -14,6 +14,7 @@ services:
       - ./db/migrations/002_prediction_ml.sql:/docker-entrypoint-initdb.d/002-prediction-ml.sql:ro
       - ./db/migrations/003_instrument_metadata.sql:/docker-entrypoint-initdb.d/003-instrument-metadata.sql:ro
       - ./db/migrations/004_canonical_instrument_metadata.sql:/docker-entrypoint-initdb.d/004-canonical-instrument-metadata.sql:ro
+      - ./db/migrations/006_seed_instruments.sql:/docker-entrypoint-initdb.d/006-seed-instruments.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
       interval: 5s
@@ -55,6 +56,22 @@ services:
       API_PORT: 4100
     ports:
       - "${API_PORT:-4100}:4100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  research:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      RESEARCH_PORT: 4200
+    command: ["node", "dist/research-server.js"]
+    ports:
+      - "${RESEARCH_PORT:-4200}:4200"
     depends_on:
       postgres:
         condition: service_healthy

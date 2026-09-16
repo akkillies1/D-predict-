@@ -45,6 +45,15 @@ jobs:
           npm --version
           corepack --version
 
+      - name: Validate runtime source and backend smoke test
+        shell: bash
+        run: |
+          bash -n d-predict.sh db/setup.sh
+          npm --prefix backend ci
+          npm --prefix backend test
+          test -f db/migrations/006_seed_instruments.sql
+          grep -q 'research:' docker-compose.yml
+
       - name: Build Ubuntu bundle
         shell: bash
         run: |
