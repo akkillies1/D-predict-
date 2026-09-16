@@ -1,5 +1,10 @@
-import { Router, type Response } from "express";
+import { Router } from "express";
 import type { Pool } from "pg";
+
+function configuredShadowCapital(): number | null {
+  const value = Number(process.env.SHADOW_STARTING_CAPITAL);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
 
 export function createShadowRouter(pool: Pool | null): Router {
   const router = Router();
@@ -29,6 +34,12 @@ export function createShadowRouter(pool: Pool | null): Router {
       const closed = trades.rows.filter((r) => r.status === "CLOSED");
       const wins = closed.filter((r) => Number(r.realized_pnl ?? 0) > 0).length;
       const latest = equity.rows[0] ?? null;
+      const configuredCapital = configuredShadowCapital();
+      if (!latest && configuredCapital === null) {
+        return res.status(503).json({ ok: false, error: "SHADOW_CAPITAL_NOT_CONFIGURED" });
+      }
+
+      const startingCapital = latest ? Number(latest.starting_capital) : configuredCapital as number;
       return res.json({
         ok: true,
         mode: "SHADOW",
@@ -46,11 +57,11 @@ export function createShadowRouter(pool: Pool | null): Router {
           signalDecisionId: r.signal_decision_id, tradeConstructionId: r.trade_construction_id,
         })),
         summary: {
-          startingCapital: latest ? Number(latest.starting_capital) : Number(process.env.SHADOW_STARTING_CAPITAL ?? 100000),
+          startingCapital,
           realizedPnl: latest ? Number(latest.realized_pnl) : 0,
           unrealizedPnl: latest ? Number(latest.unrealized_pnl) : 0,
-          equity: latest ? Number(latest.equity) : Number(process.env.SHADOW_STARTING_CAPITAL ?? 100000),
-          peakEquity: latest ? Number(latest.peak_equity) : Number(process.env.SHADOW_STARTING_CAPITAL ?? 100000),
+          equity: latest ? Number(latest.equity) : startingCapital,
+          peakEquity: latest ? Number(latest.peak_equity) : startingCapital,
           drawdown: latest ? Number(latest.drawdown) : 0,
           openTrades: latest ? Number(latest.open_trades) : 0,
           closedTrades: latest ? Number(latest.closed_trades) : closed.length,
