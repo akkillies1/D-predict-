@@ -3,11 +3,14 @@ $ErrorActionPreference = 'Stop'
 $StateRoot = Join-Path $env:LOCALAPPDATA 'D-Predict'
 $StateFile = Join-Path $StateRoot 'database.json'
 $EnvFile = Join-Path $StateRoot '.env'
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ComposeEnvFile = Join-Path $Root '.env'
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
 
 function Write-Env([hashtable]$Values) {
   $lines = foreach ($item in $Values.GetEnumerator()) { '{0}={1}' -f $item.Key, $item.Value }
   $lines | Set-Content -Path $EnvFile -Encoding UTF8
+  $lines | Set-Content -Path $ComposeEnvFile -Encoding UTF8
 }
 function Save-State([hashtable]$State) {
   $State | ConvertTo-Json -Depth 5 | Set-Content -Path $StateFile -Encoding UTF8
