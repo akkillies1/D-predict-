@@ -2,7 +2,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:4100";
 const RESEARCH_BASE = import.meta.env.VITE_RESEARCH_BASE_URL ?? "http://127.0.0.1:4200";
 
 export type LocalHealth = { ok: boolean; database?: string; time?: string };
-export type MarketOverview = { ok: true; symbol: string; timestamp: string; collectedAt?: string; open: number | null; high: number | null; low: number | null; close: number; volume: number | null; source?: string; status?: "LIVE" | "CACHED" | "STALE" | "OFFLINE" };
+export type MarketOverview = { ok: true; symbol: string; timestamp: string; collectedAt?: string; open: number | null; high: number | null; low: number | null; close: number; volume: number | null; previousClose?: number | null; change?: number | null; changePercent?: number | null; source?: string; status?: "LIVE" | "CACHED" | "STALE" | "OFFLINE" };
 export type Instrument = { symbol: string; exchange: string; lotSize: number; isActive: boolean; name?: string | null; source?: string };
 export type PriceBar = { timestamp: string; open: number; high: number; low: number; close: number; volume: number | null };
 export type TargetTiming = { expectedSeconds?: number; p25Seconds?: number; p50Seconds?: number; p75Seconds?: number; probability?: number; status?: string; samples?: number; resolution?: string };
@@ -18,7 +18,7 @@ export type IPOInput = { companyName: string; symbol?: string; revenue?: number;
 export type IPOAnalysis = { score: number; verdict: "ATTRACTIVE" | "WATCH" | "CAUTION"; valuationScore: number; businessScore: number; structureScore: number; metrics: { pe: number | null; enterpriseValue: number | null; evEbitda: number | null; ebitdaMargin: number | null; profitMargin: number | null; freshIssueRatio: number | null }; risks: string[]; methodology: string; disclaimer: string };
 export type PaperOptionTrade = { id: string; symbol: string; expiry_date: string; strike: number; option_type: "CE" | "PE"; side: "BUY" | "SELL"; status: "OPEN" | "CLOSED"; lots: number; lot_size: number; quantity: number; entry_price: number; entry_bid: number | null; entry_ask: number | null; entry_ltp: number | null; entry_quote_timestamp: string; entry_timestamp: string; current_price: number | null; current_quote_timestamp: string | null; unrealized_pnl: number; realized_pnl: number | null; exit_price: number | null; exit_timestamp: string | null; exit_reason: string | null };
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? `API returned ${response.status}`); } return response.json() as Promise<T>; }
+async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string } | null; throw new Error(body?.message ?? body?.error ?? `API returned ${response.status}`); } return response.json() as Promise<T>; }
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> { return json<LocalHealth>(`${API_BASE}/health`, { signal }); }
 export function localApiBaseUrl() { return API_BASE; }
 export async function getMarketOverview(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview> { return json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/overview`, { signal }); }
