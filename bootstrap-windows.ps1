@@ -33,8 +33,9 @@ function Refresh-Path {
 }
 function Invoke-Native([string]$Label, [scriptblock]$Action) {
     Step $Label
-    & $Action 2>&1 | Tee-Object -FilePath $LogFile -Append
+    $output = & $Action 2>&1
     $code = $LASTEXITCODE
+    if ($output) { $output | Tee-Object -FilePath $LogFile -Append | Write-Host }
     if ($code -ne 0) { throw "$Label failed (exit code $code). See $LogFile" }
 }
 function Ensure-Winget {
@@ -84,8 +85,6 @@ function Find-DockerDesktop {
 }
 function Test-DockerEngine {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
-    # PowerShell 5.1 can surface native stderr as an error record. Use cmd so a
-    # normal "daemon not ready" state never aborts the bootstrap unexpectedly.
     $null = & cmd.exe /c 'docker info >nul 2>&1'
     return ($LASTEXITCODE -eq 0)
 }

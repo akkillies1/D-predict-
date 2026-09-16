@@ -36,7 +36,7 @@ Source: "..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: nowait; Check: IsDpredictInstalled
 
 [Icons]
 Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
@@ -53,6 +53,15 @@ PreparingDesc=Installing application files and runtime prerequisites
 FinishedLabel=D-Predict installation finished. Use the D-Predict shortcut to start the application.
 FinishedHeadingLabel=D-Predict installation finished
 FinishedLabelNoIcons=D-Predict installation finished
+
+[Code]
+function IsDpredictInstalled(): Boolean;
+var
+  Marker: String;
+begin
+  Marker := ExpandConstant('{localappdata}\D-Predict\.install-complete');
+  Result := FileExists(Marker);
+end;
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"
