@@ -25,17 +25,17 @@ services:
       retries: 20
 
   collector:
+    profiles: ["local", "remote"]
     build:
       context: .
       dockerfile: collector/Dockerfile
-    restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
-    profiles: ["local", "remote"]
     restart: unless-stopped
 
   engine:
+    profiles: ["local", "remote"]
     build:
       context: .
       dockerfile: engine/Dockerfile
@@ -43,11 +43,11 @@ services:
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
-    profiles: ["local", "remote"]
     restart: unless-stopped
     command: ["npm", "run", "worker"]
 
   api:
+    profiles: ["local", "remote"]
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -56,11 +56,11 @@ services:
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       API_PORT: 4100
-    profiles: ["local", "remote"]
     ports:
       - "${API_PORT:-4100}:4100"
 
   research:
+    profiles: ["local", "remote"]
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -69,7 +69,6 @@ services:
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       RESEARCH_PORT: 4200
-    profiles: ["local", "remote"]
     command: ["node", "dist/research-server.js"]
     ports:
       - "${RESEARCH_PORT:-4200}:4200"
