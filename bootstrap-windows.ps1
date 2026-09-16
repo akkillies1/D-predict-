@@ -33,8 +33,20 @@ function Refresh-Path {
 }
 function Invoke-Native([string]$Label, [scriptblock]$Action) {
     Step $Label
-    & $Action 2>&1 | Tee-Object -FilePath $LogFile -Append
-    $code = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 converts native stderr (including Git's normal
+        # "Cloning into ..." progress line) into ErrorRecord objects. Keep
+        # those informational records from aborting a successful command;
+        # the native exit code below remains the authoritative result.
+        $ErrorActionPreference = 'Continue'
+        & $Action 2>&1 | ForEach-Object {
+            $_ | Tee-Object -FilePath $LogFile -Append | Write-Host
+        }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($code -ne 0) { throw "$Label failed (exit code $code). See $LogFile" }
 }
 function Ensure-Winget {
@@ -157,7 +169,12 @@ function Sync-Source([string]$RequestedRef) {
     $cloneArgs = @('clone','--depth','1')
     if ($RequestedRef) { $cloneArgs += @('--branch',$RequestedRef) }
     $cloneArgs += @('https://github.com/akkillies1/D-predict-.git',$staging)
-    Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
+    try {
+        Invoke-Native 'Downloading D-Predict source' { git @cloneArgs }
+    } catch {
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
     $preserveTopLevel = @('.env','data','collector')
     $preserveFiles = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
     Get-ChildItem -Force $staging | ForEach-Object {
