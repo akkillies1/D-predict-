@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'installer/**'
+      - 'install-dpredict.ps1'
       - 'bootstrap-windows.ps1'
       - 'dp.ps1'
       - 'run.ps1'
@@ -35,7 +36,10 @@ jobs:
             'bootstrap-windows.ps1',
             'dp.ps1',
             'run.ps1',
-            'launch-dpredict.ps1'
+            'launch-dpredict.ps1',
+            'database-setup.ps1',
+            '.env.example',
+            'docker-compose.yml'
           )
           foreach ($file in $required) {
             if (-not (Test-Path $file)) { throw "Missing installer input: $file" }
@@ -44,16 +48,17 @@ jobs:
       - name: Compile installer
         shell: powershell
         run: |
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' '/DMyAppVersion=0.1.8.1' 'installer/D-predict.iss'
+          $version = '0.1.8.2'
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DMyAppVersion=$version" 'installer/D-predict.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $installer = 'installer/dist/D-Predict-Setup-v0.1.8.1.exe'
+          $installer = "installer/dist/D-Predict-Setup-v$version.exe"
           if (-not (Test-Path $installer)) { throw "Installer executable was not produced: $installer" }
           Get-Item $installer | Format-List FullName,Length,LastWriteTime
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: D-Predict Installer v0.1.8.1
-          path: 'installer/dist/D-Predict-Setup-v0.1.8.1.exe'
+          name: D-Predict Installer v0.1.8.2
+          path: 'installer/dist/D-Predict-Setup-v0.1.8.2.exe'
           if-no-files-found: error
           retention-days: 30
