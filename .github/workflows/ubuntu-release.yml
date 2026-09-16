@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, for example 0.1.8.2'
+        description: 'Release version, for example 0.1.8.3'
         required: true
-        default: '0.1.8.2'
+        default: '0.1.8.3'
   push:
     tags:
       - 'v*.*.*'
@@ -31,7 +31,7 @@ jobs:
             tag="v${{ github.event.inputs.version }}"
           fi
           if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){3}$ ]]; then
-            echo "Invalid release tag: $tag. Expected four-part version such as v0.1.8.2" >&2
+            echo "Invalid release tag: $tag. Expected four-part version such as v0.1.8.3" >&2
             exit 1
           fi
           version="${tag#v}"
