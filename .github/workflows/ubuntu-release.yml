@@ -52,9 +52,11 @@ jobs:
           bash -n d-predict.sh install-dpredict.sh db/setup.sh
           npm --prefix backend ci
           npm --prefix backend test
-          npm --prefix dashboard ci
-          npm --prefix dashboard run check
-          npm --prefix dashboard test -- --run
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+          pnpm --dir dashboard install --frozen-lockfile
+          pnpm --dir dashboard run check
+          pnpm --dir dashboard test --run
           python3 -m pip install -r training/requirements.txt
           python3 -m pytest -q training/tests
           test -f db/migrations/006_seed_instruments.sql
