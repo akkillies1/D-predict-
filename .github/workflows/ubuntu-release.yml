@@ -44,11 +44,12 @@ jobs:
           node --version
           npm --version
           corepack --version
+          rsync --version
 
       - name: Validate runtime source and backend smoke test
         shell: bash
         run: |
-          bash -n d-predict.sh db/setup.sh
+          bash -n d-predict.sh install-dpredict.sh db/setup.sh
           npm --prefix backend ci
           npm --prefix backend test
           npm --prefix dashboard ci
@@ -57,19 +58,21 @@ jobs:
           python3 -m pip install -r training/requirements.txt
           python3 -m pytest -q training/tests
           test -f db/migrations/006_seed_instruments.sql
+          test -f db/migrations/009_option_paper_trading.sql
           grep -q 'research:' docker-compose.yml
 
       - name: Build Ubuntu bundle
         shell: bash
         run: |
-          chmod +x d-predict.sh
+          chmod +x d-predict.sh install-dpredict.sh
           mkdir -p dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}
           rsync -a --exclude='.git' --exclude='node_modules' --exclude='dashboard/node_modules' --exclude='dist' ./ dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/
           chmod +x dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/d-predict.sh
+          chmod +x dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/install-dpredict.sh
           cat > dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/VERSION <<EOF
 D-Predict ${{ steps.release.outputs.version }}
 Platform: Ubuntu/Linux x86_64
-Bundle: source + Docker runtime + native dashboard launcher
+Bundle: source + Docker runtime + local installer + dashboard launcher
 EOF
           tar -C dist -czf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}"
           sha256sum "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" > "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz.sha256"
@@ -79,6 +82,7 @@ EOF
         run: |
           test -s "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz"
           tar -tzf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" | grep -E '/d-predict\.sh$'
+          tar -tzf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" | grep -E '/install-dpredict\.sh$'
           tar -tzf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" | grep -E '/docker-compose\.yml$'
           sha256sum -c "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz.sha256"
 
