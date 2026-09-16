@@ -1,5 +1,6 @@
 services:
   postgres:
+    profiles: ["local"]
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -30,10 +31,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
+    profiles: ["local", "remote"]
+    restart: unless-stopped
 
   engine:
     build:
@@ -41,11 +41,9 @@ services:
       dockerfile: engine/Dockerfile
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
-    depends_on:
-      postgres:
-        condition: service_healthy
+    profiles: ["local", "remote"]
     restart: unless-stopped
     command: ["npm", "run", "worker"]
 
@@ -56,13 +54,11 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       API_PORT: 4100
+    profiles: ["local", "remote"]
     ports:
       - "${API_PORT:-4100}:4100"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   research:
     build:
@@ -71,11 +67,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       RESEARCH_PORT: 4200
+    profiles: ["local", "remote"]
     command: ["node", "dist/research-server.js"]
     ports:
       - "${RESEARCH_PORT:-4200}:4200"
-    depends_on:
-      postgres:
-        condition: service_healthy
