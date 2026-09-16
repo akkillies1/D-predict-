@@ -1,0 +1,83 @@
+name: Ubuntu Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example 0.1.8.2'
+        required: true
+        default: '0.1.8.2'
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Determine release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${{ github.ref_name }}"
+          else
+            tag="v${{ github.event.inputs.version }}"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){3}$ ]]; then
+            echo "Invalid release tag: $tag. Expected four-part version such as v0.1.8.2" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Ubuntu prerequisites
+        run: |
+          docker --version
+          node --version
+          npm --version
+          corepack --version
+
+      - name: Build Ubuntu bundle
+        shell: bash
+        run: |
+          chmod +x d-predict.sh
+          mkdir -p dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}
+          rsync -a --exclude='.git' --exclude='node_modules' --exclude='dashboard/node_modules' --exclude='dist' ./ dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/
+          chmod +x dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/d-predict.sh
+          cat > dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/VERSION <<EOF
+D-Predict ${{ steps.release.outputs.version }}
+Platform: Ubuntu/Linux x86_64
+Bundle: source + Docker runtime + native dashboard launcher
+EOF
+          tar -C dist -czf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}"
+          sha256sum "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" > "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz.sha256"
+
+      - name: Smoke-test Ubuntu bundle
+        shell: bash
+        run: |
+          test -s "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz"
+          tar -tzf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" | grep -E '/d-predict\.sh$'
+          tar -tzf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" | grep -E '/docker-compose\.yml$'
+          sha256sum -c "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz.sha256"
+
+      - name: Create GitHub release and upload Ubuntu bundle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          bundle="D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz"
+          checksum="$bundle.sha256"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$bundle" "$checksum" --clobber
+          else
+            gh release create "$tag" "$bundle" "$checksum" --title "D-Predict $tag" --generate-notes
+          fi
