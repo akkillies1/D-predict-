@@ -176,7 +176,6 @@ function Sync-Source([string]$RequestedRef) {
         throw
     }
     $preserveTopLevel = @('.env','data','collector')
-    $preserveFiles = @('bootstrap-windows.ps1','dp.ps1','run.ps1','launch-dpredict.ps1')
     Get-ChildItem -Force $staging | ForEach-Object {
         if ($_.Name -eq '.git') { return }
         if ($preserveTopLevel -contains $_.Name) {
@@ -192,7 +191,6 @@ function Sync-Source([string]$RequestedRef) {
             }
             return
         }
-        if ($preserveFiles -contains $_.Name) { return }
         $target = Join-Path $InstallDir $_.Name
         Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
         Copy-Item $_.FullName $target -Recurse -Force
