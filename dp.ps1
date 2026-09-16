@@ -107,7 +107,7 @@ function Invoke-Status {
 function Invoke-Doctor {
   Ensure-DatabaseConfig
   Refresh-Path
-  foreach ($c in @('node','npm','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "$c: available" } else { Warn "$c: missing" } }
+  foreach ($c in @('node','npm','docker')) { if (Get-Command $c -ErrorAction SilentlyContinue) { Info "${c}: available" } else { Warn "${c}: missing" } }
   Info "Database mode: $env:DATABASE_MODE"
   Info "Database config: $EnvFile"
   if ($env:D_PREDICT_DATA_DIR) { Info "Data root: $env:D_PREDICT_DATA_DIR" }
