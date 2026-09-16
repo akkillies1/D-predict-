@@ -10,6 +10,6 @@ export const config = {
   databaseUrl: required("DATABASE_URL"),
   featureSetVersion: process.env.FEATURE_SET_VERSION ?? "v1",
   strategyVersion: process.env.STRATEGY_VERSION ?? "v1",
-  modelVersion: process.env.MODEL_VERSION ?? "phase1-rule-engine-v1",
+  modelVersion: process.env.MODEL_VERSION ?? "validated-python-ml-v1",
   instruments: (process.env.ENGINE_INSTRUMENTS ?? "NIFTY").split(","),
 };
