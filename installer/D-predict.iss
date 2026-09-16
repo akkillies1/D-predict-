@@ -30,6 +30,7 @@ Source: "..\bootstrap-windows.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\run.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\launch-dpredict.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\database-setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -41,7 +42,7 @@ Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoPro
 
 [Messages]
 WelcomeLabel1=Welcome to D-Predict
-WelcomeLabel2=This installer only installs the D-Predict application files.
+WelcomeLabel2=This installer installs D-Predict and bundles its database deployment setup. Database location is chosen on first launch or from the dashboard.
 SelectDirLabel3=Choose where to install D-Predict
 SelectTasksLabel2=Choose any additional setup you want D-Predict to do.
 PreparingDesc=Installing application files
