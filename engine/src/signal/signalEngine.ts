@@ -23,9 +23,6 @@ async function runForSymbol(symbol: string): Promise<void> {
   const direction = toDirection(prediction.prediction);
   const reasons = reasonCodes(prediction.prediction, prediction.calibration_status);
 
-  // The prediction timestamp is the timestamp of the latest daily bar actually
-  // used by the canonical Python feature pipeline. Do not attach a minute-level
-  // TypeScript feature snapshot as if it were the model input.
   const signal = await pool.query(
     `insert into signal_decisions (
        instrument_id, timestamp, strategy_version, model_version,
@@ -63,8 +60,6 @@ async function runForSymbol(symbol: string): Promise<void> {
     ]
   );
 
-  // Keep the ML output in the prediction ledger so trade-thesis calibration and
-  // later realized-outcome scoring consume the exact live model output.
   await pool.query(
     `insert into prediction_ledger (
        symbol, timestamp, horizon, model_version,
@@ -92,7 +87,7 @@ async function runForSymbol(symbol: string): Promise<void> {
     ]
   );
 
-  if (signal.rowCount > 0) {
+  if ((signal.rowCount ?? 0) > 0) {
     console.log(
       `[signal] ${symbol} @ ${prediction.timestamp}: ${direction} confidence=${prediction.confidence.toFixed(3)} model=${prediction.model_version} calibration=${prediction.calibration_status}`
     );
@@ -106,8 +101,6 @@ export async function runSignalEngine(): Promise<void> {
     try {
       await runForSymbol(symbol);
     } catch (error) {
-      // Fail closed: an unavailable/invalid ML model must never silently fall
-      // back to the retired heuristic TypeScript signal implementation.
       console.error(`[signal] ${symbol}: validated ML inference unavailable`, error);
     }
   }
