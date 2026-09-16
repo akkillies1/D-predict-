@@ -32,6 +32,7 @@ export default function DatabaseSettings() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { if (status && !status.configured) setOpen(true); }, [status]);
 
   async function openSetup() {
     setBusy(true);
