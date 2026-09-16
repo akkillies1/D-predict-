@@ -27,8 +27,21 @@ if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
 }
 
-Write-Step "Starting PostgreSQL, market API, research, collector and engine in background..."
-docker compose up -d postgres api research collector engine
+Write-Step "Starting PostgreSQL, market API, research, ML, collector and engine in background..."
+docker compose up -d postgres api research ml collector engine
+
+Write-Step "Waiting for PostgreSQL..."
+for ($i = 0; $i -lt 60; $i++) {
+  try {
+    docker compose exec -T postgres pg_isready -U postgres -d nifty | Out-Null
+    break
+  } catch {}
+  if ($i -eq 59) { docker compose ps; throw "PostgreSQL did not become ready." }
+  Start-Sleep -Seconds 1
+}
+
+Write-Step "Applying idempotent shadow trading migration..."
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/008-shadow-trading.sql | Out-Null
 
 Write-Step "Waiting for market API health..."
 $healthy = $false
@@ -60,6 +73,22 @@ for ($i = 0; $i -lt 60; $i++) {
 if (-not $researchHealthy) {
   docker compose ps
   throw "Research API did not become healthy on port 4200. Check: docker compose logs research --tail=100"
+}
+
+Write-Step "Waiting for ML inference health..."
+$mlHealthy = $false
+for ($i = 0; $i -lt 60; $i++) {
+  if (Test-TcpPort "127.0.0.1" 4300) {
+    try {
+      $mlHealth = Invoke-RestMethod "http://127.0.0.1:4300/health" -TimeoutSec 2
+      if ($mlHealth.ok -eq $true) { $mlHealthy = $true; break }
+    } catch {}
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $mlHealthy) {
+  docker compose ps
+  throw "ML inference service did not become healthy on port 4300. Check: docker compose logs ml --tail=100"
 }
 
 if (-not (Get-Command corepack -ErrorAction SilentlyContinue)) {
@@ -104,7 +133,9 @@ Write-Step "D-Predict is ready."
 Write-Host ""
 Write-Host "  Dashboard : $dashboardUrl" -ForegroundColor Green
 Write-Host "  Market API: http://127.0.0.1:4100/health" -ForegroundColor Green
+Write-Host "  Shadow API: http://127.0.0.1:4100/api/shadow/portfolio" -ForegroundColor Green
 Write-Host "  Research  : http://127.0.0.1:4200/health" -ForegroundColor Green
+Write-Host "  ML model  : http://127.0.0.1:4300/health" -ForegroundColor Green
 Write-Host "  PostgreSQL: localhost:5433" -ForegroundColor Green
 Write-Host ""
 Write-Step "Opening browser..."
