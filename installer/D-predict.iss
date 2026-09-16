@@ -34,6 +34,10 @@ Source: "..\database-setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 
+[Run]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait skipifsilent
+
 [Icons]
 Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
@@ -42,13 +46,13 @@ Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoPro
 
 [Messages]
 WelcomeLabel1=Welcome to D-Predict
-WelcomeLabel2=This installer installs D-Predict and bundles its database deployment setup. Database location is chosen on first launch or from the dashboard.
+WelcomeLabel2=This installer installs D-Predict, its runtime prerequisites, and database deployment setup. Database location is chosen on first launch or from the dashboard.
 SelectDirLabel3=Choose where to install D-Predict
 SelectTasksLabel2=Choose any additional setup you want D-Predict to do.
-PreparingDesc=Installing application files
-FinishedLabel=D-Predict files installed
-FinishedHeadingLabel=D-Predict files installed
-FinishedLabelNoIcons=D-Predict files installed
+PreparingDesc=Installing application files and runtime prerequisites
+FinishedLabel=D-Predict installed and started
+FinishedHeadingLabel=D-Predict installed and started
+FinishedLabelNoIcons=D-Predict installed and started
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"
