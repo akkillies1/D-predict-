@@ -26,8 +26,8 @@ for i in {1..60}; do
   sleep 1
 done
 
-log "Starting API, research service, collector and engine..."
-docker compose --profile local up -d api research collector engine
+log "Starting API, research, ML inference, collector and engine..."
+docker compose --profile local up -d api research ml collector engine
 
 log "Waiting for API on http://127.0.0.1:4100..."
 for i in {1..60}; do
@@ -40,6 +40,13 @@ log "Waiting for research API on http://127.0.0.1:4200..."
 for i in {1..60}; do
   if curl -fsS --max-time 2 http://127.0.0.1:4200/health >/dev/null 2>&1; then break; fi
   [[ "$i" == 60 ]] && { docker compose logs research --tail=100; fail "Research API did not become healthy on port 4200."; }
+  sleep 1
+done
+
+log "Waiting for ML inference API on http://127.0.0.1:4300..."
+for i in {1..60}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:4300/health >/dev/null 2>&1; then break; fi
+  [[ "$i" == 60 ]] && { docker compose logs ml --tail=100; fail "ML inference service did not become healthy on port 4300."; }
   sleep 1
 done
 
@@ -77,7 +84,7 @@ done
 [[ -n "$DASHBOARD_URL" ]] || { tail -n 100 "$DASHBOARD_LOG" || true; fail "Dashboard did not start."; }
 
 log "D-Predict is ready."
-printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  Research  : http://127.0.0.1:4200/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
+printf '\n  Dashboard : %s\n  Market API: http://127.0.0.1:4100/health\n  Research  : http://127.0.0.1:4200/health\n  ML model  : http://127.0.0.1:4300/health\n  PostgreSQL: localhost:5433\n\n' "$DASHBOARD_URL"
 
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$DASHBOARD_URL" >/dev/null 2>&1 || true

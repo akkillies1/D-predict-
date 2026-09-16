@@ -18,6 +18,7 @@ services:
       - ./db/migrations/005_ipo_analysis.sql:/docker-entrypoint-initdb.d/005-ipo-analysis.sql:ro
       - ./db/migrations/006_research_data.sql:/docker-entrypoint-initdb.d/006-research-data.sql:ro
       - ./db/migrations/006_seed_instruments.sql:/docker-entrypoint-initdb.d/006-seed-instruments.sql:ro
+      - ./db/migrations/007_live_ml_ledger.sql:/docker-entrypoint-initdb.d/007-live-ml-ledger.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
       interval: 5s
@@ -34,6 +35,19 @@ services:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
     restart: unless-stopped
 
+  ml:
+    profiles: ["local", "remote"]
+    build:
+      context: .
+      dockerfile: ml-service/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
+      ML_PORT: 4300
+    restart: unless-stopped
+    ports:
+      - "${ML_PORT:-4300}:4300"
+
   engine:
     profiles: ["local", "remote"]
     build:
@@ -43,6 +57,7 @@ services:
     environment:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       ENGINE_POLL_SECONDS: ${ENGINE_POLL_SECONDS:-60}
+      ML_INFERENCE_URL: ${ML_INFERENCE_URL:-http://ml:4300}
     restart: unless-stopped
     command: ["npm", "run", "worker"]
 

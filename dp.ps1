@@ -93,7 +93,7 @@ function Invoke-Start {
       Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
-    Compose @('--profile','local','up','-d','--build','api','research','collector','engine')
+    Compose @('--profile','local','up','-d','--build','api','research','ml','collector','engine')
   } else {
     Compose @('--profile',$profile,'up','-d','--build')
   }
@@ -103,6 +103,7 @@ function Invoke-Start {
   Info 'Local dashboard: http://127.0.0.1:3000'
   Info 'Local API:       http://127.0.0.1:4100/health'
   Info 'Research API:    http://127.0.0.1:4200/health'
+  Info 'ML inference:    http://127.0.0.1:4300/health'
 }
 function Invoke-Stop {
   foreach ($name in @('ui')) {
