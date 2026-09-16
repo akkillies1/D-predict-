@@ -36,13 +36,13 @@ Source: "..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait skipifsilent unchecked
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait
 
 [Icons]
 Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""v{#MyAppVersion}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
 Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"
-Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; Tasks: desktopicon
 
 [Messages]
 WelcomeLabel1=Welcome to D-Predict
