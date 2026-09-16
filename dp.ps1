@@ -63,13 +63,27 @@ function Ensure-Tooling {
   if (-not (Test-Path $python)) { Die 'Collector Python environment is missing. Run Repair & Check.' }
 }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
+function Invoke-DockerCapture([string[]]$DockerArgs) {
+  Refresh-Path
+  $dockerPath = (Get-Command docker -ErrorAction Stop).Source
+  $token = [Guid]::NewGuid().ToString('N')
+  $stdoutPath = Join-Path $env:TEMP "dpredict-docker-$token.out"
+  $stderrPath = Join-Path $env:TEMP "dpredict-docker-$token.err"
+  try {
+    $process = Start-Process -FilePath $dockerPath -ArgumentList $DockerArgs -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -NoNewWindow -Wait -PassThru
+    $output = @()
+    if (Test-Path $stdoutPath) { $output += Get-Content $stdoutPath }
+    if (Test-Path $stderrPath) { $output += Get-Content $stderrPath }
+    [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
+  } finally {
+    Remove-Item $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
+  }
+}
 function Invoke-Compose([string[]]$ComposeArgs) {
   Ensure-ComposeFile
-  $dockerArgs = @('-f', $ComposeFile) + $ComposeArgs
-  $composeOutput = @(& docker compose @dockerArgs 2>&1)
-  $composeExitCode = $LASTEXITCODE
-  $composeOutput | Out-Host
-  if ($composeExitCode -ne 0) { Die "Docker Compose failed (exit code $composeExitCode)." }
+  $result = Invoke-DockerCapture (@('-f', $ComposeFile) + $ComposeArgs)
+  $result.Output | Out-Host
+  if ($result.ExitCode -ne 0) { Die "Docker Compose failed (exit code $($result.ExitCode))." }
 }
 function Compose([string[]]$ComposeArgs) { Invoke-Compose $ComposeArgs }
 function Start-Detached($name,$command) {
@@ -92,9 +106,8 @@ function Invoke-Start {
     Compose @('--profile','local','up','-d','postgres')
     $postgresReady = $false
     for ($i = 0; $i -lt 60; $i++) {
-      $null = @(& docker compose -f $ComposeFile exec -T postgres pg_isready -U postgres -d nifty 2>&1)
-      $postgresCheckExitCode = $LASTEXITCODE
-      if ($postgresCheckExitCode -eq 0) { $postgresReady = $true; break }
+      $result = Invoke-DockerCapture @('compose','-f',$ComposeFile,'exec','-T','postgres','pg_isready','-U','postgres','-d','nifty')
+      if ($result.ExitCode -eq 0) { $postgresReady = $true; break }
       Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
