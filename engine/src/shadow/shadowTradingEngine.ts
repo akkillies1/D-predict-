@@ -1,6 +1,15 @@
 import { pool } from "../db.js";
 
-const STARTING_CAPITAL = Number(process.env.SHADOW_STARTING_CAPITAL ?? 100000);
+function requiredPositiveNumber(name: string): number {
+  const raw = process.env[name];
+  const value = Number(raw);
+  if (!raw || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`Missing or invalid ${name}; configure a real shadow-trading value before starting D-Predict.`);
+  }
+  return value;
+}
+
+const STARTING_CAPITAL = requiredPositiveNumber("SHADOW_STARTING_CAPITAL");
 const MAX_QUOTE_AGE_MS = Math.max(15_000, Number(process.env.SHADOW_MAX_QUOTE_AGE_SECONDS ?? 120) * 1000);
 const LOTS = Math.max(1, Math.floor(Number(process.env.SHADOW_LOTS ?? 1)));
 const NEW_DECISION_WINDOW_MS = Math.max(30_000, Number(process.env.SHADOW_DECISION_WINDOW_SECONDS ?? 180) * 1000);
@@ -88,20 +97,34 @@ async function updateOpenTrades(now: Date): Promise<void> {
   const result = await pool.query(`select st.id, st.contract_id as "contractId", st.quantity, st.entry_price as "entryPrice", st.stop_loss as "stopLoss", st.target, st.expiry_date as "expiryDate" from shadow_trades st where st.status = 'OPEN' order by st.entry_timestamp asc`);
   for (const row of result.rows) {
     const quote = await latestQuote(row.contractId);
-    if (!quote || !quoteIsFresh(quote, now)) continue;
-    const mark = sellMark(quote);
-    if (mark === null || mark <= 0) continue;
     const quantity = Number(row.quantity); const entryPrice = Number(row.entryPrice); const stopLoss = Number(row.stopLoss); const target = Number(row.target);
+    const expiryReached = now.toISOString().slice(0, 10) >= String(row.expiryDate);
+
+    if (!quote) {
+      if (expiryReached) console.log(`[shadow] id=${row.id}: expiry reached but no option quote exists; cannot realize expiry P&L`);
+      continue;
+    }
+
+    const mark = sellMark(quote);
+    if (mark === null || mark <= 0) {
+      if (expiryReached) console.log(`[shadow] id=${row.id}: expiry reached but option quote has no executable mark; cannot realize expiry P&L`);
+      continue;
+    }
+
+    const fresh = quoteIsFresh(quote, now);
     const pnl = (mark - entryPrice) * quantity;
     let exitReason: string | null = null;
-    if (mark <= stopLoss) exitReason = "PRICE_STOP";
-    else if (mark >= target) exitReason = "PROFIT_TARGET";
-    else if (now.toISOString().slice(0, 10) >= String(row.expiryDate)) exitReason = "EXPIRY";
+    if (mark <= stopLoss && fresh) exitReason = "PRICE_STOP";
+    else if (mark >= target && fresh) exitReason = "PROFIT_TARGET";
+    else if (expiryReached && fresh) exitReason = "EXPIRY";
+
     if (exitReason) {
       await pool.query(`update shadow_trades set status='CLOSED', current_price=$2, current_quote_timestamp=$3, unrealized_pnl=0, realized_pnl=$4, exit_price=$2, exit_timestamp=$3, exit_reason=$5, exit_metadata=$6::jsonb, updated_at=now() where id=$1 and status='OPEN'`, [row.id, mark, quote.timestamp, pnl, exitReason, JSON.stringify({ fillModel: "BID_ON_EXIT" })]);
       console.log(`[shadow] CLOSE id=${row.id} reason=${exitReason} exit=${mark.toFixed(2)} pnl=${pnl.toFixed(2)}`);
-    } else {
+    } else if (fresh) {
       await pool.query(`update shadow_trades set current_price=$2, current_quote_timestamp=$3, unrealized_pnl=$4, updated_at=now() where id=$1 and status='OPEN'`, [row.id, mark, quote.timestamp, pnl]);
+    } else {
+      console.log(`[shadow] id=${row.id}: quote is stale; keeping trade open without fabricating an exit or P&L update`);
     }
   }
 }
