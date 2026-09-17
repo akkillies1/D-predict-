@@ -28,7 +28,7 @@ if (-not (Test-Path ".env")) {
 }
 
 Write-Step "Starting PostgreSQL, market API, research, ML, collector and engine in background..."
-docker compose up -d postgres api research ml collector engine
+docker compose --profile local --profile remote up -d
 
 Write-Step "Waiting for PostgreSQL..."
 for ($i = 0; $i -lt 60; $i++) {
@@ -41,7 +41,7 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 
 Write-Step "Applying idempotent shadow trading migration..."
-docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/008-shadow-trading.sql | Out-Null
+for ($j=0; $j -lt 30; $j++) { try { docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/008-shadow-trading.sql 2>$null; if ($LASTEXITCODE -eq 0) { break } } catch {}; Start-Sleep -Seconds 2 }
 
 Write-Step "Waiting for market API health..."
 $healthy = $false
@@ -142,3 +142,4 @@ Write-Step "Opening browser..."
 Start-Process $dashboardUrl
 Write-Host ""
 Write-Host "Use .\stop-d-predict.ps1 to stop the local stack." -ForegroundColor DarkGray
+
