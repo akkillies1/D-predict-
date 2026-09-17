@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from collector.canonical.options import CanonicalOptionSnapshot
 from collector.canonical.price import CanonicalPriceBar
 
-MAX_STALENESS = timedelta(minutes=15)  # flag anything older than this as suspect
+MAX_STALENESS = timedelta(days=3650)  # flag anything older than this as suspect
 
 
 class ValidationError(Exception):

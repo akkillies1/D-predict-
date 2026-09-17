@@ -120,7 +120,7 @@ app.get("/api/options/chain", async (req, res) => {
   const symbol = symbolParam(req.query.symbol);
   try {
     const result = await pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id) order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
-    if (!result.rows.length) return unavailable(res, "NO_OPTION_DATA", { symbol });
+    if (!result.rows.length) return res.json({ ok: true, symbol, rows: [] });
     return res.json({ ok: true, symbol, rows: result.rows.map((row) => ({ expiry_date: row.expiry_date, strike: finite(row.strike), option_type: row.option_type, timestamp: iso(row.market_timestamp), ltp: finite(row.ltp), bid: finite(row.bid), ask: finite(row.ask), oi: finite(row.oi), oiChange: finite(row.oi_change), iv: finite(row.iv) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: "OPTION_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });

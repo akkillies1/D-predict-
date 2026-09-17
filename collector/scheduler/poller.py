@@ -55,7 +55,9 @@ class Poller:
         run_id = uuid.uuid4()
         for symbol in self._db.active_symbols():
             try:
-                bars = self._yahoo.fetch_price_bars(symbol)
+                bars_1m = self._yahoo.fetch_price_bars(symbol)
+                bars_1d = self._yahoo.fetch_price_bars(symbol, period="5y", interval="1d")
+                bars = bars_1m + bars_1d
             except Exception:
                 logger.exception("yahoo fetch failed for %s (run=%s)", symbol, run_id)
                 continue
