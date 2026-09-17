@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, for example 0.1.8.5'
+        description: 'Release version, for example 2.0.0'
         required: true
-        default: '0.1.8.5'
+        default: '2.0.0'
   push:
     tags:
       - 'v*.*.*'
@@ -30,8 +30,8 @@ jobs:
           else
             tag="v${{ github.event.inputs.version }}"
           fi
-          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){3}$ ]]; then
-            echo "Invalid release tag: $tag. Expected four-part version such as v0.1.8.5" >&2
+          if [[ ! "$tag" =~ ^v[0-9]+(\.[0-9]+){2,3}$ ]]; then
+            echo "Invalid release tag: $tag. Expected semantic version such as v2.0.0" >&2
             exit 1
           fi
           version="${tag#v}"
@@ -61,6 +61,7 @@ jobs:
           python3 -m pytest -q training/tests
           test -f db/migrations/006_seed_instruments.sql
           test -f db/migrations/009_option_paper_trading.sql
+          test -f db/migrations/010_dpredict_20.sql
           grep -q 'research:' docker-compose.yml
 
       - name: Build Ubuntu bundle

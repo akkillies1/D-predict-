@@ -7,6 +7,6 @@ Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 Write-Host "[D-Predict] Stopping local Docker services..." -ForegroundColor Cyan
-docker compose stop api collector postgres
+docker compose --profile local --profile remote stop api research ml collector engine postgres
 
 Write-Host "[D-Predict] Local D-Predict stack stopped." -ForegroundColor Green

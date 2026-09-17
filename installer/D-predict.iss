@@ -1,6 +1,9 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.8.5"
+#define MyAppVersion "2.0.0"
+#endif
+#ifndef MyAppSourceRef
+#define MyAppSourceRef "main"
 #endif
 #define MyAppPublisher "D-Predict"
 
@@ -35,11 +38,11 @@ Source: "..\.env.example"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docker-compose.yml"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""main"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait; Check: IsDpredictInstalled
 
 [Icons]
-Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""main"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
+Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
 Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"
 Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; Tasks: desktopicon

@@ -55,7 +55,7 @@ jobs:
       - name: Compile installer
         shell: powershell
         run: |
-          $version = '0.1.8.5'
+          $version = '2.0.0'
           & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DMyAppVersion=$version" 'installer/D-predict.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installer = "installer/dist/D-Predict-Setup-v$version.exe"
@@ -65,7 +65,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: D-Predict Installer v0.1.8.5
-          path: 'installer/dist/D-Predict-Setup-v0.1.8.5.exe'
+          name: D-Predict Installer v2.0.0
+          path: 'installer/dist/D-Predict-Setup-v2.0.0.exe'
           if-no-files-found: error
           retention-days: 30
