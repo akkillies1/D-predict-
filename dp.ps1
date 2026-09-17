@@ -81,7 +81,7 @@ function Invoke-DockerCapture([string[]]$DockerArgs) {
 }
 function Invoke-Compose([string[]]$ComposeArgs) {
   Ensure-ComposeFile
-  $result = Invoke-DockerCapture (@('-f', $ComposeFile) + $ComposeArgs)
+  $result = Invoke-DockerCapture (@('compose','-f', "`"$ComposeFile`"") + $ComposeArgs)
   $result.Output | Out-Host
   if ($result.ExitCode -ne 0) { Die "Docker Compose failed (exit code $($result.ExitCode))." }
 }
@@ -106,7 +106,7 @@ function Invoke-Start {
     Compose @('--profile','local','up','-d','postgres')
     $postgresReady = $false
     for ($i = 0; $i -lt 60; $i++) {
-      $result = Invoke-DockerCapture @('compose','-f',$ComposeFile,'exec','-T','postgres','pg_isready','-U','postgres','-d','nifty')
+      $result = Invoke-DockerCapture @('compose','-f',"`"$ComposeFile`"",'exec','-T','postgres','pg_isready','-U','postgres','-d','nifty')
       if ($result.ExitCode -eq 0) { $postgresReady = $true; break }
       Start-Sleep -Seconds 1
     }

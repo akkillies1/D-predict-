@@ -26,7 +26,7 @@ switch ($Command) {
             $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
             if (-not (Test-Path $bootstrap)) { throw 'Windows bootstrap script is missing from the installation.' }
             Write-Host 'Installation is incomplete; starting D-Predict prerequisite repair...' -ForegroundColor Yellow
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -SourceRef main
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -SourceRef main -RefreshSource
             if ($LASTEXITCODE -ne 0) { throw "D-Predict repair failed (exit code $LASTEXITCODE). See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
             if (-not (Test-Path $marker)) { throw "D-Predict repair finished without creating the completion marker. See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
         }

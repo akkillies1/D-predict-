@@ -3,7 +3,8 @@ param(
     [string]$SourceRef,
     [switch]$InstallerMode,
     [switch]$SkipChecks,
-    [switch]$ElevatedChild
+    [switch]$ElevatedChild,
+    [switch]$RefreshSource
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,7 +159,7 @@ function Sync-Source([string]$RequestedRef) {
     $installedRef = Read-StateValue 'source-ref.txt'
     $sourceMissing = (-not (Test-Path $trainingMarker)) -or (-not (Test-Path $envExample))
     $refChanged = [bool]$RequestedRef -and ($installedRef -ne $RequestedRef)
-    if (-not $sourceMissing -and -not $refChanged) {
+    if (-not $sourceMissing -and -not $refChanged -and -not $RefreshSource) {
         Log "Source already present at requested ref: $installedRef"
         return
     }
@@ -217,6 +218,7 @@ try {
         $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"",'-InstallDir',"`"$InstallDir`"",'-ElevatedChild')
         if ($InstallerMode) { $args += '-InstallerMode' }
         if ($SkipChecks) { $args += '-SkipChecks' }
+        if ($RefreshSource) { $args += '-RefreshSource' }
         if ($SourceRef) { $args += @('-SourceRef',"`"$SourceRef`"") }
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
         exit $p.ExitCode

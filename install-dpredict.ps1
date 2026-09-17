@@ -31,7 +31,7 @@ try {
     }
 
     Log 'Starting the D-Predict bootstrap.'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef *>&1 | Tee-Object -FilePath $logFile -Append
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         throw "D-Predict prerequisite setup failed (exit code $exitCode). See $logFile"
