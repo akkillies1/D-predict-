@@ -1,5 +1,6 @@
 name: Ubuntu Release
 
+# Keep manual dispatch available for release recovery and re-publication.
 on:
   workflow_dispatch:
     inputs:
