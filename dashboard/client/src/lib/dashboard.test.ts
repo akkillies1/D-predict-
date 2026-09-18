@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampConfidence, formatConfidence, formatIndianNumber } from "./dashboard";
+import { chooseInitialSymbol, clampConfidence, formatConfidence, formatIndianNumber } from "./dashboard";
 
 describe("dashboard helpers", () => {
   it("clamps confidence to the supported 0..1 range", () => {
@@ -17,5 +17,13 @@ describe("dashboard helpers", () => {
   it("formats market values using Indian digit grouping", () => {
     expect(formatIndianNumber(25108.4)).toBe("25,108.40");
     expect(formatIndianNumber(112, 0)).toBe("112");
+  });
+
+  it("selects a data-backed active instrument without hard-coded symbols", () => {
+    expect(chooseInitialSymbol("SBI", [
+      { symbol: "SBI", isActive: true, observations: 0 },
+      { symbol: "ACME", isActive: true, observations: 12 },
+    ])).toBe("ACME");
+    expect(chooseInitialSymbol("ACME", [{ symbol: "ACME", isActive: true, observations: 12 }])).toBe("ACME");
   });
 });

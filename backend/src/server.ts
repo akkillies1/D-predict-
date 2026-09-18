@@ -23,7 +23,7 @@ function iso(value: unknown): string | null {
 function finite(value: unknown): number | null { const n = Number(value); return value == null || !Number.isFinite(n) ? null : n; }
 function symbolParam(value: unknown): string { return String(value ?? "NIFTY").trim().toUpperCase(); }
 function invalidSymbol(symbol: string): boolean { return !/^[A-Z0-9._-]{1,32}$/.test(symbol); }
-function noDb(res: express.Response) { return res.status(503).json({ ok: false, error: "DATABASE_NOT_CONFIGURED" }); }
+function noDb(res: express.Response) { return res.status(503).json({ ok: false, error: "DATABASE_NOT_CONFIGURED", message: "PostgreSQL is required to activate and persist instruments." }); }
 function unavailable(res: express.Response, error: string, extra: Record<string, unknown> = {}) { return res.status(404).json({ ok: false, error, ...extra }); }
 
 app.get("/health", async (_req, res) => {
@@ -43,22 +43,28 @@ app.get("/health", async (_req, res) => {
 app.get("/api/instruments", async (_req, res) => {
   if (!pool) return noDb(res);
   try {
-    const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, canonical_source as source from instruments order by is_active desc, symbol`);
-    return res.json({ ok: true, instruments: result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, source: row.source })) });
+    const result = await pool.query(`select i.symbol, i.exchange, i.lot_size, i.is_active, i.name, i.provider_symbol, i.instrument_type, i.canonical_source as source, count(pb.id)::int as observations, max(pb.market_timestamp) as last_market_timestamp, max(pb.collected_at) as last_collected_at from instruments i left join price_bars pb on pb.instrument_id=i.instrument_id and pb.timeframe='1d' group by i.instrument_id order by i.is_active desc, i.symbol`);
+    return res.json({ ok: true, instruments: result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source, observations: Number(row.observations), lastMarketTimestamp: iso(row.last_market_timestamp), lastCollectedAt: iso(row.last_collected_at) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: "INSTRUMENT_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
 app.get("/api/instruments/discover", async (req, res) => {
-  if (!pool) return noDb(res);
   const query = String(req.query.q ?? "").trim();
   if (query.length < 1) return res.json({ ok: true, instruments: [] });
   try {
-    const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
-    const local = result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source }));
+    let local: Array<Record<string, unknown>> = [];
+    if (pool) {
+      try {
+        const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
+        local = result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source }));
+      } catch (error) {
+        console.warn("local instrument discovery skipped:", error instanceof Error ? error.message : error);
+      }
+    }
     const response = await fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`, { headers: { "User-Agent": "D-Predict/2.0" } });
     if (!response.ok) return res.json({ ok: true, instruments: local });
     const payload = await response.json() as { quotes?: Array<{ symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string; exchDisp?: string }> };
-    const online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
+    const online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).sort((left, right) => { const rank = (quote: typeof left) => /\.(NS|BO)$/i.test(quote.symbol ?? "") || /\b(NSE|BSE|India)\b/i.test(`${quote.exchange} ${quote.exchDisp}`) ? 0 : 1; return rank(left) - rank(right); }).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
     const merged = [...local, ...online.filter((item) => !local.some((existing) => existing.symbol === item.symbol))];
     return res.json({ ok: true, instruments: merged.slice(0, 25) });
   } catch (error) { return res.status(500).json({ ok: false, error: "INSTRUMENT_DISCOVERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
@@ -104,11 +110,12 @@ app.get("/api/market/:symbol/live", (req, res) => marketResponse(symbolParam(req
 app.get("/api/market/:symbol/overview", (req, res) => marketResponse(symbolParam(req.params.symbol), res));
 app.get("/api/market/:symbol/history", async (req, res) => {
   if (!pool) return noDb(res);
-  const symbol = symbolParam(req.params.symbol); const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 120)));
+  const symbol = symbolParam(req.params.symbol); const timeframe = String(req.query.timeframe ?? "1d").trim().toLowerCase(); const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 120)));
+  if (!/^[0-9]+[mhdw]$/.test(timeframe)) return res.status(400).json({ ok: false, error: "INVALID_TIMEFRAME" });
   try {
-    const result = await pool.query(`select pb.market_timestamp, pb.open, pb.high, pb.low, pb.close, pb.volume from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit $2`, [symbol, limit]);
-    if (!result.rows.length) return res.json({ ok: false, symbol, rows: [], status: "PENDING", error: "NO_MARKET_DATA" });
-    return res.json({ ok: true, symbol, rows: result.rows.reverse().map((row) => ({ timestamp: iso(row.market_timestamp), open: finite(row.open), high: finite(row.high), low: finite(row.low), close: finite(row.close), volume: finite(row.volume) })) });
+    const result = await pool.query(`select pb.market_timestamp, pb.open, pb.high, pb.low, pb.close, pb.volume from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 and pb.timeframe=$2 order by pb.market_timestamp desc limit $3`, [symbol, timeframe, limit]);
+    if (!result.rows.length) return res.json({ ok: true, symbol, timeframe, rows: [], status: "NO_DATA" });
+    return res.json({ ok: true, symbol, timeframe, rows: result.rows.reverse().map((row) => ({ timestamp: iso(row.market_timestamp), open: finite(row.open), high: finite(row.high), low: finite(row.low), close: finite(row.close), volume: finite(row.volume) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: "HISTORY_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
@@ -162,16 +169,41 @@ app.get("/api/options/chain", async (req, res) => {
 
 app.use("/api/shadow", createShadowRouter(pool));
 
+function normalCdf(value: number): number {
+  const sign = value < 0 ? -1 : 1;
+  const magnitude = Math.abs(value) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * magnitude);
+  const polynomial = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-magnitude * magnitude);
+  return 0.5 * (1 + sign * polynomial);
+}
+
 app.get("/api/forecast", async (req, res) => {
   if (!pool) return noDb(res);
-  const symbol = symbolParam(req.query.symbol); const horizonDays = Math.min(30, Math.max(1, Number(req.query.horizon ?? 5)));
+  const symbol = symbolParam(req.query.symbol);
+  const horizonDays = Math.min(30, Math.max(1, Number(req.query.horizon ?? 5)));
   try {
-    const result = await pool.query(`select pb.close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 60`, [symbol]);
+    const result = await pool.query(`select pb.close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 and pb.timeframe='1d' order by pb.market_timestamp desc limit 250`, [symbol]);
     const closes = result.rows.map((row) => Number(row.close)).filter(Number.isFinite).reverse();
-    if (closes.length < 5) return unavailable(res, "INSUFFICIENT_HISTORY", { symbol, daysOfHistoryUsed: closes.length });
-    const returns = closes.slice(1).map((value, index) => Math.log(value / closes[index])); const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, returns.length - 1); const volatility = Math.sqrt(variance); const spot = closes[closes.length - 1];
-    const bands = Array.from({ length: horizonDays }, (_, index) => { const day = index + 1; const scale = volatility * Math.sqrt(day); return { day, p10: spot * Math.exp(mean * day - 1.2816 * scale), p25: spot * Math.exp(mean * day - 0.6745 * scale), median: spot * Math.exp(mean * day), p75: spot * Math.exp(mean * day + 0.6745 * scale), p90: spot * Math.exp(mean * day + 1.2816 * scale) }; });
-    return res.json({ ok: true, symbol, spot, dailyVolatility: volatility, daysOfHistoryUsed: closes.length, horizonDays, paths: 0, probabilityAboveSpot: 0.5, probabilityBelowSpot: 0.5, bands, status: "STATISTICAL_BASELINE" });
+    if (closes.length < 20) return unavailable(res, "INSUFFICIENT_HISTORY", { symbol, daysOfHistoryUsed: closes.length, requiredHistory: 20 });
+    const returns = closes.slice(1).map((value, index) => Math.log(value / closes[index]));
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, returns.length - 1);
+    const volatility = Math.sqrt(variance);
+    const spot = closes[closes.length - 1];
+    const expectedReturn = Math.exp(mean * horizonDays) - 1;
+    const scale = volatility * Math.sqrt(horizonDays);
+    const expectedValue = spot * Math.exp(mean * horizonDays);
+    const p10 = spot * Math.exp(mean * horizonDays - 1.2816 * scale);
+    const p90 = spot * Math.exp(mean * horizonDays + 1.2816 * scale);
+    const probabilityAboveSpot = 1 - normalCdf(-mean * Math.sqrt(horizonDays) / Math.max(volatility, 1e-9));
+    const probabilityBelowSpot = 1 - probabilityAboveSpot;
+    const directionalEdge = Math.abs(expectedReturn) >= Math.max(0.005, volatility * Math.sqrt(horizonDays) * 0.15);
+    const direction = directionalEdge && probabilityAboveSpot >= 0.55 ? "LONG" : directionalEdge && probabilityBelowSpot >= 0.55 ? "SHORT" : "FLAT";
+    const strategy = direction === "FLAT" ? "WAIT" : "STAGED_ENTRY";
+    const rationale = direction === "FLAT"
+      ? "The historical drift is not large enough relative to the forecast range; preserve capital and wait for a better edge."
+      : `${direction === "LONG" ? "Positive" : "Negative"} historical drift clears the volatility-adjusted edge threshold, but the distribution remains uncertain; use staged entry rather than a full-size position.`;
+    return res.json({ ok: true, symbol, spot, dailyVolatility: volatility, daysOfHistoryUsed: closes.length, horizonDays, paths: 0, probabilityAboveSpot, probabilityBelowSpot, expectedValue, expectedReturn, forecastRange: { low: p10, high: p90 }, bands: Array.from({ length: horizonDays }, (_, index) => { const day = index + 1; const dayScale = volatility * Math.sqrt(day); return { day, p10: spot * Math.exp(mean * day - 1.2816 * dayScale), p25: spot * Math.exp(mean * day - 0.6745 * dayScale), median: spot * Math.exp(mean * day), p75: spot * Math.exp(mean * day + 0.6745 * dayScale), p90: spot * Math.exp(mean * day + 1.2816 * dayScale) }; }), strategy: { direction, action: strategy, rationale, positionSizing: direction === "FLAT" ? "0% until edge improves" : "Risk no more than 0.5% of capital; scale in 25% / 25% / 50%", invalidation: `Invalidate if price closes beyond the ${direction === "LONG" ? "lower" : "upper"} forecast boundary or the next data refresh materially changes the distribution.` }, status: "STATISTICAL_BASELINE", limitations: ["Uses historical daily log returns, not a causal fundamental model.", "Forecast uncertainty widens with horizon and does not account for gaps, news or liquidity.", "Expected value is a distribution median, not a guaranteed price."] });
   } catch (error) { return res.status(500).json({ ok: false, error: "FORECAST_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 

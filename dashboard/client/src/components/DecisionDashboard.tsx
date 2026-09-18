@@ -7,11 +7,11 @@ import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
   BarChart, Bar, ReferenceLine,
 } from "recharts";
-import { getLatestSignal, getLiveQuote, getLocalHealth, getMarketHistory, getOptionChain, getResearch, type MarketOverview, type OptionRow, type PriceBar, type ResearchResult, type Signal } from "@/lib/localApi";
+import { getForecast, getInstruments, getLatestSignal, getLiveQuote, getLocalHealth, getMarketHistory, getOptionChain, getResearch, type Forecast, type MarketOverview, type OptionRow, type PriceBar, type ResearchResult, type Signal } from "@/lib/localApi";
+import { chooseInitialSymbol } from "@/lib/dashboard";
 import LiveTickerSearch from "@/components/LiveTickerSearch";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
-const optionSymbols = new Set(["NIFTY", "BANKNIFTY"]);
 
 function pct(value?: number | null) { return value == null || !Number.isFinite(value) ? "—" : `${(value * 100).toFixed(1)}%`; }
 function price(value?: number | null) { return value == null || !Number.isFinite(value) ? "—" : `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; }
@@ -40,19 +40,23 @@ function Metric({ label, value, sub, icon: Icon }: { label: string; value: strin
 
 export default function DecisionDashboard() {
   const [symbol, setSymbol] = useState(() => localStorage.getItem(STORAGE_KEY) || "NIFTY");
+  const [instrumentName, setInstrumentName] = useState<string | null>(null);
+  const [forecastHorizon, setForecastHorizon] = useState(5);
   const [market, setMarket] = useState<MarketOverview | null>(null);
   const [history, setHistory] = useState<PriceBar[]>([]);
   const [signal, setSignal] = useState<Signal | null>(null);
   const [options, setOptions] = useState<OptionRow[]>([]);
   const [research, setResearch] = useState<ResearchResult | null>(null);
+  const [forecast, setForecast] = useState<Forecast | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
-  const selectSymbol = useCallback(async (next: string) => {
+  const selectSymbol = useCallback(async (next: string, name?: string | null) => {
     const value = next.trim().toUpperCase();
     if (!value) return;
     setSymbol(value);
+    setInstrumentName(name ?? null);
     localStorage.setItem(STORAGE_KEY, value);
     window.dispatchEvent(new Event("dpredict:symbol"));
   }, []);
@@ -62,23 +66,35 @@ export default function DecisionDashboard() {
     try {
       const health = await getLocalHealth();
       setConnected(health.ok);
-      const [live, bars, latest, researchResult] = await Promise.allSettled([
-        getLiveQuote(symbol), getMarketHistory(symbol), getLatestSignal(symbol), getResearch(symbol),
+      const [live, bars, latest, researchResult, forecastResult] = await Promise.allSettled([
+        getLiveQuote(symbol), getMarketHistory(symbol, "1d"), getLatestSignal(symbol), getResearch(symbol), getForecast(symbol, forecastHorizon),
       ]);
       setMarket(live.status === "fulfilled" ? live.value : null);
       setHistory(bars.status === "fulfilled" ? bars.value : []);
       setSignal(latest.status === "fulfilled" ? latest.value : null);
       setResearch(researchResult.status === "fulfilled" ? researchResult.value : null);
-      if (optionSymbols.has(symbol)) {
-        const chain = await getOptionChain(symbol).catch(() => []);
-        setOptions(chain);
-      } else setOptions([]);
+      setForecast(forecastResult.status === "fulfilled" ? forecastResult.value : null);
+      const chain = await getOptionChain(symbol).catch(() => []);
+      setOptions(chain);
       setLastUpdate(new Date().toISOString());
     } finally { setLoading(false); }
-  }, [symbol]);
+  }, [forecastHorizon, symbol]);
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { const t = window.setInterval(() => void refresh(), 15000); return () => window.clearInterval(t); }, [refresh]);
+  useEffect(() => {
+    let cancelled = false;
+    void getInstruments().then((instruments) => {
+      if (cancelled) return;
+      const next = chooseInitialSymbol(localStorage.getItem(STORAGE_KEY), instruments);
+      setInstrumentName(instruments.find((item) => item.symbol === next)?.name ?? null);
+      if (next !== symbol) {
+        setSymbol(next);
+        localStorage.setItem(STORAGE_KEY, next);
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   const thesis = signal?.tradeThesis;
   const chart = useMemo(() => history.map(bar => ({ time: new Date(bar.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }), close: bar.close, high: bar.high, low: bar.low })), [history]);
@@ -110,10 +126,10 @@ export default function DecisionDashboard() {
 
     <main className="relative mx-auto max-w-[1800px] space-y-5 px-4 py-5 lg:px-8">
       <section id="decision" className={`rounded-2xl border ${tradeReady ? "border-[#476238]" : "border-[#5a432a]"} bg-gradient-to-br from-[#10201b] to-[#09120f] p-5 shadow-[0_25px_80px_rgba(0,0,0,.22)]`}>
-        <div className="flex flex-wrap items-start justify-between gap-5"><div><Label>Executive decision / {symbol}</Label><h1 className="mt-2 font-display text-3xl font-bold tracking-tight lg:text-4xl">What should the decision maker do?</h1><p className="mt-2 max-w-3xl text-sm leading-relaxed text-[#8fa69a]">D-Predict separates forecast from tradeability. A directional model signal is not treated as an executable trade until the distribution, data quality, target/stop and risk gates agree.</p></div><DecisionPill decision={decision} confidence={thesis?.confidence ?? signal?.confidence}/></div>
+        <div className="flex flex-wrap items-start justify-between gap-5"><div><Label>Executive decision / {symbol}</Label><h1 className="mt-2 font-display text-3xl font-bold tracking-tight lg:text-4xl">What should the decision maker do?</h1><p className="mt-2 max-w-3xl text-sm leading-relaxed text-[#8fa69a]">{instrumentName ? `${instrumentName} (${symbol})` : symbol}. D-Predict separates forecast from tradeability. A directional model signal is not treated as an executable trade until the distribution, data quality, target/stop and risk gates agree.</p></div><DecisionPill decision={decision} confidence={thesis?.confidence ?? signal?.confidence}/></div>
         <div className="mt-6 grid gap-4 lg:grid-cols-[1.35fr_.65fr]">
           <div className={`rounded-xl border ${tradeReady ? "border-[#3d5932] bg-[#102016]" : "border-[#5a432a] bg-[#1b160d]"} p-5`}>
-            <div className="flex items-center gap-3"><span className={`flex h-12 w-12 items-center justify-center rounded-xl ${tradeReady ? "bg-[#c8f169] text-[#11210b]" : "bg-[#3a2b17] text-[#e5b55f]"}`}>{tradeReady ? <CheckCircle2 size={25}/> : <AlertTriangle size={25}/>}</span><div><div className="font-mono-ui text-[9px] tracking-[.16em] text-[#70887d]">PRIMARY ACTION</div><div className={`font-display text-3xl font-bold ${tradeReady ? "text-[#d7f883]" : "text-[#e5b55f]"}`}>{tradeReady ? `${thesis?.signal ?? decision}` : "WAIT / NO TRADE"}</div></div></div>
+            <div className="flex items-center gap-3"><span className={`flex h-12 w-12 items-center justify-center rounded-xl ${tradeReady ? "bg-[#c8f169] text-[#11210b]" : "bg-[#3a2b17] text-[#e5b55f]"}`}>{tradeReady ? <CheckCircle2 size={25}/> : <AlertTriangle size={25}/>}</span><div><div className="font-mono-ui text-[9px] tracking-[.16em] text-[#70887d]">PRIMARY ACTION · {instrumentName ?? symbol}</div><div className={`font-display text-3xl font-bold ${tradeReady ? "text-[#d7f883]" : "text-[#e5b55f]"}`}>{tradeReady ? `${thesis?.signal ?? decision}` : "WAIT / NO TRADE"}</div></div></div>
             <div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Entry" value={price(thesis?.entryPrice ?? market?.close)} sub="next executable reference" icon={Target}/><Metric label="Expected" value={thesis?.expectedReturn == null ? "—" : `${(thesis.expectedReturn*100).toFixed(2)}%`} sub="model return forecast" icon={Activity}/><Metric label="Horizon" value={thesis?.horizon ?? "—"} sub="requested holding window" icon={Gauge}/><Metric label="R / R" value={thesis?.riskRewardToTarget1 == null ? "—" : thesis.riskRewardToTarget1.toFixed(2)} sub="target 1 vs stop" icon={ShieldAlert}/></div>
           </div>
           <div className="rounded-xl border border-[#203a32] bg-[#08130f] p-5"><div className="flex items-center gap-2"><ShieldAlert size={15} className="text-[#e5b55f]"/><Label>Decision blockers</Label></div>{blockers.length ? <div className="mt-4 space-y-2">{blockers.map(item => <div key={item} className="flex gap-2 rounded-lg border border-[#3c3120] bg-[#15120c] px-3 py-2 text-xs text-[#c8b582]"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#e5b55f]"/>{item}</div>)}</div> : <div className="mt-5 flex items-center gap-2 text-sm text-[#c8f169]"><CheckCircle2 size={16}/> No current decision blockers.</div>}<div className="mt-5 border-t border-[#1d332f] pt-4 font-mono-ui text-[9px] text-[#5f766c]">DATA STATUS: {dataStatus} · UPDATED: {lastUpdate ? new Date(lastUpdate).toLocaleTimeString("en-IN") : "—"}</div></div>
@@ -132,13 +148,18 @@ export default function DecisionDashboard() {
         <Card className="p-5"><Label>Model decision / reasons</Label><div className={`mt-2 font-display text-3xl font-bold ${tone(signal?.direction)}`}>{signal?.direction ?? "NO SIGNAL"}</div><div className="mt-1 text-xs text-[#789087]">{signal?.regime ?? "No regime classification"} · model {signal?.modelVersion ?? "—"}</div><div className="mt-5 space-y-2">{signal?.reasonCodes?.length ? signal.reasonCodes.map(reason => <div key={reason} className="flex items-start gap-2 rounded-lg border border-[#1d332f] bg-[#09130f] p-3 text-xs text-[#bdc9c1]"><span className="mt-1 h-1.5 w-1.5 rounded-full bg-[#c8f169]"/>{reason}</div>) : <Empty text="No reason codes available."/>}</div></Card>
       </section>
 
+      <section id="projection" className="grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
+        <Card className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><Label>Research forecast / {instrumentName ?? symbol}</Label><h2 className="mt-1 font-display text-xl font-semibold">Next {forecastHorizon} trading days</h2></div><select value={forecastHorizon} onChange={(event) => setForecastHorizon(Number(event.target.value))} className="rounded-lg border border-[#26453a] bg-[#10211c] px-3 py-2 font-mono-ui text-[10px] text-[#d7e8d9] outline-none"><option value={3}>3 days</option><option value={5}>5 days</option><option value={10}>10 days</option><option value={20}>20 days</option></select></div>{forecast ? <><div className="mt-4 grid gap-3 sm:grid-cols-4"><Metric label="Expected value" value={price(forecast.expectedValue)} sub={`${(forecast.expectedReturn * 100).toFixed(2)}% expected move`} icon={Target}/><Metric label="Forecast range" value={`${price(forecast.forecastRange.low)} - ${price(forecast.forecastRange.high)}`} sub="p10 to p90 distribution" icon={BarChart3}/><Metric label="Direction odds" value={pct(Math.max(forecast.probabilityAboveSpot, forecast.probabilityBelowSpot))} sub={`${forecast.strategy.direction} distribution bias`} icon={Gauge}/><Metric label="History" value={`${forecast.daysOfHistoryUsed} days`} sub="daily observations used" icon={Database}/></div><div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4"><Label>Execution / position strategy</Label><div className={`mt-2 font-display text-2xl font-bold ${tone(forecast.strategy.direction)}`}>{forecast.strategy.action} · {forecast.strategy.direction}</div><p className="mt-2 text-xs leading-relaxed text-[#bdc9c1]">{forecast.strategy.rationale}</p><div className="mt-3 text-[10px] leading-relaxed text-[#8fa69a]"><strong className="text-[#c8f169]">Position sizing:</strong> {forecast.strategy.positionSizing}</div></div><div className="rounded-xl border border-[#3c3120] bg-[#15120c] p-4"><Label>Why this can change</Label><p className="mt-2 text-xs leading-relaxed text-[#c8b582]"><strong>Invalidation:</strong> {forecast.strategy.invalidation}</p><p className="mt-3 text-[10px] leading-relaxed text-[#897b5a]">Expected value is the distribution median, not a promise. This baseline does not include news, gaps, liquidity or causal fundamentals.</p></div></div></> : <Empty text="No forecast available. At least 20 daily observations are required; the engine will not fabricate a projection."/>}</Card>
+        <Card className="p-5"><Label>Decision engine review</Label><h2 className="mt-1 font-display text-xl font-semibold">Principles and drawbacks</h2><div className="mt-4 space-y-3"><div className="rounded-lg border border-[#29463b] bg-[#09130f] p-3 text-xs text-[#bdc9c1]"><strong className="text-[#c8f169]">Principle:</strong> separate forecast, evidence, tradeability and execution. Each gate should be independently measurable.</div><div className="rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-xs text-[#c8b582]"><strong>Current drawbacks:</strong> statistical drift is not causal, history may be thin, news can invalidate the distribution, and a median forecast can hide tail risk.</div><div className="rounded-lg border border-[#1d332f] bg-[#09130f] p-3 text-xs text-[#9fb4a8]"><strong className="text-[#d7e8d9]">Improvement path:</strong> walk-forward calibration, regime-specific residuals, event and liquidity features, probability calibration, and paper execution measured against slippage.</div>{forecast?.limitations.map((limitation) => <div key={limitation} className="text-[10px] leading-relaxed text-[#71877d]">- {limitation}</div>)}</div></Card>
+      </section>
+
       <section id="forecast" className="grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
         <Card className="p-5"><div className="flex items-center justify-between"><div><Label>Trade thesis / price distribution</Label><h2 className="mt-1 font-display text-xl font-semibold">Targets, stop & probability</h2></div><Target size={18} className="text-[#c8f169]"/></div>{thesis ? <><div className="mt-4 grid gap-3 sm:grid-cols-4"><Metric label="Entry" value={price(thesis.entryPrice)} sub="thesis entry" icon={Target}/><Metric label="Probability" value={pct(thesis.probability)} sub="directional thesis" icon={Gauge}/><Metric label="Expected move" value={thesis.expectedReturn == null ? "—" : `${(thesis.expectedReturn*100).toFixed(2)}%`} sub="conditional forecast" icon={Activity}/><Metric label="Stop" value={price(thesis.stop?.price)} sub={thesis.stop?.probability != null ? `${pct(thesis.stop.probability)} stop event` : "distribution tail"} icon={ShieldAlert}/></div><div className="mt-4 grid gap-3 md:grid-cols-3">{(thesis.targets ?? []).map((target, i) => <div key={`${target.price}-${i}`} className="rounded-xl border border-[#29463b] bg-[#09130f] p-4"><div className="flex justify-between"><Label>Target {i+1}</Label><span className="font-mono-ui text-xs text-[#c8f169]">{pct(target.probability)}</span></div><div className="mt-2 font-display text-2xl font-semibold">{price(target.price)}</div><div className="mt-2 font-mono-ui text-[9px] text-[#789087]">ETA {duration(target.timing?.p50Seconds)} · range {duration(target.timing?.p25Seconds)}–{duration(target.timing?.p75Seconds)}</div></div>)}</div></> : <Empty text="No executable trade thesis. D-Predict will not invent targets, stop or ETA."/>}</Card>
         <Card className="p-5"><Label>Confidence ladder</Label><div className="mt-5 space-y-4">{[["Forecast", thesis?.confidence ?? signal?.confidence],["Research", research?.confidence],["Evidence agreement", research?.agreement],["Data quality", market ? (market.status === "LIVE" ? 1 : market.status === "CACHED" ? .8 : market.status === "STALE" ? .35 : 0) : 0]].map(([name,value]) => <div key={name as string}><div className="mb-1 flex justify-between text-xs"><span className="text-[#a9bbb0]">{name}</span><span className="font-mono-ui text-[#c8f169]">{value == null ? "—" : pct(value as number)}</span></div><div className="h-2 overflow-hidden rounded-full bg-[#172a25]"><div className="h-full rounded-full bg-[#a9d45e]" style={{width:value == null ? "0%" : `${Math.max(0,Math.min(100,(value as number)*100))}%`}}/></div></div>)}</div><div className="mt-6 rounded-xl border border-[#293f35] bg-[#09130f] p-4 text-[10px] leading-relaxed text-[#71877d]">Confidence is displayed as evidence, not certainty. Promotion and live execution remain separate gates.</div></Card>
       </section>
 
       <section id="derivatives" className="grid gap-5 lg:grid-cols-[1fr_.6fr]">
-        <Card className="p-5"><div className="flex items-center justify-between"><div><Label>Derivatives / option intelligence</Label><h2 className="mt-1 font-display text-xl font-semibold">{optionSymbols.has(symbol) ? `${symbol} option chain` : "Select NIFTY or BANKNIFTY"}</h2></div><BarChart3 size={18} className="text-[#789087]"/></div>{optionSummary.length ? <div className="mt-4 h-[280px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={optionSummary}><CartesianGrid stroke="#18302a" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="strike" tick={{fill:"#70887d",fontSize:9}}/><YAxis tick={{fill:"#70887d",fontSize:9}}/><Tooltip contentStyle={{background:"#0b1714",border:"1px solid #29463b"}}/><ReferenceLine x={market?.close} stroke="#e5b55f" strokeDasharray="4 4"/><Bar dataKey="ceOi" fill="#c8f169" name="CE OI"/><Bar dataKey="peOi" fill="#f0776b" name="PE OI"/></BarChart></ResponsiveContainer></div> : <Empty text={optionSymbols.has(symbol) ? "No option-chain snapshot available." : "Options are deliberately separated from the equity prediction model."}/>}</Card>
+        <Card className="p-5"><div className="flex items-center justify-between"><div><Label>Derivatives / option intelligence</Label><h2 className="mt-1 font-display text-xl font-semibold">{symbol} option chain</h2></div><BarChart3 size={18} className="text-[#789087]"/></div>{optionSummary.length ? <div className="mt-4 h-[280px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={optionSummary}><CartesianGrid stroke="#18302a" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="strike" tick={{fill:"#70887d",fontSize:9}}/><YAxis tick={{fill:"#70887d",fontSize:9}}/><Tooltip contentStyle={{background:"#0b1714",border:"1px solid #29463b"}}/>{market?.close != null && <ReferenceLine x={market.close} stroke="#e5b55f" strokeDasharray="4 4"/>}<Bar dataKey="ceOi" fill="#c8f169" name="CE OI"/><Bar dataKey="peOi" fill="#f0776b" name="PE OI"/></BarChart></ResponsiveContainer></div> : <Empty text="No option-chain snapshot available for this instrument."/>}</Card>
         <Card className="p-5"><Label>Derivative decision</Label><div className="mt-3 space-y-3">{options.slice(0,8).map(row => <div key={`${row.expiry_date}-${row.strike}-${row.option_type}`} className="flex items-center justify-between rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2"><span className="font-mono-ui text-[9px] text-[#789087]">{row.strike} {row.option_type}</span><span className="font-mono-ui text-[10px]">LTP {row.ltp ?? "—"}</span><span className="font-mono-ui text-[10px] text-[#9fb4a8]">OI {row.oi ?? "—"}</span></div>)}{!options.length && <Empty text="No live derivative snapshot."/>}</div></Card>
       </section>
 

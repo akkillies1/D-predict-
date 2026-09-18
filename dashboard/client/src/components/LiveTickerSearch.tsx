@@ -4,7 +4,7 @@ import { addInstrument, searchInstruments } from "@/lib/localApi";
 import type { Instrument } from "@/lib/localApi";
 import { toast } from "sonner";
 
-type Props = { value: string; onChange: (symbol: string) => void };
+type Props = { value: string; onChange: (symbol: string, name?: string | null) => void };
 const STORAGE_KEY = "dpredict:selected-symbol";
 
 export default function LiveTickerSearch({ value, onChange }: Props) {
@@ -38,13 +38,20 @@ export default function LiveTickerSearch({ value, onChange }: Props) {
     setSelecting(true); setOpen(false);
     try {
       await addInstrument(item);
-      onChange(item.symbol);
+      onChange(item.symbol, item.name);
       setQuery(item.symbol);
       localStorage.setItem(STORAGE_KEY, item.symbol);
       window.dispatchEvent(new Event("dpredict:symbol"));
       toast.success(`${item.symbol} activated — collecting now`);
-    } catch {
-      toast.error(`Could not activate ${item.symbol}. Start the local API and database.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/database|postgres|persist/i.test(message)) {
+        onChange(item.symbol, item.name);
+        setQuery(item.symbol);
+        localStorage.setItem(STORAGE_KEY, item.symbol);
+        window.dispatchEvent(new Event("dpredict:symbol"));
+        toast.warning(`${item.symbol} selected locally. Start PostgreSQL to persist it and collect market data.`);
+      } else toast.error(message || `Could not activate ${item.symbol}.`);
     } finally { setSelecting(false); }
   };
   const addTypedSymbol = async () => {
