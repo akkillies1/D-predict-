@@ -32,6 +32,9 @@ docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-
 log "Applying idempotent option paper trading migration..."
 docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/009-option-paper-trading.sql >/dev/null
 
+log "Applying idempotent D-Predict 2.0 migration..."
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/010-dpredict-20.sql >/dev/null
+
 log "Starting API, research, ML inference, collector and engine..."
 docker compose --profile local up -d api research ml collector engine
 

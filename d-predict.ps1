@@ -43,6 +43,12 @@ for ($i = 0; $i -lt 60; $i++) {
 Write-Step "Applying idempotent shadow trading migration..."
 for ($j=0; $j -lt 30; $j++) { try { docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/008-shadow-trading.sql 2>$null; if ($LASTEXITCODE -eq 0) { break } } catch {}; Start-Sleep -Seconds 2 }
 
+Write-Step "Applying idempotent option paper trading migration..."
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/009-option-paper-trading.sql
+
+Write-Step "Applying idempotent D-Predict 2.0 migration..."
+docker compose exec -T postgres psql -U postgres -d nifty -f /docker-entrypoint-initdb.d/010-dpredict-20.sql
+
 Write-Step "Waiting for market API health..."
 $healthy = $false
 for ($i = 0; $i -lt 60; $i++) {

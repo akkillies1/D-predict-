@@ -47,15 +47,20 @@ export default function LiveTickerSearch({ value, onChange }: Props) {
       toast.error(`Could not activate ${item.symbol}. Start the local API and database.`);
     } finally { setSelecting(false); }
   };
+  const addTypedSymbol = async () => {
+    const symbol = query.trim().toUpperCase();
+    if (!/^[A-Z0-9._-]{1,32}$/.test(symbol)) return;
+    await select({ symbol, exchange: symbol.endsWith(".BO") ? "BSE" : "NSE", lotSize: 1, isActive: true, name: null, source: "user" });
+  };
 
   return <div ref={rootRef} className="relative w-[250px]">
     <div className="flex items-center gap-2 rounded-lg border border-[#26453a] bg-[#10211c] px-3 py-2.5">
       <Search size={14} className="shrink-0 text-[#789087]" />
-      <input disabled={selecting} value={query} onFocus={() => query.trim() && setOpen(true)} onChange={(e) => setQuery(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); if (e.key === "Enter" && results[0]) void select(results[0]); }} placeholder="Search ticker or company" aria-label="Search ticker or company" className="min-w-0 flex-1 bg-transparent font-mono-ui text-xs text-[#d7e8d9] outline-none placeholder:text-[#5f766c]" />
+      <input disabled={selecting} value={query} onFocus={() => query.trim() && setOpen(true)} onChange={(e) => setQuery(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); if (e.key === "Enter") { if (results[0]) void select(results[0]); else void addTypedSymbol(); } }} placeholder="Search ticker or company" aria-label="Search ticker or company" className="min-w-0 flex-1 bg-transparent font-mono-ui text-xs text-[#d7e8d9] outline-none placeholder:text-[#5f766c]" />
       {loading || selecting ? <Loader2 size={13} className="animate-spin text-[#c8f169]" /> : query ? <button aria-label="Clear ticker search" onClick={() => { setQuery(""); setOpen(false); }} className="text-[#71887d] hover:text-[#d7e8d9]"><X size={13} /></button> : null}
     </div>
     {open ? <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-[#28483d] bg-[#0b1714] shadow-2xl">
-      {results.length ? results.map((item) => <button key={`${item.exchange}:${item.symbol}`} onMouseDown={(e) => e.preventDefault()} onClick={() => void select(item)} className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-[#142b24]"><span className="min-w-0"><span className="block font-mono-ui text-xs font-semibold text-[#e4f1e5]">{item.symbol}</span><span className="block truncate text-[10px] text-[#789087]">{item.name ?? item.symbol}</span></span><span className="shrink-0 rounded border border-[#254237] px-1.5 py-0.5 font-mono-ui text-[9px] text-[#8da99b]">{item.exchange || item.source || "MARKET"}</span></button>) : !loading ? <div className="px-3 py-3 text-[11px] text-[#71887d]">No matching instruments found.</div> : null}
+      {results.length ? results.map((item) => <button key={`${item.exchange}:${item.symbol}`} onMouseDown={(e) => e.preventDefault()} onClick={() => void select(item)} className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-[#142b24]"><span className="min-w-0"><span className="block font-mono-ui text-xs font-semibold text-[#e4f1e5]">{item.symbol}</span><span className="block truncate text-[10px] text-[#789087]">{item.name ?? item.symbol}</span></span><span className="shrink-0 rounded border border-[#254237] px-1.5 py-0.5 font-mono-ui text-[9px] text-[#8da99b]">{item.exchange || item.source || "MARKET"}</span></button>) : !loading && /^[A-Z0-9._-]{1,32}$/.test(query.trim()) ? <button onMouseDown={(e) => e.preventDefault()} onClick={() => void addTypedSymbol()} className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-[#142b24]"><span><span className="block font-mono-ui text-xs font-semibold text-[#e4f1e5]">Add {query.trim().toUpperCase()}</span><span className="block text-[10px] text-[#789087]">Activate this ticker for local research</span></span><span className="text-[#c8f169]">+</span></button> : !loading ? <div className="px-3 py-3 text-[11px] text-[#71887d]">No matching instruments found.</div> : null}
     </div> : null}
   </div>;
 }

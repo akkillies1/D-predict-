@@ -1,11 +1,13 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import path from "node:path";
 import pg from "pg";
 import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
 
 dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 const { Pool } = pg;
 const app = express();
 const port = Number(process.env.API_PORT ?? 4100);

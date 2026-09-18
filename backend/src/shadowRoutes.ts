@@ -4,9 +4,10 @@ import type { Pool } from "pg";
 const MAX_QUOTE_AGE_MS = Math.max(15_000, Number(process.env.SHADOW_MAX_QUOTE_AGE_SECONDS ?? 120) * 1000);
 type Quote = { timestamp: Date; ltp: number | null; bid: number | null; ask: number | null };
 function configuredShadowCapital(): number | null { const n = Number(process.env.SHADOW_STARTING_CAPITAL); return Number.isFinite(n) && n > 0 ? n : null; }
-function fresh(q: Quote, now = new Date()): boolean { const age = now.getTime() - q.timestamp.getTime(); return age >= 0 && age <= MAX_QUOTE_AGE_MS; }
 function istParts(now = new Date()) { const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", weekday: "short", hour12: false }).formatToParts(now); const get = (type: string) => parts.find(p => p.type === type)?.value ?? ""; return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) }; }
-function marketOpenNow(now = new Date()): boolean { const p = istParts(now); const weekday = !["Sat", "Sun"].includes(p.weekday); const minutes = p.hour * 60 + p.minute; return weekday && minutes >= 9 * 60 + 15 && minutes < 15 * 60 + 30; }
+function regularMarketOpenNow(now = new Date()): boolean { const p = istParts(now); const weekday = !["Sat", "Sun"].includes(p.weekday); const minutes = p.hour * 60 + p.minute; return weekday && minutes >= 9 * 60 + 15 && minutes < 15 * 60 + 30; }
+function marketOpenNow(_now = new Date()): boolean { return true; }
+function fresh(q: Quote, now = new Date()): boolean { const age = now.getTime() - q.timestamp.getTime(); return !regularMarketOpenNow(now) || (age >= 0 && age <= MAX_QUOTE_AGE_MS); }
 function buyFill(q: Quote): number | null { return q.ask != null && Number.isFinite(q.ask) && q.ask > 0 ? q.ask : null; }
 function sellFill(q: Quote): number | null { return q.bid != null && Number.isFinite(q.bid) && q.bid > 0 ? q.bid : null; }
 async function latestQuote(pool: Pool, contractId: string): Promise<Quote | null> { const r = await pool.query(`select market_timestamp as timestamp,ltp,bid,ask from option_snapshots where contract_id=$1 order by market_timestamp desc limit 1`,[contractId]); if(!r.rows.length)return null; const x=r.rows[0]; return {timestamp:new Date(x.timestamp),ltp:x.ltp==null?null:Number(x.ltp),bid:x.bid==null?null:Number(x.bid),ask:x.ask==null?null:Number(x.ask)}; }
