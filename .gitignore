@@ -23,4 +23,5 @@ data/backtests/
 data/validation/
 data/derivatives/
 data/research/
+data/runtime/
 data/manifests/
