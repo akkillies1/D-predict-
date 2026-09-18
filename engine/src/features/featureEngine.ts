@@ -1,4 +1,4 @@
-import { pool, getInstrumentId } from "../db.js";
+import { pool, getActiveSymbols, getInstrumentId } from "../db.js";
 import { config } from "../config.js";
 import {
   Bar,
@@ -192,7 +192,7 @@ async function computeAndPersistFeatures(symbol: string, timeframe = "1m"): Prom
 }
 
 export async function runFeatureEngine(): Promise<void> {
-  for (const symbol of config.instruments) {
+  for (const symbol of await getActiveSymbols()) {
     await computeAndPersistFeatures(symbol);
   }
 }

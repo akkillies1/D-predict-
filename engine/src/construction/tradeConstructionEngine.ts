@@ -1,4 +1,4 @@
-import { pool, getInstrumentId } from "../db.js";
+import { pool, getActiveSymbols, getInstrumentId } from "../db.js";
 import { config } from "../config.js";
 import { findAtmContract, getSpotPriceAt } from "./optionChainRepo.js";
 
@@ -134,7 +134,7 @@ async function constructForSignal(signal: UnconstructedSignal): Promise<void> {
 }
 
 export async function runTradeConstructionEngine(): Promise<void> {
-  for (const symbol of config.instruments) {
+  for (const symbol of await getActiveSymbols()) {
     const instrumentId = await getInstrumentId(symbol);
     const signals = await loadUnconstructedSignals(instrumentId);
     for (const signal of signals) {

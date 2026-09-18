@@ -50,7 +50,7 @@ export default function LiveTickerSearch({ value, onChange }: Props) {
   const addTypedSymbol = async () => {
     const symbol = query.trim().toUpperCase();
     if (!/^[A-Z0-9._-]{1,32}$/.test(symbol)) return;
-    await select({ symbol, exchange: symbol.endsWith(".BO") ? "BSE" : "NSE", lotSize: 1, isActive: true, name: null, source: "user" });
+    await select({ symbol, exchange: symbol.endsWith(".BO") ? "BSE" : "NSE", lotSize: 1, isActive: true, name: null, providerSymbol: symbol, instrumentType: "EQUITY", source: "user" });
   };
 
   return <div ref={rootRef} className="relative w-[250px]">

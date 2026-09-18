@@ -53,8 +53,14 @@ app.get("/api/instruments/discover", async (req, res) => {
   const query = String(req.query.q ?? "").trim();
   if (query.length < 1) return res.json({ ok: true, instruments: [] });
   try {
-    const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
-    return res.json({ ok: true, instruments: result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, source: row.source })) });
+    const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
+    const local = result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source }));
+    const response = await fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`, { headers: { "User-Agent": "D-Predict/2.0" } });
+    if (!response.ok) return res.json({ ok: true, instruments: local });
+    const payload = await response.json() as { quotes?: Array<{ symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string; exchDisp?: string }> };
+    const online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
+    const merged = [...local, ...online.filter((item) => !local.some((existing) => existing.symbol === item.symbol))];
+    return res.json({ ok: true, instruments: merged.slice(0, 25) });
   } catch (error) { return res.status(500).json({ ok: false, error: "INSTRUMENT_DISCOVERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
@@ -66,9 +72,11 @@ app.post("/api/instruments", async (req, res) => {
   const lotSize = Math.max(1, Math.floor(Number(req.body?.lotSize ?? 1)));
   if (invalidSymbol(symbol) || !Number.isFinite(lotSize)) return res.status(400).json({ ok: false, error: "INVALID_INSTRUMENT" });
   try {
-    const result = await pool.query(`insert into instruments (symbol, exchange, lot_size, name, provider_symbol, canonical_source) values ($1,$2,$3,$4,$1,'user') on conflict (symbol) do update set name=coalesce(excluded.name,instruments.name), exchange=excluded.exchange, lot_size=excluded.lot_size returning symbol, exchange, lot_size, is_active, name, canonical_source as source`, [symbol, exchange, lotSize, name]);
+    const providerSymbol = String(req.body?.providerSymbol ?? symbol).trim().toUpperCase();
+    const instrumentType = String(req.body?.instrumentType ?? "EQUITY").trim().toUpperCase();
+    const result = await pool.query(`insert into instruments (symbol, exchange, lot_size, name, provider_symbol, instrument_type, canonical_source, is_active) values ($1,$2,$3,$4,$5,$6,'yahoo',true) on conflict (symbol) do update set name=coalesce(excluded.name,instruments.name), exchange=excluded.exchange, lot_size=excluded.lot_size, provider_symbol=coalesce(excluded.provider_symbol,instruments.provider_symbol), instrument_type=coalesce(excluded.instrument_type,instruments.instrument_type), is_active=true returning symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source`, [symbol, exchange, lotSize, name, providerSymbol, instrumentType]);
     const row = result.rows[0];
-    return res.status(201).json({ ok: true, instrument: { symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, source: row.source } });
+    return res.status(201).json({ ok: true, instrument: { symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source } });
   } catch (error) { return res.status(500).json({ ok: false, error: "INSTRUMENT_CREATE_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 

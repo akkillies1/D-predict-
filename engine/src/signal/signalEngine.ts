@@ -1,4 +1,4 @@
-import { pool } from "../db.js";
+import { pool, getActiveSymbols } from "../db.js";
 import { config } from "../config.js";
 import { predictWithValidatedModel } from "../mlClient.js";
 
@@ -97,7 +97,7 @@ async function runForSymbol(symbol: string): Promise<void> {
 }
 
 export async function runSignalEngine(): Promise<void> {
-  for (const symbol of config.instruments) {
+  for (const symbol of await getActiveSymbols()) {
     try {
       await runForSymbol(symbol);
     } catch (error) {

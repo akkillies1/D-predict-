@@ -1,4 +1,4 @@
-import { getInstrumentId, getSpotPriceAt, getDailyClosesFromIntraday } from "../db.js";
+import { getActiveSymbols, getInstrumentId, getSpotPriceAt, getDailyClosesFromIntraday } from "../db.js";
 import { historicalVolatility } from "../features/indicators.js";
 import { simulateProbabilityCone, probabilityAbove, probabilityBelow, ForecastResult } from "./monteCarlo.js";
 
@@ -84,7 +84,7 @@ function printForecast(result: SymbolForecast): void {
 
 export async function runForecastEngine(): Promise<void> {
   const { config } = await import("../config.js");
-  for (const symbol of config.instruments) {
+  for (const symbol of await getActiveSymbols()) {
     const result = await forecastForSymbol(symbol, DEFAULT_HORIZON_DAYS, DEFAULT_NUM_PATHS);
     if (result) printForecast(result);
   }

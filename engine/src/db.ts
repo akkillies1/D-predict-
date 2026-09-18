@@ -3,6 +3,11 @@ import { config } from "./config.js";
 
 export const pool = new Pool({ connectionString: config.databaseUrl });
 
+export async function getActiveSymbols(): Promise<string[]> {
+  const res = await pool.query("select symbol from instruments where is_active = true order by symbol");
+  return res.rows.map((row) => String(row.symbol));
+}
+
 export async function getInstrumentId(symbol: string): Promise<string> {
   const res = await pool.query(
     "select instrument_id from instruments where symbol = $1",
