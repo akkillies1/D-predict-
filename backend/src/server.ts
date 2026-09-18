@@ -93,7 +93,7 @@ async function marketResponse(symbol: string, res: express.Response) {
   if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
   try {
     const quote = await latestQuote(symbol);
-    if (!quote || quote.close == null) return unavailable(res, "NO_MARKET_DATA", { symbol });
+    if (!quote || quote.close == null) return res.json({ ok: false, symbol, timestamp: null, collectedAt: null, open: null, high: null, low: null, close: null, volume: null, status: "OFFLINE", error: "NO_MARKET_DATA" });
     const age = Date.now() - Date.parse(quote.timestamp ?? "");
     const status = age <= 60000 ? "LIVE" : age <= 300000 ? "CACHED" : "STALE";
     const change = quote.previousClose == null ? null : quote.close - quote.previousClose;
@@ -107,7 +107,7 @@ app.get("/api/market/:symbol/history", async (req, res) => {
   const symbol = symbolParam(req.params.symbol); const limit = Math.min(1000, Math.max(1, Number(req.query.limit ?? 120)));
   try {
     const result = await pool.query(`select pb.market_timestamp, pb.open, pb.high, pb.low, pb.close, pb.volume from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit $2`, [symbol, limit]);
-    if (!result.rows.length) return unavailable(res, "NO_MARKET_DATA", { symbol });
+    if (!result.rows.length) return res.json({ ok: false, symbol, rows: [], status: "PENDING", error: "NO_MARKET_DATA" });
     return res.json({ ok: true, symbol, rows: result.rows.reverse().map((row) => ({ timestamp: iso(row.market_timestamp), open: finite(row.open), high: finite(row.high), low: finite(row.low), close: finite(row.close), volume: finite(row.volume) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: "HISTORY_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
@@ -143,7 +143,7 @@ app.get("/api/signals/latest", async (req, res) => {
   const symbol = symbolParam(req.query.symbol);
   try {
     const result = await pool.query(`select s.id, i.symbol, s.timestamp, s.strategy_version, s.model_version, s.direction, s.confidence, s.regime, s.reason_codes, s.parameters from signal_decisions s join instruments i on i.instrument_id=s.instrument_id where i.symbol=$1 order by s.timestamp desc limit 1`, [symbol]);
-    if (!result.rows.length) return unavailable(res, "NO_SIGNAL", { symbol });
+    if (!result.rows.length) return res.json({ ok: false, symbol, signal: null, status: "PENDING", error: "NO_SIGNAL" });
     const row = result.rows[0]; const cached = thesisCache.get(symbol); let tradeThesis = cached && cached.expiresAt > Date.now() ? cached.value : null;
     if (!tradeThesis) { const price = await pool.query(`select close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 1`, [symbol]); if (price.rows.length) { tradeThesis = await buildCausalTradeThesis(pool, { symbol: row.symbol, timestamp: row.timestamp, direction: row.direction, confidence: Number(row.confidence) }, Number(price.rows[0].close)); thesisCache.set(symbol, { expiresAt: Date.now() + 30000, value: tradeThesis }); } }
     return res.json({ ok: true, signal: { id: row.id, symbol: row.symbol, timestamp: iso(row.timestamp), strategyVersion: row.strategy_version, modelVersion: row.model_version, direction: row.direction, confidence: Number(row.confidence), regime: row.regime, reasonCodes: row.reason_codes ?? [], parameters: row.parameters ?? {}, tradeThesis } });
