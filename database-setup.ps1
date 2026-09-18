@@ -77,7 +77,7 @@ if ($mode -eq 'local_postgres') {
   if ($NonInteractive) {
     $dataRoot = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { Join-Path $env:USERPROFILE 'D-PredictData' }
   } else {
-    $default = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { 'D:\D-PredictData' }
+    $default = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { Join-Path $env:USERPROFILE 'D-PredictData' }
     $dataRoot = Read-Host "Data folder [$default]"
     if (-not $dataRoot) { $dataRoot = $default }
   }
