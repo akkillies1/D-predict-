@@ -5,6 +5,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
+import { rankMarketCandidates } from "./marketScanner.js";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
@@ -209,7 +210,25 @@ app.get("/api/forecast", async (req, res) => {
     return res.json({ ok: true, symbol, spot, dailyVolatility: volatility, daysOfHistoryUsed: closes.length, horizonDays, paths: 0, probabilityAboveSpot, probabilityBelowSpot, expectedValue, expectedReturn, forecastRange: { low: p10, high: p90 }, bands: Array.from({ length: horizonDays }, (_, index) => { const day = index + 1; const dayScale = volatility * Math.sqrt(day); return { day, p10: spot * Math.exp(mean * day - 1.2816 * dayScale), p25: spot * Math.exp(mean * day - 0.6745 * dayScale), median: spot * Math.exp(mean * day), p75: spot * Math.exp(mean * day + 0.6745 * dayScale), p90: spot * Math.exp(mean * day + 1.2816 * dayScale) }; }), strategy: { direction, action: strategy, rationale, positionSizing: direction === "FLAT" ? "0% until edge improves" : "Risk no more than 0.5% of capital; scale in 25% / 25% / 50%", invalidation: `Invalidate if price closes beyond the ${direction === "LONG" ? "lower" : "upper"} forecast boundary or the next data refresh materially changes the distribution.` }, actionSuggestions, status: "STATISTICAL_BASELINE", limitations: ["Uses historical daily log returns, not a causal fundamental model.", "Forecast uncertainty widens with horizon and does not account for gaps, news or liquidity.", "Expected value is a distribution median, not a guaranteed price."] });
   } catch (error) { return res.status(500).json({ ok: false, error: "FORECAST_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
-
+app.get("/api/market/scan", async (req, res) => {
+  if (!pool) return noDb(res);
+  const limit = Math.min(5, Math.max(1, Number(req.query.limit ?? 5)));
+  const roundTripCost = Number(process.env.SCANNER_ROUND_TRIP_COST ?? 0.002);
+  try {
+    const result = await pool.query(`
+      select i.symbol, i.name,
+        coalesce((select json_agg(json_build_object('timestamp', b.market_timestamp, 'close', b.close) order by b.market_timestamp asc)
+          from price_bars b where b.instrument_id=i.instrument_id and b.timeframe='1d' and b.market_timestamp >= now() - interval '120 days'), '[]'::json) as bars,
+        (select json_build_object('expectedReturn', p.expected_return, 'confidence', p.confidence, 'timestamp', p.timestamp, 'horizon', p.horizon, 'calibrationStatus', p.evidence->>'calibrationStatus', 'modelVersion', p.model_version)
+          from prediction_ledger p where upper(p.symbol)=upper(i.symbol) and p.expected_return is not null order by p.timestamp desc limit 1) as prediction
+      from instruments i
+      where i.is_active=true and i.instrument_type in ('EQUITY','INDEX','ETF')
+      order by i.symbol`, []);
+    const inputs = result.rows.map((row) => ({ symbol: row.symbol, name: row.name, bars: Array.isArray(row.bars) ? row.bars : [], prediction: row.prediction ?? null }));
+    const scan = rankMarketCandidates(inputs, { maxPicks: limit, roundTripCost }, new Date());
+    return res.json({ ok: true, ...scan, requestedPicks: limit, roundTripCost, disclaimer: "Research ranking only. It is not investment advice, does not guarantee performance, and excludes instruments without fresh history, calibrated predictions, or positive net expected return." });
+  } catch (error) { return res.status(500).json({ ok: false, error: "MARKET_SCAN_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
+});
 function numberOrNull(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }
 function clampScore(value: number): number { return Math.max(0, Math.min(100, Math.round(value))); }
 app.post("/api/ipo/analyze", async (req, res) => {
