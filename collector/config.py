@@ -24,7 +24,8 @@ class Config:
 
     # NSE adapter
     nse_base_url: str = "https://www.nseindia.com"
-    nse_option_chain_path: str = "/api/option-chain-indices"
+    nse_option_chain_indices_path: str = "/api/option-chain-v3"
+    nse_option_chain_equities_path: str = "/api/option-chain-equities"
     nse_request_timeout_seconds: int = 10
     nse_max_retries: int = 3
 

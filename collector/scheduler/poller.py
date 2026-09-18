@@ -26,9 +26,6 @@ class Poller:
     def run_option_chain_poll(self) -> None:
         run_id = uuid.uuid4()
         for symbol in self._db.active_symbols():
-            if symbol not in {"NIFTY", "BANKNIFTY"}:
-                logger.info("skipping NSE option chain for non-index symbol %s", symbol)
-                continue
             try:
                 snapshots = self._nse.fetch_option_chain(symbol)
             except Exception:
