@@ -225,8 +225,13 @@ app.get("/api/market/scan", async (req, res) => {
       where i.is_active=true and i.instrument_type in ('EQUITY','INDEX','ETF')
       order by i.symbol`, []);
     const inputs = result.rows.map((row) => ({ symbol: row.symbol, name: row.name, bars: Array.isArray(row.bars) ? row.bars : [], prediction: row.prediction ?? null }));
-    const scan = rankMarketCandidates(inputs, { maxPicks: limit, roundTripCost }, new Date());
-    return res.json({ ok: true, ...scan, requestedPicks: limit, roundTripCost, disclaimer: "Research ranking only. It is not investment advice, does not guarantee performance, and excludes instruments without fresh history, calibrated predictions, or positive net expected return." });
+    const now = new Date();
+    const istHour = Number(new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }).format(now));
+    const istMinute = Number(new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", minute: "2-digit" }).format(now));
+    const istWeekday = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short" }).format(now);
+    const marketOpen = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(istWeekday) && (istHour > 9 || (istHour === 9 && istMinute >= 15)) && (istHour < 15 || (istHour === 15 && istMinute <= 30));
+    const scan = rankMarketCandidates(inputs, { maxPicks: limit, roundTripCost, maxDataAgeDays: 10, marketOpen }, now);
+    return res.json({ ok: true, ...scan, marketOpen, requestedPicks: limit, roundTripCost, disclaimer: "Research ranking only. It is not investment advice, does not guarantee performance, and excludes instruments without sufficiently recent history, calibrated predictions, or positive net expected return. When the market is closed, prices are labeled as the last verified session." });
   } catch (error) { return res.status(500).json({ ok: false, error: "MARKET_SCAN_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 function numberOrNull(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }

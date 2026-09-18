@@ -14,12 +14,13 @@ export type ScannerCandidate = {
   maxDrawdown60d: number;
   dataDays: number;
   dataAsOf: string;
+  dataStatus: "CURRENT" | "CLOSED_LAST_SESSION";
   score: number;
   reasons: string[];
   risks: string[];
 };
 
-export type ScannerConfig = { maxPicks?: number; roundTripCost?: number; minHistory?: number; maxDataAgeDays?: number };
+export type ScannerConfig = { maxPicks?: number; roundTripCost?: number; minHistory?: number; maxDataAgeDays?: number; marketOpen?: boolean };
 
 function clamp(value: number, min = 0, max = 1) { return Math.max(min, Math.min(max, value)); }
 function asDate(value: string | Date) { const date = value instanceof Date ? value : new Date(value); return Number.isFinite(date.getTime()) ? date : null; }
@@ -33,7 +34,11 @@ export function rankMarketCandidates(
   const maxPicks = Math.max(1, Math.min(5, Math.floor(config.maxPicks ?? 5)));
   const roundTripCost = Math.max(0, config.roundTripCost ?? 0.002);
   const minHistory = Math.max(20, Math.floor(config.minHistory ?? 60));
-  const maxDataAgeDays = Math.max(1, config.maxDataAgeDays ?? 3);
+  // A closed exchange legitimately has no current bar. Keep the last verified
+  // session available for research, but do not let an old dataset masquerade
+  // as current data. The route can tighten this during an open session.
+  const maxDataAgeDays = Math.max(1, config.maxDataAgeDays ?? 10);
+  const marketOpen = config.marketOpen ?? true;
   const excluded: Array<{ symbol: string; reason: string }> = [];
   const candidates: ScannerCandidate[] = [];
 
@@ -45,7 +50,7 @@ export function rankMarketCandidates(
     if (prediction.calibrationStatus !== "CALIBRATED") { excluded.push({ symbol: input.symbol, reason: "Prediction probability is not calibrated from prior OOS examples." }); continue; }
     const latest = asDate(bars[bars.length - 1].timestamp)!;
     const ageDays = (now.getTime() - latest.getTime()) / 86400000;
-    if (ageDays > maxDataAgeDays) { excluded.push({ symbol: input.symbol, reason: `Daily data is ${ageDays.toFixed(1)} days old.` }); continue; }
+    if (ageDays > maxDataAgeDays) { excluded.push({ symbol: input.symbol, reason: `Daily data is ${ageDays.toFixed(1)} days old; maximum accepted age is ${maxDataAgeDays} days.` }); continue; }
     const closes = bars.map((bar) => bar.close);
     const logReturns = returns(closes.slice(-Math.min(90, closes.length)));
     const mean = logReturns.reduce((sum, value) => sum + value, 0) / Math.max(1, logReturns.length);
@@ -72,8 +77,8 @@ export function rankMarketCandidates(
     ];
     const risks = [`Round-trip cost assumption ${(roundTripCost * 100).toFixed(2)}% must be verified for the instrument.`, `60-day maximum drawdown ${(Math.abs(maxDrawdown60d) * 100).toFixed(2)}%.`];
     if (!directionAligned) risks.push("Model direction and recent momentum disagree.");
-    candidates.push({ symbol: input.symbol, name: input.name, spot, expectedReturn, netExpectedReturn, confidence: prediction.confidence, horizon: prediction.horizon, dailyVolatility, momentum20d, momentum60d, maxDrawdown60d, dataDays: bars.length, dataAsOf: latest.toISOString(), score, reasons, risks });
+    candidates.push({ symbol: input.symbol, name: input.name, spot, expectedReturn, netExpectedReturn, confidence: prediction.confidence, horizon: prediction.horizon, dailyVolatility, momentum20d, momentum60d, maxDrawdown60d, dataDays: bars.length, dataAsOf: latest.toISOString(), dataStatus: !marketOpen && ageDays > 1 / 24 ? "CLOSED_LAST_SESSION" : "CURRENT", score, reasons, risks });
   }
   candidates.sort((a, b) => b.score - a.score);
-  return { picks: candidates.slice(0, maxPicks), excluded, asOf: now.toISOString(), methodology: "calibrated-oos-forecast + daily-momentum-confirmation - round-trip-cost - drawdown-risk-penalty; abstain when data, calibration, or net edge is unavailable" };
+  return { picks: candidates.slice(0, maxPicks), excluded, asOf: now.toISOString(), methodology: "calibrated-oos-forecast + daily-momentum-confirmation - round-trip-cost - drawdown-risk-penalty; closed markets use the latest verified session; abstain when data, calibration, or net edge is unavailable" };
 }
