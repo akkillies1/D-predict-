@@ -9,6 +9,14 @@ export type MlPrediction = {
   expected_return: number;
   confidence: number;
   calibration_status: "CALIBRATED" | "UNCALIBRATED";
+  prediction_status: "PROMOTION_READY" | "ABSTAIN";
+  promotion_checks: Record<string, boolean>;
+  oos_metrics: {
+    accuracy: number;
+    majority_baseline: number;
+    log_loss: number;
+    directional_accuracy: number | null;
+  };
   model_version: string;
   feature_set_version: string;
   training_cutoff: string;

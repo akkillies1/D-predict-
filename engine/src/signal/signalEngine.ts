@@ -10,18 +10,19 @@ function toDirection(prediction: "DOWN" | "FLAT" | "UP"): Direction {
   return "NEUTRAL";
 }
 
-function reasonCodes(prediction: "DOWN" | "FLAT" | "UP", calibration: string): string[] {
+function reasonCodes(prediction: "DOWN" | "FLAT" | "UP", calibration: string, status: string): string[] {
   return [
     `ML_${prediction}`,
     calibration === "CALIBRATED" ? "PROBABILITY_CALIBRATED" : "PROBABILITY_UNCALIBRATED",
+    status === "PROMOTION_READY" ? "OOS_PROMOTION_READY" : "OOS_GATE_ABSTAIN",
     "PYTHON_RESEARCH_MODEL",
   ];
 }
 
 async function runForSymbol(symbol: string): Promise<void> {
   const prediction = await predictWithValidatedModel(symbol, new Date());
-  const direction = toDirection(prediction.prediction);
-  const reasons = reasonCodes(prediction.prediction, prediction.calibration_status);
+  const direction = prediction.prediction_status === "PROMOTION_READY" ? toDirection(prediction.prediction) : "NEUTRAL";
+  const reasons = reasonCodes(prediction.prediction, prediction.calibration_status, prediction.prediction_status);
 
   const signal = await pool.query(
     `insert into signal_decisions (
@@ -51,6 +52,9 @@ async function runForSymbol(symbol: string): Promise<void> {
         rawProbabilities: prediction.raw_probabilities,
         expectedReturn: prediction.expected_return,
         calibrationStatus: prediction.calibration_status,
+        predictionStatus: prediction.prediction_status,
+        promotionChecks: prediction.promotion_checks,
+        oosMetrics: prediction.oos_metrics,
         featureSetVersion: prediction.feature_set_version,
         trainingCutoff: prediction.training_cutoff,
         validationOosExamples: prediction.validation_oos_examples,
@@ -80,6 +84,9 @@ async function runForSymbol(symbol: string): Promise<void> {
         rawProbabilities: prediction.raw_probabilities,
         prediction: prediction.prediction,
         calibrationStatus: prediction.calibration_status,
+        predictionStatus: prediction.prediction_status,
+        promotionChecks: prediction.promotion_checks,
+        oosMetrics: prediction.oos_metrics,
         featureSetVersion: prediction.feature_set_version,
         trainingCutoff: prediction.training_cutoff,
       }),

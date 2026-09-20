@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import accuracy_score, log_loss
 
 from training.build_dataset import FEATURE_SET_VERSION, make_features
 
@@ -35,6 +36,10 @@ HORIZON = "1d"
 PURGE_ROWS = 1
 MIN_HISTORY = 300
 MIN_CALIBRATION_HISTORY = 100
+MIN_PROMOTION_EXAMPLES = 100
+MIN_PROMOTION_ACCURACY_LIFT = 0.02
+MAX_PROMOTION_LOG_LOSS = 1.05
+MIN_PROMOTION_DIRECTIONAL_ACCURACY = 0.52
 DB_URL = os.environ.get("DATABASE_URL")
 
 app = FastAPI(title="D-Predict ML Inference", version="1.0")
@@ -56,6 +61,11 @@ class ModelBundle:
     training_end: pd.Timestamp
     validation_examples: int
     calibration_examples: int
+    oos_accuracy: float
+    oos_majority_baseline: float
+    oos_log_loss: float
+    oos_directional_accuracy: float | None
+    promotion_ready: bool
     model_version: str
 
 
@@ -133,8 +143,36 @@ def _walk_forward(frame: pd.DataFrame, folds: int = 5) -> tuple[np.ndarray, np.n
     return np.vstack(raw_probs), np.asarray(actual, dtype=int), int(sum(len(x) for x in raw_probs))
 
 
+def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
+    predictions = np.argmax(raw_probs, axis=1)
+    examples = int(len(actual))
+    accuracy = float(accuracy_score(actual, predictions)) if examples else 0.0
+    counts = np.bincount(actual, minlength=3)
+    majority_baseline = float(counts.max() / examples) if examples else 1.0
+    probability_log_loss = float(log_loss(actual, raw_probs, labels=[0, 1, 2]))
+    directional_mask = np.isin(actual, [0, 2]) & np.isin(predictions, [0, 2])
+    directional_accuracy = (float(np.mean(predictions[directional_mask] == actual[directional_mask]))
+                            if np.any(directional_mask) else None)
+    checks = {
+        "minimum_examples": examples >= MIN_PROMOTION_EXAMPLES,
+        "beats_majority_baseline": accuracy - majority_baseline >= MIN_PROMOTION_ACCURACY_LIFT,
+        "probability_quality": probability_log_loss <= MAX_PROMOTION_LOG_LOSS,
+        "directional_accuracy": directional_accuracy is not None and directional_accuracy >= MIN_PROMOTION_DIRECTIONAL_ACCURACY,
+    }
+    return {
+        "examples": examples,
+        "accuracy": accuracy,
+        "majority_baseline": majority_baseline,
+        "log_loss": probability_log_loss,
+        "directional_accuracy": directional_accuracy,
+        "checks": checks,
+        "promotion_ready": all(checks.values()),
+    }
+
+
 def _fit_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
     raw_probs, actual, oos_examples = _walk_forward(frame)
+    promotion = _promotion_report(raw_probs, actual)
     calibrators: list[IsotonicRegression | None] = []
     for cls_idx in range(3):
         raw = raw_probs[:, cls_idx]
@@ -146,6 +184,7 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
             cal.fit(raw, y)
             calibrators.append(cal)
     calibrated = all(c is not None for c in calibrators)
+    promotion_ready = promotion["promotion_ready"] and calibrated
 
     clf = _classifier()
     clf.fit(frame[FEATURE_COLUMNS], frame["target_class"].map(CLASS_MAP))
@@ -161,6 +200,9 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
         classifier=clf, regressor=reg, calibrators=calibrators, calibrated=calibrated,
         training_end=training_end, validation_examples=oos_examples,
         calibration_examples=oos_examples if calibrated else 0,
+        oos_accuracy=promotion["accuracy"], oos_majority_baseline=promotion["majority_baseline"],
+        oos_log_loss=promotion["log_loss"], oos_directional_accuracy=promotion["directional_accuracy"],
+        promotion_ready=promotion_ready,
         model_version=f"market-v1-{HORIZON}-histgb-{signature}",
     )
 
@@ -218,6 +260,7 @@ def predict(request: PredictRequest):
     prediction = CLASS_NAMES[int(np.argmax(probs))]
     expected_return = float(bundle.regressor.predict(latest[FEATURE_COLUMNS])[0])
     confidence = float(np.max(probs))
+    prediction_status = "PROMOTION_READY" if bundle.promotion_ready else "ABSTAIN"
 
     return {
         "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": HORIZON,
@@ -226,6 +269,20 @@ def predict(request: PredictRequest):
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},
         "expected_return": expected_return, "confidence": confidence,
         "calibration_status": "CALIBRATED" if bundle.calibrated else "UNCALIBRATED",
+        "prediction_status": prediction_status,
+        "promotion_checks": {
+            "minimum_examples": bundle.validation_examples >= MIN_PROMOTION_EXAMPLES,
+            "beats_majority_baseline": bundle.oos_accuracy - bundle.oos_majority_baseline >= MIN_PROMOTION_ACCURACY_LIFT,
+            "probability_quality": bundle.oos_log_loss <= MAX_PROMOTION_LOG_LOSS,
+            "directional_accuracy": bundle.oos_directional_accuracy is not None and bundle.oos_directional_accuracy >= MIN_PROMOTION_DIRECTIONAL_ACCURACY,
+            "calibration_available": bundle.calibrated,
+        },
+        "oos_metrics": {
+            "accuracy": bundle.oos_accuracy,
+            "majority_baseline": bundle.oos_majority_baseline,
+            "log_loss": bundle.oos_log_loss,
+            "directional_accuracy": bundle.oos_directional_accuracy,
+        },
         "model_version": bundle.model_version, "feature_set_version": FEATURE_SET_VERSION,
         "training_cutoff": bundle.training_end.isoformat(),
         "validation_oos_examples": bundle.validation_examples, "calibration_examples": bundle.calibration_examples,
