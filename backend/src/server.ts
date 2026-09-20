@@ -116,7 +116,22 @@ app.get("/api/predictions/performance", async (req, res) => {
     const byHorizon = [...new Set(result.rows.map((row) => String(row.horizon)))].map((horizon) => {
       const rows = scored.filter((row) => String(row.horizon) === horizon);
       const wins = rows.filter((row) => predictionOf(row) === String(row.outcome_class)).length;
-      return { horizon, scoredPredictions: rows.length, accuracy: rows.length ? wins / rows.length : null, pendingPredictions: pending.filter((row) => String(row.horizon) === horizon).length };
+      const directionalRows = rows.filter((row) => ["UP", "DOWN"].includes(predictionOf(row)) && ["UP", "DOWN"].includes(String(row.outcome_class)));
+      const horizonProbabilityRows: Array<{ row: any; probabilities: number[] }> = rows.flatMap((row) => {
+        const probabilities = classes.map((label) => probabilityOf(row, label));
+        return probabilities.every((value): value is number => value != null) ? [{ row, probabilities }] : [];
+      });
+      const horizonLogLoss = horizonProbabilityRows.length
+        ? -horizonProbabilityRows.reduce((sum, item) => sum + Math.log(Math.max(1e-9, item.probabilities[classes.indexOf(String(item.row.outcome_class))])), 0) / horizonProbabilityRows.length
+        : null;
+      return {
+        horizon,
+        scoredPredictions: rows.length,
+        accuracy: rows.length ? wins / rows.length : null,
+        directionalAccuracy: directionalRows.length ? directionalRows.filter((row) => predictionOf(row) === String(row.outcome_class)).length / directionalRows.length : null,
+        logLoss: horizonLogLoss,
+        pendingPredictions: pending.filter((row) => String(row.horizon) === horizon).length,
+      };
     });
     return res.json({ ok: true, periodDays: days, generatedAt: new Date().toISOString(), metrics, byHorizon });
   } catch (error) {
@@ -321,7 +336,7 @@ app.get("/api/market/scan", async (req, res) => {
       select i.symbol, i.name,
         coalesce((select json_agg(json_build_object('timestamp', b.market_timestamp, 'close', b.close) order by b.market_timestamp asc)
           from price_bars b where b.instrument_id=i.instrument_id and b.timeframe='1d' and b.market_timestamp >= now() - interval '120 days'), '[]'::json) as bars,
-        (select json_build_object('expectedReturn', p.expected_return, 'confidence', p.confidence, 'timestamp', p.timestamp, 'horizon', p.horizon, 'calibrationStatus', p.evidence->>'calibrationStatus', 'predictionStatus', p.evidence->>'predictionStatus', 'modelVersion', p.model_version)
+        (select json_build_object('expectedReturn', p.expected_return, 'confidence', p.confidence, 'timestamp', p.timestamp, 'horizon', p.horizon, 'calibrationStatus', p.evidence->>'calibrationStatus', 'predictionStatus', p.evidence->>'predictionStatus', 'actionStatus', p.evidence->>'actionStatus', 'modelVersion', p.model_version)
           from prediction_ledger p where upper(p.symbol)=upper(i.symbol) and p.expected_return is not null order by p.timestamp desc limit 1) as prediction
       from instruments i
       where i.is_active=true and i.instrument_type in ('EQUITY','INDEX','ETF')

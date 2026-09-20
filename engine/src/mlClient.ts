@@ -8,8 +8,11 @@ export type MlPrediction = {
   raw_probabilities: { DOWN: number; FLAT: number; UP: number };
   expected_return: number;
   confidence: number;
+  probability_margin: number;
   calibration_status: "CALIBRATED" | "UNCALIBRATED";
   prediction_status: "PROMOTION_READY" | "ABSTAIN";
+  action_status: "ACTIONABLE_LONG" | "ACTIONABLE_SHORT" | "WATCH_FLAT" | "WATCH_LOW_EDGE" | "ABSTAIN_MODEL_GATE";
+  action_reasons: string[];
   promotion_checks: Record<string, boolean>;
   oos_metrics: {
     accuracy: number;

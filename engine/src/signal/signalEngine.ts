@@ -10,19 +10,21 @@ function toDirection(prediction: "DOWN" | "FLAT" | "UP"): Direction {
   return "NEUTRAL";
 }
 
-function reasonCodes(prediction: "DOWN" | "FLAT" | "UP", calibration: string, status: string): string[] {
+function reasonCodes(prediction: "DOWN" | "FLAT" | "UP", calibration: string, status: string, actionStatus: string): string[] {
   return [
     `ML_${prediction}`,
     calibration === "CALIBRATED" ? "PROBABILITY_CALIBRATED" : "PROBABILITY_UNCALIBRATED",
     status === "PROMOTION_READY" ? "OOS_PROMOTION_READY" : "OOS_GATE_ABSTAIN",
+    `ACTION_${actionStatus}`,
     "PYTHON_RESEARCH_MODEL",
   ];
 }
 
 async function runForSymbol(symbol: string): Promise<void> {
   const prediction = await predictWithValidatedModel(symbol, new Date());
-  const direction = prediction.prediction_status === "PROMOTION_READY" ? toDirection(prediction.prediction) : "NEUTRAL";
-  const reasons = reasonCodes(prediction.prediction, prediction.calibration_status, prediction.prediction_status);
+  const actionable = prediction.action_status === "ACTIONABLE_LONG" || prediction.action_status === "ACTIONABLE_SHORT";
+  const direction = actionable ? toDirection(prediction.prediction) : "NEUTRAL";
+  const reasons = reasonCodes(prediction.prediction, prediction.calibration_status, prediction.prediction_status, prediction.action_status);
 
   const signal = await pool.query(
     `insert into signal_decisions (
@@ -51,7 +53,10 @@ async function runForSymbol(symbol: string): Promise<void> {
         probabilities: prediction.probabilities,
         rawProbabilities: prediction.raw_probabilities,
         expectedReturn: prediction.expected_return,
+        probabilityMargin: prediction.probability_margin,
         calibrationStatus: prediction.calibration_status,
+        actionStatus: prediction.action_status,
+        actionReasons: prediction.action_reasons,
         predictionStatus: prediction.prediction_status,
         promotionChecks: prediction.promotion_checks,
         oosMetrics: prediction.oos_metrics,
@@ -83,7 +88,10 @@ async function runForSymbol(symbol: string): Promise<void> {
         probabilities: prediction.probabilities,
         rawProbabilities: prediction.raw_probabilities,
         prediction: prediction.prediction,
+        probabilityMargin: prediction.probability_margin,
         calibrationStatus: prediction.calibration_status,
+        actionStatus: prediction.action_status,
+        actionReasons: prediction.action_reasons,
         predictionStatus: prediction.prediction_status,
         promotionChecks: prediction.promotion_checks,
         oosMetrics: prediction.oos_metrics,

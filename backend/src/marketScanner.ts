@@ -1,5 +1,5 @@
 export type ScannerBar = { timestamp: string | Date; close: number };
-export type ScannerPrediction = { expectedReturn: number | null; confidence: number | null; timestamp: string | Date; horizon: string; calibrationStatus?: string | null; predictionStatus?: string | null; modelVersion?: string | null };
+export type ScannerPrediction = { expectedReturn: number | null; confidence: number | null; timestamp: string | Date; horizon: string; calibrationStatus?: string | null; predictionStatus?: string | null; actionStatus?: string | null; modelVersion?: string | null };
 export type ScannerCandidate = {
   symbol: string;
   name?: string | null;
@@ -49,6 +49,7 @@ export function rankMarketCandidates(
     if (!prediction || prediction.expectedReturn == null || prediction.confidence == null) { excluded.push({ symbol: input.symbol, reason: "No model return forecast available." }); continue; }
     if (prediction.calibrationStatus !== "CALIBRATED") { excluded.push({ symbol: input.symbol, reason: "Prediction probability is not calibrated from prior OOS examples." }); continue; }
     if (prediction.predictionStatus !== "PROMOTION_READY") { excluded.push({ symbol: input.symbol, reason: "Prediction failed the OOS promotion gate; scanner abstains." }); continue; }
+    if (prediction.actionStatus !== "ACTIONABLE_LONG" && prediction.actionStatus !== "ACTIONABLE_SHORT") { excluded.push({ symbol: input.symbol, reason: "Individual confidence, margin, or net-edge gate did not clear; scanner abstains." }); continue; }
     const latest = asDate(bars[bars.length - 1].timestamp)!;
     const ageDays = (now.getTime() - latest.getTime()) / 86400000;
     if (ageDays > maxDataAgeDays) { excluded.push({ symbol: input.symbol, reason: `Daily data is ${ageDays.toFixed(1)} days old; maximum accepted age is ${maxDataAgeDays} days.` }); continue; }

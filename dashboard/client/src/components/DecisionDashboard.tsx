@@ -962,8 +962,8 @@ export default function DecisionDashboard() {
                       {livePrediction.prediction}
                     </div>
                   </div>
-                  <span className={`rounded-full border px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] ${livePrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238] text-[#c8f169]" : "border-[#5a432a] text-[#c8b582]"}`}>
-                    {livePrediction.prediction_status === "PROMOTION_READY" ? "ACTIONABLE GATE" : "ABSTAIN"}
+                  <span className={`rounded-full border px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] ${livePrediction.action_status.startsWith("ACTIONABLE") ? "border-[#476238] text-[#c8f169]" : "border-[#5a432a] text-[#c8b582]"}`}>
+                    {livePrediction.action_status.replaceAll("_", " ")}
                   </span>
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
@@ -977,6 +977,7 @@ export default function DecisionDashboard() {
                 <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-[#9fb4a8]">
                   <div>Expected return: <strong className="text-[#d7e8d9]">{pct(livePrediction.expected_return)}</strong></div>
                   <div>Confidence: <strong className="text-[#d7e8d9]">{pct(livePrediction.confidence)}</strong></div>
+                  <div>Probability margin: <strong className="text-[#d7e8d9]">{pct(livePrediction.probability_margin)}</strong></div>
                   <div>Calibration: <strong className="text-[#d7e8d9]">{livePrediction.calibration_status}</strong></div>
                   <div>OOS examples: <strong className="text-[#d7e8d9]">{livePrediction.validation_oos_examples}</strong></div>
                 </div>
@@ -990,9 +991,10 @@ export default function DecisionDashboard() {
                   <div className="flex justify-between gap-3"><span>OOS log loss</span><strong className="text-[#d7e8d9]">{livePrediction.oos_metrics.log_loss.toFixed(3)}</strong></div>
                 </div>
                 <div className="mt-4 border-t border-[#1d332f] pt-3 text-[10px] leading-relaxed text-[#c8b582]">
-                  {livePrediction.prediction_status === "PROMOTION_READY"
-                    ? "This horizon cleared the minimum OOS evidence gate. It is still research output, not a guarantee or an instruction to trade."
-                    : "This horizon failed at least one OOS evidence gate. The raw model output is shown for research, but the system intentionally abstains from promoting it."}
+                  <div>{livePrediction.action_reasons.map(reason => `• ${reason.replaceAll("_", " ")}`).join("  ")}</div>
+                  <div className="mt-2">{livePrediction.action_status.startsWith("ACTIONABLE")
+                    ? "This individual forecast cleared the model, confidence, probability-margin, and net-edge gates. It remains research output, not a guarantee or an instruction to trade."
+                    : "The system is intentionally not promoting this individual forecast as an action. The raw model output remains visible for research."}</div>
                 </div>
               </div>
             </div>
@@ -1022,6 +1024,7 @@ export default function DecisionDashboard() {
             </span>
           </div>
           {predictionPerformance?.metrics.scoredPredictions ? (
+            <>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               <Metric label="Accuracy" value={pct(predictionPerformance.metrics.accuracy)} sub={`${predictionPerformance.metrics.scoredPredictions} resolved`} icon={Target} />
               <Metric label="Directional" value={pct(predictionPerformance.metrics.directionalAccuracy)} sub="UP/DOWN calls only" icon={ArrowUpRight} />
@@ -1029,6 +1032,18 @@ export default function DecisionDashboard() {
               <Metric label="Brier" value={predictionPerformance.metrics.brier == null ? "—" : predictionPerformance.metrics.brier.toFixed(3)} sub="probability error" icon={BarChart3} />
               <Metric label="Pending" value={String(predictionPerformance.metrics.pendingPredictions)} sub="awaiting horizon" icon={Activity} />
             </div>
+            <div className="mt-4 grid gap-2 md:grid-cols-3">
+              {predictionPerformance.byHorizon.map(item => (
+                <div key={item.horizon} className="rounded-lg border border-[#1d332f] bg-[#09130f] p-3 text-[10px] text-[#9fb4a8]">
+                  <div className="flex justify-between"><Label>{item.horizon} realized</Label><strong className="text-[#d7e8d9]">{item.scoredPredictions} scored</strong></div>
+                  <div className="mt-2 flex justify-between"><span>Accuracy</span><strong className="text-[#d7e8d9]">{pct(item.accuracy)}</strong></div>
+                  <div className="mt-1 flex justify-between"><span>Directional</span><strong className="text-[#d7e8d9]">{pct(item.directionalAccuracy)}</strong></div>
+                  <div className="mt-1 flex justify-between"><span>Log loss</span><strong className="text-[#d7e8d9]">{item.logLoss == null ? "—" : item.logLoss.toFixed(3)}</strong></div>
+                  <div className="mt-1 flex justify-between"><span>Pending</span><strong className="text-[#c8b582]">{item.pendingPredictions}</strong></div>
+                </div>
+              ))}
+            </div>
+            </>
           ) : (
             <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
               No resolved live predictions are available in the current window. The engine will abstain from claiming live accuracy until outcomes mature.

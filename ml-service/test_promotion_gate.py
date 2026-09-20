@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from app import _normalize_horizon, _promotion_report, _training_frame  # noqa: E402
+from app import _action_gate, _normalize_horizon, _promotion_report, _training_frame  # noqa: E402
 
 
 def _actual(rows=120):
@@ -64,3 +64,10 @@ def test_three_day_training_label_uses_three_future_closes():
     first_position = raw.index.get_loc(frame.index[0])
     expected = closes[first_position + 3] / closes[first_position] - 1
     assert abs(float(first["target_return"]) - expected) < 1e-12
+
+
+def test_action_gate_requires_net_edge_and_margin():
+    assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, True)["status"] == "ACTIONABLE_LONG"
+    assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.001, True)["status"] == "WATCH_LOW_EDGE"
+    assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, False)["status"] == "ABSTAIN_MODEL_GATE"
+    assert _action_gate("FLAT", np.asarray([0.2, 0.7, 0.1]), 0.0, True)["status"] == "WATCH_FLAT"

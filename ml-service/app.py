@@ -40,6 +40,9 @@ MIN_PROMOTION_EXAMPLES = 100
 MIN_PROMOTION_ACCURACY_LIFT = 0.02
 MAX_PROMOTION_LOG_LOSS = 1.05
 MIN_PROMOTION_DIRECTIONAL_ACCURACY = 0.52
+MIN_ACTION_CONFIDENCE = 0.55
+MIN_ACTION_MARGIN = 0.10
+ROUND_TRIP_COST = float(os.environ.get("SCANNER_ROUND_TRIP_COST", "0.002"))
 DB_URL = os.environ.get("DATABASE_URL")
 
 app = FastAPI(title="D-Predict ML Inference", version="1.0")
@@ -180,6 +183,30 @@ def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
     }
 
 
+def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, round_trip_cost: float = ROUND_TRIP_COST) -> dict:
+    ordered = np.sort(probabilities)[::-1]
+    confidence = float(ordered[0])
+    margin = float(ordered[0] - ordered[1]) if len(ordered) > 1 else confidence
+    reasons: list[str] = []
+    if not promotion_ready:
+        reasons.append("MODEL_PROMOTION_GATE_FAILED")
+        return {"status": "ABSTAIN_MODEL_GATE", "reasons": reasons, "probability_margin": margin}
+    if prediction == "FLAT":
+        reasons.append("FLAT_CLASS_DOMINATES")
+        return {"status": "WATCH_FLAT", "reasons": reasons, "probability_margin": margin}
+    if confidence < MIN_ACTION_CONFIDENCE:
+        reasons.append("CONFIDENCE_BELOW_ACTION_THRESHOLD")
+    if margin < MIN_ACTION_MARGIN:
+        reasons.append("PROBABILITY_MARGIN_TOO_NARROW")
+    if prediction == "UP" and expected_return <= round_trip_cost:
+        reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
+    if prediction == "DOWN" and expected_return >= -round_trip_cost:
+        reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
+    if reasons:
+        return {"status": "WATCH_LOW_EDGE", "reasons": reasons, "probability_margin": margin}
+    return {"status": "ACTIONABLE_LONG" if prediction == "UP" else "ACTIONABLE_SHORT", "reasons": ["CONFIDENCE_MARGIN_AND_NET_EDGE_CLEAR"], "probability_margin": margin}
+
+
 def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     raw_probs, actual, oos_examples = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
     promotion = _promotion_report(raw_probs, actual)
@@ -273,6 +300,7 @@ def predict(request: PredictRequest):
     expected_return = float(bundle.regressor.predict(latest[FEATURE_COLUMNS])[0])
     confidence = float(np.max(probs))
     prediction_status = "PROMOTION_READY" if bundle.promotion_ready else "ABSTAIN"
+    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready)
 
     return {
         "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": horizon,
@@ -280,8 +308,10 @@ def predict(request: PredictRequest):
         "probabilities": {"DOWN": float(probs[0]), "FLAT": float(probs[1]), "UP": float(probs[2])},
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},
         "expected_return": expected_return, "confidence": confidence,
+        "probability_margin": action["probability_margin"],
         "calibration_status": "CALIBRATED" if bundle.calibrated else "UNCALIBRATED",
         "prediction_status": prediction_status,
+        "action_status": action["status"], "action_reasons": action["reasons"],
         "promotion_checks": {
             "minimum_examples": bundle.validation_examples >= MIN_PROMOTION_EXAMPLES,
             "beats_majority_baseline": bundle.oos_accuracy - bundle.oos_majority_baseline >= MIN_PROMOTION_ACCURACY_LIFT,
