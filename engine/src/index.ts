@@ -39,6 +39,7 @@ async function main() {
         try {
           await runFeatureEngine();
           await runSignalEngine();
+          await runForecastEngine();
           await runTradeConstructionEngine();
           await runShadowTradingEngine();
         } catch (error) {

@@ -31,6 +31,11 @@ try {
   const payload = await response.json();
   assert.equal(payload.ok, false);
   assert.equal(payload.database, "not_configured");
+  const readyResponse = await fetch(`http://127.0.0.1:${port}/ready`);
+  assert.equal(readyResponse.status, 503);
+  const readyPayload = await readyResponse.json();
+  assert.equal(readyPayload.ok, false);
+  assert.equal(readyPayload.marketData, "unavailable");
   console.log("backend health smoke test passed");
 } finally {
   child.kill("SIGTERM");

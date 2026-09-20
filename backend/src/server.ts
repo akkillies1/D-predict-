@@ -41,6 +41,27 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.get("/ready", async (_req, res) => {
+  const result: Record<string, unknown> = { ok: false, service: "market-api", database: "unavailable", marketData: "unavailable", instruments: 0, dailyBars: 0, latestMarketTimestamp: null, timestamp: new Date().toISOString() };
+  if (!pool) return res.status(503).json(result);
+  try {
+    await pool.query("select 1");
+    const counts = await pool.query(`select
+      (select count(*)::int from instruments where is_active=true) as instruments,
+      (select count(*)::int from price_bars where timeframe='1d') as daily_bars,
+      (select max(market_timestamp) from price_bars where timeframe='1d') as latest_market_timestamp,
+      (select count(*)::int from signal_decisions where timestamp >= now() - interval '7 days') as recent_signals`);
+    const row = counts.rows[0];
+    const instruments = Number(row.instruments ?? 0);
+    const dailyBars = Number(row.daily_bars ?? 0);
+    const latestMarketTimestamp = iso(row.latest_market_timestamp);
+    const ready = instruments > 0 && dailyBars > 0 && latestMarketTimestamp !== null;
+    return res.status(ready ? 200 : 503).json({ ...result, ok: ready, database: "healthy", marketData: ready ? "available" : "awaiting_collector", instruments, dailyBars, latestMarketTimestamp, recentSignals: Number(row.recent_signals ?? 0) });
+  } catch (error) {
+    return res.status(503).json({ ...result, message: error instanceof Error ? error.message : "database_unavailable" });
+  }
+});
+
 app.get("/api/instruments", async (_req, res) => {
   if (!pool) return noDb(res);
   try {

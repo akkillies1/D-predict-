@@ -26,7 +26,10 @@ switch ($Command) {
             $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
             if (-not (Test-Path $bootstrap)) { throw 'Windows bootstrap script is missing from the installation.' }
             Write-Host 'Installation is incomplete; starting D-Predict prerequisite repair...' -ForegroundColor Yellow
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -SourceRef main -RefreshSource
+            # bootstrap-windows.ps1 reads the persisted source-ref.txt when no
+            # ref is supplied. Repair must not silently move a tagged install
+            # back to main; use update explicitly for that operation.
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root
             if ($LASTEXITCODE -ne 0) { throw "D-Predict repair failed (exit code $LASTEXITCODE). See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
             if (-not (Test-Path $marker)) { throw "D-Predict repair finished without creating the completion marker. See $env:LOCALAPPDATA\D-Predict\logs\bootstrap.log" }
         }
@@ -34,10 +37,12 @@ switch ($Command) {
         exit $LASTEXITCODE
     }
     'update' {
-        if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required for update.' }
-        git pull --ff-only
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & (Join-Path $Root 'bootstrap-windows.ps1') -InstallDir $Root
+        $bootstrap = Join-Path $Root 'bootstrap-windows.ps1'
+        if (-not (Test-Path $bootstrap)) { throw 'Windows bootstrap script is missing from the installation.' }
+        # Installed releases intentionally do not retain .git. An explicit
+        # update moves to the main channel through the same verified source
+        # synchronization path used by the installer.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $Root -SourceRef main -RefreshSource
         exit $LASTEXITCODE
     }
     'restart' { & (Join-Path $Root 'dp.ps1') stop; & (Join-Path $Root 'dp.ps1') start; exit $LASTEXITCODE }

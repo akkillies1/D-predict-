@@ -92,6 +92,18 @@ function Start-Detached($name,$command) {
   Set-Content -Path (Join-Path $Run "$name.pid") -Value $p.Id
   Info "$name started (PID $($p.Id))"
 }
+function Find-DashboardUrl {
+  for ($i = 0; $i -lt 45; $i++) {
+    foreach ($port in 3000..3019) {
+      try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { return "http://127.0.0.1:$port/" }
+      } catch {}
+    }
+    Start-Sleep -Seconds 1
+  }
+  return $null
+}
 function Invoke-Setup { & powershell -NoProfile -ExecutionPolicy Bypass -File $DatabaseSetup }
 function Invoke-Start {
   Ensure-DatabaseConfig
@@ -118,7 +130,13 @@ function Invoke-Start {
   Ensure-RunDir
   Info 'Starting dashboard...'
   Start-Detached 'ui' 'npm --prefix dashboard run dev'
-  Info 'Local dashboard: http://127.0.0.1:3000'
+  $dashboardUrl = Find-DashboardUrl
+  if ($dashboardUrl) {
+    Set-Content -Path (Join-Path $Run 'dashboard.url') -Value $dashboardUrl
+    Info "Local dashboard: $dashboardUrl"
+  } else {
+    Warn 'Dashboard process started but no HTTP port responded within 45 seconds. Check the UI log/process.'
+  }
   Info 'Local API:       http://127.0.0.1:4100/health'
   Info 'Research API:    http://127.0.0.1:4200/health'
   Info 'ML inference:    http://127.0.0.1:4300/health'

@@ -65,6 +65,17 @@ if (-not $healthy) {
   throw "Market API did not become healthy on port 4100. Check: docker compose logs api --tail=100"
 }
 
+try {
+  $runtime = Invoke-RestMethod "http://127.0.0.1:4100/ready" -TimeoutSec 3
+  if ($runtime.ok -eq $true) {
+    Write-Step "Market data ready: $($runtime.dailyBars) daily bars; latest $($runtime.latestMarketTimestamp)."
+  } else {
+    Write-Step "Services are healthy; market data is still $($runtime.marketData). The collector may still be acquiring data."
+  }
+} catch {
+  Write-Step "Services are healthy; market readiness is not available yet. Continuing startup."
+}
+
 Write-Step "Waiting for research API health..."
 $researchHealthy = $false
 for ($i = 0; $i -lt 60; $i++) {
@@ -148,4 +159,3 @@ Write-Step "Opening browser..."
 Start-Process $dashboardUrl
 Write-Host ""
 Write-Host "Use .\stop-d-predict.ps1 to stop the local stack." -ForegroundColor DarkGray
-

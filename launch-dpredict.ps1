@@ -30,19 +30,34 @@ try {
     throw "D-Predict services failed to start (exit code $exitCode). See $LogFile"
   }
 
-  Log 'Waiting for dashboard on http://127.0.0.1:3000 ...'
+  Log 'Waiting for dashboard on ports 3000-3019 ...'
   $ready = $false
+  $dashboardUrl = $null
   for ($i = 0; $i -lt 45; $i++) {
-    try {
-      $response = Invoke-WebRequest -Uri 'http://127.0.0.1:3000' -UseBasicParsing -TimeoutSec 2
-      if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { $ready = $true; break }
-    } catch { }
+    foreach ($port in 3000..3019) {
+      try {
+        $url = "http://127.0.0.1:$port/"
+        $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { $ready = $true; $dashboardUrl = $url; break }
+      } catch { }
+    }
+    if ($ready) { break }
     Start-Sleep -Seconds 1
   }
 
   if (-not $ready) { throw 'Dashboard did not become available within 45 seconds. Check the launcher log.' }
-  Log 'Dashboard is ready. Opening browser.'
-  Start-Process 'http://127.0.0.1:3000'
+  Log "Dashboard is ready at $dashboardUrl. Opening browser."
+  try {
+    $runtime = Invoke-RestMethod -Uri 'http://127.0.0.1:4100/ready' -TimeoutSec 3
+    if ($runtime.ok -eq $true) {
+      Log "Market data is ready: $($runtime.dailyBars) daily bars; latest market timestamp $($runtime.latestMarketTimestamp)."
+    } else {
+      Log "Services are running but market data is not ready yet: $($runtime.marketData). The collector may still be acquiring data."
+    }
+  } catch {
+    Log 'Market readiness endpoint is not available yet; dashboard will still open.'
+  }
+  Start-Process $dashboardUrl
   Log 'D-Predict launched successfully.'
 } catch {
   Log "ERROR: $($_.Exception.Message)"
