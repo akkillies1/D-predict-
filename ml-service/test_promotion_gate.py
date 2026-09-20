@@ -69,5 +69,6 @@ def test_three_day_training_label_uses_three_future_closes():
 def test_action_gate_requires_net_edge_and_margin():
     assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, True)["status"] == "ACTIONABLE_LONG"
     assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.001, True)["status"] == "WATCH_LOW_EDGE"
+    assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, True, 0.4)["status"] == "WATCH_LOW_EDGE"
     assert _action_gate("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, False)["status"] == "ABSTAIN_MODEL_GATE"
     assert _action_gate("FLAT", np.asarray([0.2, 0.7, 0.1]), 0.0, True)["status"] == "WATCH_FLAT"

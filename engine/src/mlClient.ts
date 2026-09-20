@@ -9,6 +9,8 @@ export type MlPrediction = {
   expected_return: number;
   confidence: number;
   probability_margin: number;
+  return_interval: { p10: number; p50: number; p90: number };
+  probability_net_positive: number;
   calibration_status: "CALIBRATED" | "UNCALIBRATED";
   prediction_status: "PROMOTION_READY" | "ABSTAIN";
   action_status: "ACTIONABLE_LONG" | "ACTIONABLE_SHORT" | "WATCH_FLAT" | "WATCH_LOW_EDGE" | "ABSTAIN_MODEL_GATE";

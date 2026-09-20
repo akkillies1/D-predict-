@@ -981,6 +981,10 @@ export default function DecisionDashboard() {
                   <div>Calibration: <strong className="text-[#d7e8d9]">{livePrediction.calibration_status}</strong></div>
                   <div>OOS examples: <strong className="text-[#d7e8d9]">{livePrediction.validation_oos_examples}</strong></div>
                 </div>
+                <div className="mt-3 rounded-lg border border-[#1d332f] bg-[#0b1714] p-3 text-[10px] text-[#9fb4a8]">
+                  <div className="flex flex-wrap justify-between gap-2"><span>Empirical return interval</span><strong className="text-[#d7e8d9]">{pct(livePrediction.return_interval.p10)} · {pct(livePrediction.return_interval.p50)} · {pct(livePrediction.return_interval.p90)}</strong></div>
+                  <div className="mt-1 flex justify-between"><span>Probability net-positive after cost</span><strong className="text-[#c8f169]">{pct(livePrediction.probability_net_positive)}</strong></div>
+                </div>
               </div>
               <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
                 <Label>Evidence and model identity</Label>

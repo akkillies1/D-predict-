@@ -42,6 +42,7 @@ MAX_PROMOTION_LOG_LOSS = 1.05
 MIN_PROMOTION_DIRECTIONAL_ACCURACY = 0.52
 MIN_ACTION_CONFIDENCE = 0.55
 MIN_ACTION_MARGIN = 0.10
+MIN_NET_EDGE_PROBABILITY = 0.55
 ROUND_TRIP_COST = float(os.environ.get("SCANNER_ROUND_TRIP_COST", "0.002"))
 DB_URL = os.environ.get("DATABASE_URL")
 
@@ -70,6 +71,8 @@ class ModelBundle:
     oos_majority_baseline: float
     oos_log_loss: float
     oos_directional_accuracy: float | None
+    return_residual_quantiles: tuple[float, float, float]
+    return_residuals: np.ndarray
     promotion_ready: bool
     model_version: str
 
@@ -133,12 +136,14 @@ def _regressor() -> HistGradientBoostingRegressor:
     )
 
 
-def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int]:
+def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]:
     min_train = max(200, len(frame) // (folds + 2))
     remaining = len(frame) - min_train
     block = max(1, remaining // folds)
     raw_probs: list[np.ndarray] = []
     actual: list[int] = []
+    predicted_returns: list[float] = []
+    actual_returns: list[float] = []
     for fold in range(folds):
         train_end = min_train + fold * block
         valid_start = min(len(frame) - 1, train_end + purge_rows)
@@ -149,11 +154,16 @@ def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple
         valid = frame.iloc[valid_start:valid_end]
         clf = _classifier()
         clf.fit(train[FEATURE_COLUMNS], train["target_class"].map(CLASS_MAP))
+        reg = _regressor()
+        reg.fit(train[FEATURE_COLUMNS], train["target_return"])
         raw_probs.append(clf.predict_proba(valid[FEATURE_COLUMNS]))
         actual.extend(valid["target_class"].map(CLASS_MAP).astype(int).tolist())
+        predicted_returns.extend(reg.predict(valid[FEATURE_COLUMNS]).tolist())
+        actual_returns.extend(valid["target_return"].astype(float).tolist())
     if not raw_probs:
         raise HTTPException(status_code=503, detail="Walk-forward validation produced no OOS rows")
-    return np.vstack(raw_probs), np.asarray(actual, dtype=int), int(sum(len(x) for x in raw_probs))
+    residuals = np.asarray(actual_returns, dtype=float) - np.asarray(predicted_returns, dtype=float)
+    return np.vstack(raw_probs), np.asarray(actual, dtype=int), int(sum(len(x) for x in raw_probs)), np.asarray(predicted_returns), residuals
 
 
 def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
@@ -183,7 +193,7 @@ def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
     }
 
 
-def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, round_trip_cost: float = ROUND_TRIP_COST) -> dict:
+def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST) -> dict:
     ordered = np.sort(probabilities)[::-1]
     confidence = float(ordered[0])
     margin = float(ordered[0] - ordered[1]) if len(ordered) > 1 else confidence
@@ -202,13 +212,15 @@ def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: fl
         reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
     if prediction == "DOWN" and expected_return >= -round_trip_cost:
         reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
+    if probability_net_positive < MIN_NET_EDGE_PROBABILITY:
+        reasons.append("PROBABILITY_NET_EDGE_TOO_LOW")
     if reasons:
         return {"status": "WATCH_LOW_EDGE", "reasons": reasons, "probability_margin": margin}
     return {"status": "ACTIONABLE_LONG" if prediction == "UP" else "ACTIONABLE_SHORT", "reasons": ["CONFIDENCE_MARGIN_AND_NET_EDGE_CLEAR"], "probability_margin": margin}
 
 
 def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
-    raw_probs, actual, oos_examples = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
+    raw_probs, actual, oos_examples, _, residuals = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
     promotion = _promotion_report(raw_probs, actual)
     calibrators: list[IsotonicRegression | None] = []
     for cls_idx in range(3):
@@ -240,6 +252,8 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
         calibration_examples=oos_examples if calibrated else 0,
         oos_accuracy=promotion["accuracy"], oos_majority_baseline=promotion["majority_baseline"],
         oos_log_loss=promotion["log_loss"], oos_directional_accuracy=promotion["directional_accuracy"],
+        return_residual_quantiles=tuple(float(value) for value in np.quantile(residuals, [0.1, 0.5, 0.9])),
+        return_residuals=residuals,
         promotion_ready=promotion_ready,
         model_version=f"market-v1-{horizon}-histgb-{signature}",
     )
@@ -300,7 +314,14 @@ def predict(request: PredictRequest):
     expected_return = float(bundle.regressor.predict(latest[FEATURE_COLUMNS])[0])
     confidence = float(np.max(probs))
     prediction_status = "PROMOTION_READY" if bundle.promotion_ready else "ABSTAIN"
-    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready)
+    return_interval = {"p10": expected_return + bundle.return_residual_quantiles[0], "p50": expected_return + bundle.return_residual_quantiles[1], "p90": expected_return + bundle.return_residual_quantiles[2]}
+    if prediction == "UP":
+        probability_net_positive = float(np.mean(expected_return + bundle.return_residuals > ROUND_TRIP_COST))
+    elif prediction == "DOWN":
+        probability_net_positive = float(np.mean(-(expected_return + bundle.return_residuals) > ROUND_TRIP_COST))
+    else:
+        probability_net_positive = float(np.mean(np.abs(expected_return + bundle.return_residuals) <= ROUND_TRIP_COST))
+    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready, probability_net_positive)
 
     return {
         "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": horizon,
@@ -308,6 +329,7 @@ def predict(request: PredictRequest):
         "probabilities": {"DOWN": float(probs[0]), "FLAT": float(probs[1]), "UP": float(probs[2])},
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},
         "expected_return": expected_return, "confidence": confidence,
+        "return_interval": return_interval, "probability_net_positive": probability_net_positive,
         "probability_margin": action["probability_margin"],
         "calibration_status": "CALIBRATED" if bundle.calibrated else "UNCALIBRATED",
         "prediction_status": prediction_status,
