@@ -27,14 +27,14 @@ export type MlPrediction = {
 
 const baseUrl = (process.env.ML_INFERENCE_URL ?? "http://ml:4300").replace(/\/$/, "");
 
-export async function predictWithValidatedModel(symbol: string, asOf: Date): Promise<MlPrediction> {
+export async function predictWithValidatedModel(symbol: string, asOf: Date, horizon = "1d"): Promise<MlPrediction> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(process.env.ML_INFERENCE_TIMEOUT_MS ?? 15000)));
   try {
     const response = await fetch(`${baseUrl}/predict`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ symbol, as_of: asOf.toISOString() }),
+      body: JSON.stringify({ symbol, as_of: asOf.toISOString(), horizon }),
       signal: controller.signal,
     });
     const body = await response.json().catch(() => ({}));

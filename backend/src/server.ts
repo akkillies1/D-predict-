@@ -124,6 +124,25 @@ app.get("/api/predictions/performance", async (req, res) => {
   }
 });
 
+app.get("/api/predictions/live", async (req, res) => {
+  const symbol = String(req.query.symbol ?? "").trim().toUpperCase();
+  const horizon = String(req.query.horizon ?? "1d").trim().toLowerCase();
+  if (!symbol || symbol.length > 32) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  if (!["1d", "3d", "5d"].includes(horizon)) return res.status(400).json({ ok: false, error: "INVALID_HORIZON", supportedHorizons: ["1d", "3d", "5d"] });
+  const base = (process.env.ML_INFERENCE_URL ?? "http://ml:4300").replace(/\/$/, "");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(process.env.ML_INFERENCE_TIMEOUT_MS ?? 15000)));
+  try {
+    const response = await fetch(`${base}/predict`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol, horizon }), signal: controller.signal });
+    const body = await response.json().catch(() => ({ ok: false, error: "ML_INVALID_RESPONSE" }));
+    return res.status(response.ok ? 200 : 503).json(body);
+  } catch (error) {
+    return res.status(503).json({ ok: false, error: "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "inference_unavailable" });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 app.get("/api/instruments", async (_req, res) => {
   if (!pool) return noDb(res);
   try {

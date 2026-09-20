@@ -37,6 +37,7 @@ import {
   getLatestSignal,
   getLiveQuote,
   getLocalHealth,
+  getLivePrediction,
   getMarketHistory,
   getMarketScan,
   getPredictionPerformance,
@@ -46,6 +47,7 @@ import {
   type MarketOverview,
   type MarketPick,
   type OptionRow,
+  type LivePrediction,
   type PredictionPerformance,
   type PriceBar,
   type ResearchResult,
@@ -164,7 +166,7 @@ export default function DecisionDashboard() {
     () => localStorage.getItem(STORAGE_KEY) || "NIFTY"
   );
   const [instrumentName, setInstrumentName] = useState<string | null>(null);
-  const [forecastHorizon, setForecastHorizon] = useState(5);
+  const [forecastHorizon, setForecastHorizon] = useState<1 | 3 | 5>(5);
   const [market, setMarket] = useState<MarketOverview | null>(null);
   const [history, setHistory] = useState<PriceBar[]>([]);
   const [signal, setSignal] = useState<Signal | null>(null);
@@ -173,6 +175,7 @@ export default function DecisionDashboard() {
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
+  const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -199,7 +202,7 @@ export default function DecisionDashboard() {
     try {
       const health = await getLocalHealth();
       setConnected(health.ok);
-      const [live, bars, latest, researchResult, forecastResult, scanResult, performanceResult] =
+      const [live, bars, latest, researchResult, forecastResult, scanResult, performanceResult, livePredictionResult] =
         await Promise.allSettled([
           getLiveQuote(symbol),
           getMarketHistory(symbol, "1d"),
@@ -208,6 +211,7 @@ export default function DecisionDashboard() {
           getForecast(symbol, forecastHorizon),
           getMarketScan(5),
           getPredictionPerformance(30),
+          getLivePrediction(symbol, forecastHorizon),
         ]);
       setMarket(live.status === "fulfilled" ? live.value : null);
       setHistory(bars.status === "fulfilled" ? bars.value : []);
@@ -226,6 +230,9 @@ export default function DecisionDashboard() {
       );
       setPredictionPerformance(
         performanceResult.status === "fulfilled" ? performanceResult.value : null
+      );
+      setLivePrediction(
+        livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null
       );
       const chain = await getOptionChain(symbol).catch(() => []);
       setOptions(chain);
@@ -683,7 +690,7 @@ export default function DecisionDashboard() {
               <select
                 value={forecastHorizon}
                 onChange={event =>
-                  setForecastHorizon(Number(event.target.value))
+                  setForecastHorizon(Number(event.target.value) as 1 | 3 | 5)
                 }
                 className="rounded-lg border border-[#26453a] bg-[#10211c] px-3 py-2 font-mono-ui text-[10px] text-[#d7e8d9] outline-none"
               >
@@ -916,6 +923,82 @@ export default function DecisionDashboard() {
               {scanExcluded.length
                 ? `${scanExcluded.length} candidates were excluded for insufficient history, stale data, uncalibrated probabilities, or costs.`
                 : "The local API may be offline or the active universe has no evaluated predictions yet."}
+            </div>
+          )}
+        </section>
+
+        <section
+          id="live-prediction"
+          className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-5 shadow-[0_18px_50px_rgba(0,0,0,.16)]"
+        >
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <Label>Horizon-aware ML inference</Label>
+              <h2 className="mt-1 font-display text-xl font-semibold">
+                {symbol} model decision
+              </h2>
+              <p className="mt-1 text-xs text-[#789087]">
+                Each horizon uses its own forward label, purge period, model cache, calibration, and promotion gate.
+              </p>
+            </div>
+            <select
+              value={forecastHorizon}
+              onChange={event => setForecastHorizon(Number(event.target.value) as 1 | 3 | 5)}
+              className="rounded-lg border border-[#345346] bg-[#09130f] px-3 py-2 font-mono-ui text-xs text-[#d7e8d9] outline-none"
+              aria-label="Prediction horizon"
+            >
+              <option value={1}>1 trading day</option>
+              <option value={3}>3 trading days</option>
+              <option value={5}>5 trading days</option>
+            </select>
+          </div>
+          {livePrediction ? (
+            <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+              <div className={`rounded-xl border ${livePrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238]" : "border-[#5a432a]"} bg-[#09130f] p-4`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Label>Model output · {livePrediction.horizon}</Label>
+                    <div className={`mt-2 font-display text-3xl font-semibold ${livePrediction.prediction === "UP" ? "text-[#c8f169]" : livePrediction.prediction === "DOWN" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>
+                      {livePrediction.prediction}
+                    </div>
+                  </div>
+                  <span className={`rounded-full border px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] ${livePrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238] text-[#c8f169]" : "border-[#5a432a] text-[#c8b582]"}`}>
+                    {livePrediction.prediction_status === "PROMOTION_READY" ? "ACTIONABLE GATE" : "ABSTAIN"}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                  {(["DOWN", "FLAT", "UP"] as const).map(label => (
+                    <div key={label} className="rounded-lg border border-[#1d332f] bg-[#0b1714] p-3">
+                      <Label>{label}</Label>
+                      <div className="mt-1 text-[#d7e8d9]">{pct(livePrediction.probabilities[label])}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-[#9fb4a8]">
+                  <div>Expected return: <strong className="text-[#d7e8d9]">{pct(livePrediction.expected_return)}</strong></div>
+                  <div>Confidence: <strong className="text-[#d7e8d9]">{pct(livePrediction.confidence)}</strong></div>
+                  <div>Calibration: <strong className="text-[#d7e8d9]">{livePrediction.calibration_status}</strong></div>
+                  <div>OOS examples: <strong className="text-[#d7e8d9]">{livePrediction.validation_oos_examples}</strong></div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
+                <Label>Evidence and model identity</Label>
+                <div className="mt-3 space-y-2 text-[10px] text-[#9fb4a8]">
+                  <div className="flex justify-between gap-3"><span>Model</span><strong className="text-right text-[#d7e8d9]">{livePrediction.model_version}</strong></div>
+                  <div className="flex justify-between gap-3"><span>Training cutoff</span><strong className="text-right text-[#d7e8d9]">{new Date(livePrediction.training_cutoff).toLocaleDateString("en-IN")}</strong></div>
+                  <div className="flex justify-between gap-3"><span>OOS accuracy</span><strong className="text-[#d7e8d9]">{pct(livePrediction.oos_metrics.accuracy)}</strong></div>
+                  <div className="flex justify-between gap-3"><span>OOS log loss</span><strong className="text-[#d7e8d9]">{livePrediction.oos_metrics.log_loss.toFixed(3)}</strong></div>
+                </div>
+                <div className="mt-4 border-t border-[#1d332f] pt-3 text-[10px] leading-relaxed text-[#c8b582]">
+                  {livePrediction.prediction_status === "PROMOTION_READY"
+                    ? "This horizon cleared the minimum OOS evidence gate. It is still research output, not a guarantee or an instruction to trade."
+                    : "This horizon failed at least one OOS evidence gate. The raw model output is shown for research, but the system intentionally abstains from promoting it."}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
+              Horizon-specific ML inference is unavailable or the instrument does not yet have enough daily history. No prediction is fabricated.
             </div>
           )}
         </section>

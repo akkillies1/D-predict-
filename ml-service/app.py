@@ -32,8 +32,8 @@ FEATURE_COLUMNS = [
 ]
 CLASS_NAMES = ["DOWN", "FLAT", "UP"]
 CLASS_MAP = {"DOWN": 0, "FLAT": 1, "UP": 2}
-HORIZON = "1d"
-PURGE_ROWS = 1
+SUPPORTED_HORIZONS = {"1d": 1, "3d": 3, "5d": 5}
+DEFAULT_HORIZON = "1d"
 MIN_HISTORY = 300
 MIN_CALIBRATION_HISTORY = 100
 MIN_PROMOTION_EXAMPLES = 100
@@ -50,10 +50,12 @@ _cache_lock = Lock()
 class PredictRequest(BaseModel):
     symbol: str
     as_of: str | None = None
+    horizon: str = DEFAULT_HORIZON
 
 
 @dataclass
 class ModelBundle:
+    horizon: str
     classifier: HistGradientBoostingClassifier
     regressor: HistGradientBoostingRegressor
     calibrators: list[IsotonicRegression | None]
@@ -94,9 +96,17 @@ def _load_daily(symbol: str, as_of: pd.Timestamp | None = None) -> pd.DataFrame:
     return frame.drop_duplicates("timestamp").set_index("timestamp").sort_index()
 
 
-def _training_frame(raw: pd.DataFrame) -> pd.DataFrame:
+def _normalize_horizon(value: str) -> str:
+    horizon = str(value).strip().lower()
+    if horizon not in SUPPORTED_HORIZONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported horizon {value}; choose one of {sorted(SUPPORTED_HORIZONS)}")
+    return horizon
+
+
+def _training_frame(raw: pd.DataFrame, horizon: str) -> pd.DataFrame:
+    horizon_days = SUPPORTED_HORIZONS[horizon]
     features = make_features(raw)
-    target = raw["close"].shift(-1) / raw["close"] - 1
+    target = raw["close"].shift(-horizon_days) / raw["close"] - 1
     frame = features.copy()
     frame["target_return"] = target
     frame["target_class"] = np.select([target > 0.001, target < -0.001], ["UP", "DOWN"], default="FLAT")
@@ -120,7 +130,7 @@ def _regressor() -> HistGradientBoostingRegressor:
     )
 
 
-def _walk_forward(frame: pd.DataFrame, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int]:
+def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int]:
     min_train = max(200, len(frame) // (folds + 2))
     remaining = len(frame) - min_train
     block = max(1, remaining // folds)
@@ -128,7 +138,7 @@ def _walk_forward(frame: pd.DataFrame, folds: int = 5) -> tuple[np.ndarray, np.n
     actual: list[int] = []
     for fold in range(folds):
         train_end = min_train + fold * block
-        valid_start = min(len(frame) - 1, train_end + PURGE_ROWS)
+        valid_start = min(len(frame) - 1, train_end + purge_rows)
         valid_end = min(len(frame), valid_start + block)
         if valid_end <= valid_start:
             continue
@@ -170,8 +180,8 @@ def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
     }
 
 
-def _fit_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
-    raw_probs, actual, oos_examples = _walk_forward(frame)
+def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
+    raw_probs, actual, oos_examples = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
     promotion = _promotion_report(raw_probs, actual)
     calibrators: list[IsotonicRegression | None] = []
     for cls_idx in range(3):
@@ -192,29 +202,30 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
     reg.fit(frame[FEATURE_COLUMNS], frame["target_return"])
     training_end = pd.Timestamp(frame.index.max()).tz_convert("UTC")
     signature = hashlib.sha256(
-        (symbol.upper() + "|" + HORIZON + "|" + FEATURE_SET_VERSION + "|" + training_end.isoformat()
+        (symbol.upper() + "|" + horizon + "|" + FEATURE_SET_VERSION + "|" + training_end.isoformat()
          + "|histgb:lr=.05,max_iter=250,max_leaf_nodes=15,l2=1,seed=42|cal="
          + ("isotonic" if calibrated else "raw") + "|features=" + ",".join(FEATURE_COLUMNS)).encode()
     ).hexdigest()[:12]
     return ModelBundle(
+        horizon=horizon,
         classifier=clf, regressor=reg, calibrators=calibrators, calibrated=calibrated,
         training_end=training_end, validation_examples=oos_examples,
         calibration_examples=oos_examples if calibrated else 0,
         oos_accuracy=promotion["accuracy"], oos_majority_baseline=promotion["majority_baseline"],
         oos_log_loss=promotion["log_loss"], oos_directional_accuracy=promotion["directional_accuracy"],
         promotion_ready=promotion_ready,
-        model_version=f"market-v1-{HORIZON}-histgb-{signature}",
+        model_version=f"market-v1-{horizon}-histgb-{signature}",
     )
 
 
-def _get_bundle(symbol: str, frame: pd.DataFrame) -> ModelBundle:
-    key = symbol.upper()
+def _get_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
+    key = f"{symbol.upper()}:{horizon}"
     training_end = pd.Timestamp(frame.index.max()).tz_convert("UTC")
     with _cache_lock:
         current = _cache.get(key)
         if current and current.training_end == training_end:
             return current
-        bundle = _fit_bundle(key, frame)
+        bundle = _fit_bundle(symbol.upper(), frame, horizon)
         _cache[key] = bundle
         return bundle
 
@@ -234,7 +245,7 @@ def _calibrate(bundle: ModelBundle, raw: np.ndarray) -> np.ndarray:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "model_horizon": HORIZON}
+    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS)}
 
 
 @app.post("/predict")
@@ -242,10 +253,11 @@ def predict(request: PredictRequest):
     symbol = request.symbol.strip().upper()
     if not symbol or len(symbol) > 32:
         raise HTTPException(status_code=400, detail="INVALID_SYMBOL")
+    horizon = _normalize_horizon(request.horizon)
     as_of = pd.Timestamp(request.as_of).tz_convert("UTC") if request.as_of else None
     raw = _load_daily(symbol, as_of)
-    frame = _training_frame(raw)
-    bundle = _get_bundle(symbol, frame)
+    frame = _training_frame(raw, horizon)
+    bundle = _get_bundle(symbol, frame, horizon)
 
     # Inference uses the latest feature row, even though it has no future label.
     # Training uses only rows with a known next-day target. This keeps live
@@ -263,7 +275,7 @@ def predict(request: PredictRequest):
     prediction_status = "PROMOTION_READY" if bundle.promotion_ready else "ABSTAIN"
 
     return {
-        "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": HORIZON,
+        "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": horizon,
         "prediction": prediction,
         "probabilities": {"DOWN": float(probs[0]), "FLAT": float(probs[1]), "UP": float(probs[2])},
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},

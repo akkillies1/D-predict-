@@ -41,6 +41,10 @@ try {
   const performancePayload = await performanceResponse.json();
   assert.equal(performancePayload.ok, false);
   assert.equal(performancePayload.error, "DATABASE_NOT_CONFIGURED");
+  const invalidHorizonResponse = await fetch(`http://127.0.0.1:${port}/api/predictions/live?symbol=NIFTY&horizon=2d`);
+  assert.equal(invalidHorizonResponse.status, 400);
+  const invalidHorizonPayload = await invalidHorizonResponse.json();
+  assert.equal(invalidHorizonPayload.error, "INVALID_HORIZON");
   console.log("backend health smoke test passed");
 } finally {
   child.kill("SIGTERM");
