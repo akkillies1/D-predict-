@@ -170,6 +170,12 @@ function Invoke-Test {
   npm --prefix dashboard run check
   npm --prefix dashboard run build
 }
+function Invoke-Train {
+  $python = Join-Path $Root 'collector\.venv\Scripts\python.exe'
+  if (-not (Test-Path $python)) { Die 'Collector Python environment is missing. Run Repair & Check.' }
+  & $python -m training.run_full_validation
+  exit $LASTEXITCODE
+}
 
 $Command = if ($args.Count) { $args[0].ToLowerInvariant() } else { 'help' }
 if ($Command -eq 'setup-db' -or $Command -eq 'database') { Invoke-Setup; exit $LASTEXITCODE }
@@ -181,6 +187,7 @@ switch ($Command) {
   'status' { Invoke-Status }
   'doctor' { Invoke-Doctor }
   'test' { Invoke-Test }
+  'train' { Invoke-Train }
   'init' { Invoke-Setup }
   'api' { Ensure-Tooling; npm --prefix backend run dev }
   'research' { Ensure-Tooling; npm --prefix backend exec -- tsx src/research-server.ts }

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('bootstrap','validate','test','start','stop','restart','status','doctor','init','update','help')]
+    [ValidateSet('bootstrap','validate','test','train','start','stop','restart','status','doctor','init','update','help')]
     [string]$Command = 'help',
     [switch]$Force,
     [switch]$RefreshData

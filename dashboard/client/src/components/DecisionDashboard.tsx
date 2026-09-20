@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Database,
   Gauge,
+  Loader2,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -183,14 +184,26 @@ export default function DecisionDashboard() {
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const refreshSequence = useRef(0);
 
   const selectSymbol = useCallback(
     async (next: string, name?: string | null) => {
       const value = next.trim().toUpperCase();
       if (!value) return;
+      refreshSequence.current += 1;
+      setLoading(true);
       setSymbol(value);
       setInstrumentName(name ?? null);
+      setMarket(null);
+      setHistory([]);
+      setSignal(null);
+      setResearch(null);
+      setForecast(null);
+      setOptions([]);
+      setLivePrediction(null);
+      setWatchlistSaved(false);
       localStorage.setItem(STORAGE_KEY, value);
       window.dispatchEvent(new Event("dpredict:symbol"));
     },
@@ -198,29 +211,39 @@ export default function DecisionDashboard() {
   );
 
   const refresh = useCallback(async () => {
+    const requestId = ++refreshSequence.current;
     setLoading(true);
     try {
-      const health = await getLocalHealth();
-      setConnected(health.ok);
-      const [live, bars, latest, researchResult, forecastResult, scanResult, performanceResult, livePredictionResult] =
-        await Promise.allSettled([
-          getLiveQuote(symbol),
-          getMarketHistory(symbol, "1d"),
-          getLatestSignal(symbol),
-          getResearch(symbol),
-          getForecast(symbol, forecastHorizon),
-          getMarketScan(5),
-          getPredictionPerformance(30),
-          getLivePrediction(symbol, forecastHorizon),
-        ]);
+      const [health, live, bars, latest, forecastResult] = await Promise.allSettled([
+        getLocalHealth(),
+        getLiveQuote(symbol),
+        getMarketHistory(symbol, "1d"),
+        getLatestSignal(symbol),
+        getForecast(symbol, forecastHorizon),
+      ]);
+      if (requestId !== refreshSequence.current) return;
+      setConnected(health.status === "fulfilled" && health.value.ok);
       setMarket(live.status === "fulfilled" ? live.value : null);
       setHistory(bars.status === "fulfilled" ? bars.value : []);
       setSignal(latest.status === "fulfilled" ? latest.value : null);
-      setResearch(
-        researchResult.status === "fulfilled" ? researchResult.value : null
-      );
       setForecast(
         forecastResult.status === "fulfilled" ? forecastResult.value : null
+      );
+      setLastUpdate(new Date().toISOString());
+      setLoading(false);
+      setEnrichmentLoading(true);
+
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult] =
+        await Promise.allSettled([
+          getResearch(symbol),
+          getMarketScan(5),
+          getPredictionPerformance(30),
+          getLivePrediction(symbol, forecastHorizon),
+          getOptionChain(symbol),
+        ]);
+      if (requestId !== refreshSequence.current) return;
+      setResearch(
+        researchResult.status === "fulfilled" ? researchResult.value : null
       );
       setMarketPicks(
         scanResult.status === "fulfilled" ? scanResult.value.picks : []
@@ -234,11 +257,11 @@ export default function DecisionDashboard() {
       setLivePrediction(
         livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null
       );
-      const chain = await getOptionChain(symbol).catch(() => []);
-      setOptions(chain);
+      setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setLastUpdate(new Date().toISOString());
     } finally {
-      setLoading(false);
+      if (requestId === refreshSequence.current) setLoading(false);
+      if (requestId === refreshSequence.current) setEnrichmentLoading(false);
     }
   }, [forecastHorizon, symbol]);
 
@@ -274,17 +297,20 @@ export default function DecisionDashboard() {
 
   const thesis = signal?.tradeThesis;
   const chart = useMemo(
-    () =>
-      history.map(bar => ({
-        time: new Date(bar.timestamp).toLocaleTimeString("en-IN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        close: bar.close,
-        high: bar.high,
-        low: bar.low,
-      })),
-    [history]
+    () => {
+      const bars = history.map((bar, index) => {
+        const closes = history.slice(Math.max(0, index - 19), index + 1).map(item => item.close);
+        const ema12Window = history.slice(Math.max(0, index - 11), index + 1).map(item => item.close);
+        const ema26Window = history.slice(Math.max(0, index - 25), index + 1).map(item => item.close);
+        const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+        return { ...bar, sma20: average(closes), ema12: average(ema12Window), ema26: average(ema26Window), time: new Date(bar.timestamp).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) };
+      });
+      const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...(forecast?.bands ?? []).flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
+      const min = values.length ? Math.min(...values) : 0;
+      const max = values.length ? Math.max(...values) : 1;
+      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands: forecast?.bands ?? [] };
+    },
+    [forecast, history]
   );
   const optionSummary = useMemo(() => {
     const grouped = new Map<
@@ -347,11 +373,13 @@ export default function DecisionDashboard() {
       ? `Market data ${dataStatus.toLowerCase()}`
       : null,
   ].filter(Boolean) as string[];
+  const isRefreshing = loading || enrichmentLoading;
 
   return (
     <div className="min-h-screen cockpit-shell text-[#eaf4e9]">
       <div className="pointer-events-none fixed inset-0 cockpit-grid opacity-60" />
       <header className="sticky top-0 z-40 border-b border-[#173029] bg-[#07100f]/95 backdrop-blur-xl">
+        {isRefreshing ? <div className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-[#173029]"><div className="h-full w-1/3 animate-[loading-bar_1.2s_ease-in-out_infinite] bg-[#c8f169]" /></div> : null}
         <div className="mx-auto flex max-w-[1800px] flex-wrap items-center gap-3 px-4 py-3 lg:px-8">
           <div className="flex items-center gap-2 mr-2">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#c8f169] text-[#10200b]">
@@ -395,15 +423,18 @@ export default function DecisionDashboard() {
             <button
               onClick={() => void refresh()}
               disabled={loading}
-              className="rounded-lg border border-[#26453a] p-2 text-[#a8bdb2] hover:bg-[#12251f]"
+              className="flex items-center gap-2 rounded-lg border border-[#26453a] px-2 py-2 text-[#a8bdb2] hover:bg-[#12251f]"
+              aria-label={isRefreshing ? "Loading instrument" : "Refresh instrument"}
             >
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+              {isRefreshing ? <Loader2 size={14} className="animate-spin text-[#c8f169]" /> : <RefreshCw size={14} />}
+              {isRefreshing ? <span className="hidden font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8f169] sm:inline">Loading</span> : null}
             </button>
           </div>
         </div>
       </header>
 
       <main className="relative mx-auto max-w-[1800px] space-y-5 px-4 py-5 lg:px-8">
+        {isRefreshing ? <div className="flex items-center gap-3 rounded-xl border border-[#36513e] bg-[#0d211a] px-4 py-3 text-xs text-[#c8f169] animate-pulse"><Loader2 size={15} className="animate-spin" /><span>{loading ? <>Loading live data for <strong>{symbol}</strong>...</> : <>Finishing analysis for <strong>{symbol}</strong>...</>}</span><span className="ml-auto hidden text-[10px] text-[#789087] sm:inline">{loading ? "Core data first" : "Research and signals updating"}</span></div> : null}
         <section
           id="decision"
           className={`rounded-2xl border ${tradeReady ? "border-[#476238]" : "border-[#5a432a]"} bg-gradient-to-br from-[#10201b] to-[#09120f] p-5 shadow-[0_25px_80px_rgba(0,0,0,.22)]`}
@@ -587,61 +618,28 @@ export default function DecisionDashboard() {
               </span>
             </div>
             <div className="mt-4 h-[340px]">
-              {chart.length ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chart}>
-                    <defs>
-                      <linearGradient id="dpPrice" x1="0" y1="0" x2="0" y2="1">
-                        <stop
-                          offset="0%"
-                          stopColor="#c8f169"
-                          stopOpacity={0.25}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="#c8f169"
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid
-                      stroke="#18302a"
-                      strokeDasharray="3 5"
-                      vertical={false}
-                    />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fill: "#70887d", fontSize: 9 }}
-                      axisLine={false}
-                      tickLine={false}
-                      minTickGap={35}
-                    />
-                    <YAxis
-                      domain={["auto", "auto"]}
-                      tick={{ fill: "#70887d", fontSize: 9 }}
-                      axisLine={false}
-                      tickLine={false}
-                      width={60}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        background: "#0b1714",
-                        border: "1px solid #29463b",
-                        borderRadius: 8,
-                        color: "#eaf4e9",
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="close"
-                      stroke="#c8f169"
-                      strokeWidth={2}
-                      fill="url(#dpPrice)"
-                      dot={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              ) : (
+              {chart.bars.length ? (() => {
+                const width = 1000;
+                const priceTop = 12;
+                const priceBottom = 238;
+                const volumeTop = 270;
+                const volumeBottom = 326;
+                const futureDays = chart.bands.length ? Math.max(...chart.bands.map(band => band.day)) : 0;
+                const totalPoints = Math.max(1, chart.bars.length - 1 + futureDays);
+                const xFor = (index: number) => 24 + (index / totalPoints) * (width - 48);
+                const yFor = (value: number) => priceBottom - ((value - chart.min) / (chart.max - chart.min)) * (priceBottom - priceTop);
+                const line = (key: "sma20" | "ema12" | "ema26") => chart.bars.map((bar, index) => `${xFor(index)},${yFor(bar[key])}`).join(" ");
+                return <svg viewBox={`0 0 ${width} 340`} className="h-full w-full" role="img" aria-label={`${symbol} candlestick chart with volume, moving averages, and forecast cone`} preserveAspectRatio="none">
+                  {[0, 1, 2, 3].map(step => { const y = priceTop + step * ((priceBottom - priceTop) / 3); return <line key={step} x1="24" x2="976" y1={y} y2={y} stroke="#18302a" strokeDasharray="3 5" />; })}
+                  <line x1="24" x2="976" y1={volumeTop - 8} y2={volumeTop - 8} stroke="#29463b" />
+                  {chart.bands.length ? <polygon points={[...chart.bands.map(band => `${xFor(chart.bars.length - 1 + band.day)},${yFor(band.p90)}`), ...[...chart.bands].reverse().map(band => `${xFor(chart.bars.length - 1 + band.day)},${yFor(band.p10)}`)].join(" ")} fill="#c8f169" fillOpacity=".1" stroke="#c8f169" strokeOpacity=".35" strokeDasharray="4 4" /> : null}
+                  {chart.bars.map((bar, index) => { const x = xFor(index); const candleWidth = Math.max(2, Math.min(9, (width - 48) / totalPoints * .62)); const bullish = bar.close >= bar.open; const color = bullish ? "#c8f169" : "#ff9d91"; const volumeHeight = ((bar.volume ?? 0) / chart.volumeMax) * (volumeBottom - volumeTop); return <g key={bar.timestamp}><title>{`${bar.time} O ${bar.open} H ${bar.high} L ${bar.low} C ${bar.close} V ${bar.volume ?? 0}`}</title><line x1={x} x2={x} y1={yFor(bar.high)} y2={yFor(bar.low)} stroke={color} strokeWidth="1" /><rect x={x - candleWidth / 2} y={Math.min(yFor(bar.open), yFor(bar.close))} width={candleWidth} height={Math.max(1.5, Math.abs(yFor(bar.open) - yFor(bar.close)))} fill={color} opacity=".9" /><rect x={x - candleWidth / 2} y={volumeBottom - volumeHeight} width={candleWidth} height={volumeHeight} fill={color} opacity=".3" /></g>; })}
+                  <polyline points={line("sma20")} fill="none" stroke="#e5b55f" strokeWidth="1.4" strokeDasharray="5 3" />
+                  <polyline points={line("ema12")} fill="none" stroke="#76b9ff" strokeWidth="1.2" />
+                  <polyline points={line("ema26")} fill="none" stroke="#d19cff" strokeWidth="1.2" />
+                  <text x="28" y="14" fill="#e5b55f" fontSize="10">SMA20</text><text x="82" y="14" fill="#76b9ff" fontSize="10">EMA12</text><text x="140" y="14" fill="#d19cff" fontSize="10">EMA26</text><text x="28" y="264" fill="#70887d" fontSize="9">VOLUME</text>{chart.bands.length ? <text x="850" y="264" fill="#c8f169" fontSize="9">FORECAST CONE</text> : null}
+                </svg>;
+              })() : (
                 <Empty text="No historical bars returned by the local API." />
               )}
             </div>

@@ -44,6 +44,7 @@ function money(value: number | null) {
 export default function ShadowTradingPanel() {
   const [data, setData] = useState<Portfolio | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -54,6 +55,20 @@ export default function ShadowTradingPanel() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Shadow trading unavailable");
+    }
+  }
+
+  async function closeTrade(id: string) {
+    setBusy(id);
+    try {
+      const response = await fetch(`${API}/api/shadow/trades/${encodeURIComponent(id)}/close`, { method: "POST" });
+      const body = await response.json();
+      if (!response.ok || !body.ok) throw new Error(body.message ?? body.error ?? "Could not close shadow trade");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not close shadow trade");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -96,7 +111,7 @@ export default function ShadowTradingPanel() {
             <div className="mt-6 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="border-b text-left text-xs text-muted-foreground">
-                  <tr><th className="px-2 py-2">Contract</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">Entry</th><th className="px-2 py-2">Current</th><th className="px-2 py-2">SL</th><th className="px-2 py-2">Target</th><th className="px-2 py-2">P&L</th><th className="px-2 py-2">Exit</th></tr>
+                  <tr><th className="px-2 py-2">Contract</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">Entry</th><th className="px-2 py-2">Current</th><th className="px-2 py-2">SL</th><th className="px-2 py-2">Target</th><th className="px-2 py-2">P&L</th><th className="px-2 py-2">Exit</th><th className="px-2 py-2">Action</th></tr>
                 </thead>
                 <tbody>
                   {data.trades.map((trade) => {
@@ -110,9 +125,10 @@ export default function ShadowTradingPanel() {
                       <td className="px-2 py-3">{trade.target.toFixed(2)}</td>
                       <td className="px-2 py-3">{money(pnl)}</td>
                       <td className="px-2 py-3">{trade.exitReason ?? "—"}</td>
+                      <td className="px-2 py-3">{trade.status === "OPEN" ? <button onClick={() => void closeTrade(trade.id)} disabled={busy === trade.id} className="rounded-md border border-rose-500/30 px-2 py-1 text-[10px] font-semibold text-rose-400 hover:bg-rose-500/10 disabled:opacity-50">{busy === trade.id ? "Closing..." : "SELL / CLOSE"}</button> : <span className="text-xs text-muted-foreground">—</span>}</td>
                     </tr>;
                   })}
-                  {!data.trades.length && <tr><td colSpan={8} className="px-2 py-8 text-center text-muted-foreground">No shadow trades yet. The engine will create one when a qualifying constructed signal has a fresh option quote.</td></tr>}
+                  {!data.trades.length && <tr><td colSpan={9} className="px-2 py-8 text-center text-muted-foreground">No shadow trades yet. Entries are created automatically when a qualifying signal has a fresh option quote. Use the Option Chain paper panel above to place a manual BUY or SELL test order.</td></tr>}
                 </tbody>
               </table>
             </div>

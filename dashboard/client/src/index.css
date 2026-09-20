@@ -117,4 +117,5 @@ button:active { transform: scale(.985); }
 .fade-up-2 { animation-delay: 120ms; }
 .fade-up-3 { animation-delay: 180ms; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes loading-bar { 0% { transform: translateX(-100%); } 50% { transform: translateX(180%); } 100% { transform: translateX(420%); } }
 @media (prefers-reduced-motion: reduce) { .fade-up { animation: none; } }
