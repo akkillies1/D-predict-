@@ -25,7 +25,7 @@ function finite(value: unknown): number | null { const n = Number(value); return
 function symbolParam(value: unknown): string { return String(value ?? "NIFTY").trim().toUpperCase(); }
 function invalidSymbol(symbol: string): boolean { return !/^[A-Z0-9._-]{1,32}$/.test(symbol); }
 function noDb(res: express.Response) { return res.status(503).json({ ok: false, error: "DATABASE_NOT_CONFIGURED", message: "PostgreSQL is required to activate and persist instruments." }); }
-function unavailable(res: express.Response, error: string, extra: Record<string, unknown> = {}) { return res.status(404).json({ ok: false, error, ...extra }); }
+function unavailable(res: express.Response, error: string, extra: Record<string, unknown> = {}) { return res.status(200).json({ ok: false, error, ...extra }); }
 
 app.get("/health", async (_req, res) => {
   const result: Record<string, unknown> = { ok: true, service: "market-api", database: pool ? "configured" : "not_configured", marketData: "unavailable", timestamp: new Date().toISOString() };
@@ -150,9 +150,9 @@ app.get("/api/predictions/live", async (req, res) => {
   try {
     const response = await fetch(`${base}/predict`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol, horizon }), signal: controller.signal });
     const body = await response.json().catch(() => ({ ok: false, error: "ML_INVALID_RESPONSE" }));
-    return res.status(response.ok ? 200 : 503).json(body);
+    return res.status(200).json({ ok: response.ok, ...body });
   } catch (error) {
-    return res.status(503).json({ ok: false, error: "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "inference_unavailable" });
+    return res.status(200).json({ ok: false, error: "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "inference_unavailable" });
   } finally {
     clearTimeout(timeout);
   }

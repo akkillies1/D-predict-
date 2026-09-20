@@ -37,7 +37,7 @@ class Config:
         object.__setattr__(
             self,
             "yahoo_symbol_map",
-            {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"},
+            {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SBI": "SBIN.NS"},
         )
 
 

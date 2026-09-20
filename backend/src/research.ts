@@ -113,11 +113,12 @@ function parseGdeltDate(value: string) {
 
 export async function buildResearch(symbolInput: string): Promise<ResearchResult> {
   const symbol = symbolInput.trim().toUpperCase();
-  const yahoo = await yahooResearch(symbol);
-  const queryParts = [symbol];
+  const providerSymbol = symbol === "SBI" ? "SBIN.NS" : symbol;
+  const yahoo = await yahooResearch(providerSymbol);
+  const queryParts = [providerSymbol];
   if (yahoo.companyName) queryParts.push(`"${yahoo.companyName}"`);
   const news = await gdeltResearch(`(${queryParts.join(" OR ")})`, "news");
-  const officialQuery = [symbol, yahoo.companyName ? `"${yahoo.companyName}"` : ""].filter(Boolean).join(" OR ");
+  const officialQuery = [providerSymbol, yahoo.companyName ? `"${yahoo.companyName}"` : ""].filter(Boolean).join(" OR ");
   const official = await gdeltResearch(`(${officialQuery}) (domain:nseindia.com OR domain:sebi.gov.in)`, "official");
 
   const dedupe = new Set<string>();

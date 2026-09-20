@@ -123,6 +123,8 @@ function Invoke-Start {
       Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
+    Info 'Applying local database migrations...'
+    Compose @('--profile','local','exec','-T','postgres','psql','-U','postgres','-d','nifty','-f','/docker-entrypoint-initdb.d/010-dpredict-20.sql')
     Compose @('--profile','local','up','-d','--build','api','research','ml','collector','engine')
   } else {
     Compose @('--profile',$profile,'up','-d','--build')
