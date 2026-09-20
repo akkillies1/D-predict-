@@ -36,6 +36,11 @@ try {
   const readyPayload = await readyResponse.json();
   assert.equal(readyPayload.ok, false);
   assert.equal(readyPayload.marketData, "unavailable");
+  const performanceResponse = await fetch(`http://127.0.0.1:${port}/api/predictions/performance?days=30`);
+  assert.equal(performanceResponse.status, 503);
+  const performancePayload = await performanceResponse.json();
+  assert.equal(performancePayload.ok, false);
+  assert.equal(performancePayload.error, "DATABASE_NOT_CONFIGURED");
   console.log("backend health smoke test passed");
 } finally {
   child.kill("SIGTERM");

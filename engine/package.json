@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/features/__tests__/*.test.ts src/backtest/__tests__/*.test.ts src/forecast/__tests__/*.test.ts",
+    "test": "tsx --test src/features/__tests__/*.test.ts src/backtest/__tests__/*.test.ts src/forecast/__tests__/*.test.ts src/scoring/__tests__/*.test.ts",
     "features": "tsx src/index.ts features",
     "signal": "tsx src/index.ts signal",
     "backtest": "tsx src/index.ts backtest",

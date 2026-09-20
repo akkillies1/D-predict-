@@ -5,6 +5,7 @@ import { runTradeConstructionEngine } from "./construction/tradeConstructionEngi
 import { runConstructionBacktest } from "./backtest/constructionBacktest.js";
 import { runForecastEngine } from "./forecast/forecastEngine.js";
 import { runShadowTradingEngine } from "./shadow/shadowTradingEngine.js";
+import { resolvePendingPredictions } from "./scoring/predictionResolution.js";
 import { pool } from "./db.js";
 
 async function main() {
@@ -38,6 +39,8 @@ async function main() {
       while (true) {
         try {
           await runFeatureEngine();
+          const resolution = await resolvePendingPredictions();
+          console.log(`[engine] prediction resolution: ${resolution.resolved} resolved; ${resolution.stillPending} pending`);
           await runSignalEngine();
           await runForecastEngine();
           await runTradeConstructionEngine();

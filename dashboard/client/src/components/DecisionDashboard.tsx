@@ -39,12 +39,14 @@ import {
   getLocalHealth,
   getMarketHistory,
   getMarketScan,
+  getPredictionPerformance,
   getOptionChain,
   getResearch,
   type Forecast,
   type MarketOverview,
   type MarketPick,
   type OptionRow,
+  type PredictionPerformance,
   type PriceBar,
   type ResearchResult,
   type Signal,
@@ -170,6 +172,7 @@ export default function DecisionDashboard() {
   const [research, setResearch] = useState<ResearchResult | null>(null);
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
+  const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -196,7 +199,7 @@ export default function DecisionDashboard() {
     try {
       const health = await getLocalHealth();
       setConnected(health.ok);
-      const [live, bars, latest, researchResult, forecastResult, scanResult] =
+      const [live, bars, latest, researchResult, forecastResult, scanResult, performanceResult] =
         await Promise.allSettled([
           getLiveQuote(symbol),
           getMarketHistory(symbol, "1d"),
@@ -204,6 +207,7 @@ export default function DecisionDashboard() {
           getResearch(symbol),
           getForecast(symbol, forecastHorizon),
           getMarketScan(5),
+          getPredictionPerformance(30),
         ]);
       setMarket(live.status === "fulfilled" ? live.value : null);
       setHistory(bars.status === "fulfilled" ? bars.value : []);
@@ -219,6 +223,9 @@ export default function DecisionDashboard() {
       );
       setScanExcluded(
         scanResult.status === "fulfilled" ? scanResult.value.excluded : []
+      );
+      setPredictionPerformance(
+        performanceResult.status === "fulfilled" ? performanceResult.value : null
       );
       const chain = await getOptionChain(symbol).catch(() => []);
       setOptions(chain);
@@ -909,6 +916,39 @@ export default function DecisionDashboard() {
               {scanExcluded.length
                 ? `${scanExcluded.length} candidates were excluded for insufficient history, stale data, uncalibrated probabilities, or costs.`
                 : "The local API may be offline or the active universe has no evaluated predictions yet."}
+            </div>
+          )}
+        </section>
+
+        <section
+          id="prediction-performance"
+          className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-5 shadow-[0_18px_50px_rgba(0,0,0,.16)]"
+        >
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <Label>Live model feedback</Label>
+              <h2 className="mt-1 font-display text-xl font-semibold">
+                Realized prediction performance
+              </h2>
+              <p className="mt-1 text-xs text-[#789087]">
+                Causally scored from later persisted daily closes; pending predictions are not counted as wins or losses.
+              </p>
+            </div>
+            <span className="rounded-full border border-[#29463b] px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#a8c879]">
+              {predictionPerformance ? `${predictionPerformance.periodDays}D WINDOW` : "NO DATA"}
+            </span>
+          </div>
+          {predictionPerformance?.metrics.scoredPredictions ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <Metric label="Accuracy" value={pct(predictionPerformance.metrics.accuracy)} sub={`${predictionPerformance.metrics.scoredPredictions} resolved`} icon={Target} />
+              <Metric label="Directional" value={pct(predictionPerformance.metrics.directionalAccuracy)} sub="UP/DOWN calls only" icon={ArrowUpRight} />
+              <Metric label="Log loss" value={predictionPerformance.metrics.logLoss == null ? "—" : predictionPerformance.metrics.logLoss.toFixed(3)} sub="lower is better" icon={Gauge} />
+              <Metric label="Brier" value={predictionPerformance.metrics.brier == null ? "—" : predictionPerformance.metrics.brier.toFixed(3)} sub="probability error" icon={BarChart3} />
+              <Metric label="Pending" value={String(predictionPerformance.metrics.pendingPredictions)} sub="awaiting horizon" icon={Activity} />
+            </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
+              No resolved live predictions are available in the current window. The engine will abstain from claiming live accuracy until outcomes mature.
             </div>
           )}
         </section>
