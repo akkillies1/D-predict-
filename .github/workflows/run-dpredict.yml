@@ -1,0 +1,73 @@
+name: Run D-Predict Scanner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/run-dpredict.yml"
+
+jobs:
+  run-dpredict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout D-Predict
+        uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        run: |
+          cp .env.example .env
+          docker compose --profile local up -d postgres
+          for i in {1..60}; do
+            if docker compose --profile local exec -T postgres pg_isready -U postgres -d nifty; then
+              break
+            fi
+            sleep 1
+          done
+          docker compose --profile local exec -T postgres pg_isready -U postgres -d nifty
+
+      - name: Build and start market-data collector
+        run: |
+          docker compose --profile local build collector
+          docker compose --profile local up -d collector
+          echo "Collecting real Yahoo/NSE market data..."
+          sleep 90
+          docker compose --profile local logs --tail=200 collector || true
+          docker compose --profile local stop collector
+
+      - name: Build and start ML + API
+        run: |
+          docker compose --profile local build ml api engine
+          docker compose --profile local up -d ml api
+          sleep 10
+          curl --fail --retry 10 --retry-delay 2 http://127.0.0.1:4300/health
+          curl --fail --retry 10 --retry-delay 2 http://127.0.0.1:4100/health
+
+      - name: Generate the real D-Predict prediction ledger
+        run: |
+          docker compose --profile local run --rm engine npm run signal
+          docker compose --profile local exec -T postgres psql -U postgres -d nifty -c "select symbol, timestamp, horizon, expected_return, confidence, evidence->>'prediction' as prediction, evidence->>'calibrationStatus' as calibration_status, evidence->>'predictionStatus' as prediction_status, evidence->>'actionStatus' as action_status, model_version from prediction_ledger order by timestamp desc limit 20;"
+
+      - name: Run the actual market scanner
+        run: |
+          curl --fail --silent --show-error "http://127.0.0.1:4100/api/market/scan?limit=5" | tee dpredict-market-scan.json
+          echo
+          echo "===== D-PREDICT TODAY'S SCAN ====="
+          cat dpredict-market-scan.json
+
+      - name: Upload D-Predict result
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpredict-market-scan
+          path: dpredict-market-scan.json
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          docker compose --profile local logs --tail=300 postgres || true
+          docker compose --profile local logs --tail=300 collector || true
+          docker compose --profile local logs --tail=300 ml || true
+          docker compose --profile local logs --tail=300 api || true
+          docker compose --profile local logs --tail=300 engine || true
