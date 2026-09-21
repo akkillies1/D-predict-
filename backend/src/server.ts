@@ -5,6 +5,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
+import { createPaperRouter } from "./paperRoutes.js";
 import { rankMarketCandidates } from "./marketScanner.js";
 
 dotenv.config();
@@ -286,6 +287,7 @@ app.get("/api/options/chain", async (req, res) => {
 });
 
 app.use("/api/shadow", createShadowRouter(pool));
+app.use("/api/paper", createPaperRouter(pool));
 
 function normalCdf(value: number): number {
   const sign = value < 0 ? -1 : 1;

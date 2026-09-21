@@ -63,6 +63,7 @@ jobs:
           test -f db/migrations/006_seed_instruments.sql
           test -f db/migrations/009_option_paper_trading.sql
           test -f db/migrations/010_dpredict_20.sql
+          test -f db/migrations/011_underlying_paper_trading.sql
           grep -q 'research:' docker-compose.yml
 
       - name: Build Ubuntu bundle

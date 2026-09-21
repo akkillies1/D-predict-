@@ -45,6 +45,10 @@ try {
   assert.equal(invalidHorizonResponse.status, 400);
   const invalidHorizonPayload = await invalidHorizonResponse.json();
   assert.equal(invalidHorizonPayload.error, "INVALID_HORIZON");
+  const paperStateResponse = await fetch(`http://127.0.0.1:${port}/api/paper/state`);
+  assert.equal(paperStateResponse.status, 503);
+  const paperStatePayload = await paperStateResponse.json();
+  assert.equal(paperStatePayload.error, "DATABASE_NOT_CONFIGURED");
   console.log("backend health smoke test passed");
 } finally {
   child.kill("SIGTERM");
