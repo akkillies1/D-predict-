@@ -29,12 +29,15 @@ create table if not exists paper_orders (
     fill_price numeric(14,4),
     notional numeric(16,2) not null default 0,
     fill_timestamp timestamptz,
+    realized_pnl numeric(16,2) not null default 0,
     status text not null default 'FILLED' check (status in ('FILLED','REJECTED','RECORDED')),
     note text not null default '',
     rationale text not null default '',
     signal_snapshot jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now()
 );
+
+alter table paper_orders add column if not exists realized_pnl numeric(16,2) not null default 0;
 
 create index if not exists idx_paper_orders_created on paper_orders(created_at desc);
 create index if not exists idx_paper_orders_symbol on paper_orders(symbol, created_at desc);

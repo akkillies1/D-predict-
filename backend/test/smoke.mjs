@@ -49,6 +49,14 @@ try {
   assert.equal(paperStateResponse.status, 503);
   const paperStatePayload = await paperStateResponse.json();
   assert.equal(paperStatePayload.error, "DATABASE_NOT_CONFIGURED");
+  const paperAnalyticsResponse = await fetch(`http://127.0.0.1:${port}/api/paper/analytics?days=90`);
+  assert.equal(paperAnalyticsResponse.status, 503);
+  const paperAnalyticsPayload = await paperAnalyticsResponse.json();
+  assert.equal(paperAnalyticsPayload.error, "DATABASE_NOT_CONFIGURED");
+  const paperExportResponse = await fetch(`http://127.0.0.1:${port}/api/paper/export.csv?days=90`);
+  assert.equal(paperExportResponse.status, 503);
+  const paperExportPayload = await paperExportResponse.json();
+  assert.equal(paperExportPayload.error, "DATABASE_NOT_CONFIGURED");
   console.log("backend health smoke test passed");
 } finally {
   child.kill("SIGTERM");

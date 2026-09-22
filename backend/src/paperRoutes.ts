@@ -13,6 +13,7 @@ function ensurePaperSchema(pool: Pool): Promise<void> {
     create table if not exists paper_accounts (id smallint primary key default 1 check (id=1), starting_capital numeric(16,2) not null check (starting_capital>0), cash numeric(16,2) not null check (cash>=0), realized_pnl numeric(16,2) not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
     create table if not exists paper_positions (account_id smallint not null references paper_accounts(id) on delete cascade, symbol text not null references instruments(symbol) on update cascade, quantity integer not null check (quantity>0), average_price numeric(14,4) not null check (average_price>0), realized_pnl numeric(16,2) not null default 0, current_price numeric(14,4), current_timestamp timestamptz, updated_at timestamptz not null default now(), primary key(account_id,symbol));
     create table if not exists paper_orders (id uuid primary key default gen_random_uuid(), account_id smallint not null references paper_accounts(id) on delete cascade, symbol text not null references instruments(symbol) on update cascade, side text not null check(side in ('BUY','SELL','HOLD')), quantity integer not null check(quantity>=0), fill_price numeric(14,4), notional numeric(16,2) not null default 0, fill_timestamp timestamptz, status text not null default 'FILLED' check(status in ('FILLED','REJECTED','RECORDED')), note text not null default '', rationale text not null default '', signal_snapshot jsonb not null default '{}'::jsonb, created_at timestamptz not null default now());
+    alter table paper_orders add column if not exists realized_pnl numeric(16,2) not null default 0;
     create index if not exists idx_paper_orders_created on paper_orders(created_at desc);
     create index if not exists idx_paper_orders_symbol on paper_orders(symbol,created_at desc);
     create index if not exists idx_paper_positions_account on paper_positions(account_id);
@@ -70,7 +71,7 @@ export function createPaperRouter(pool: Pool | null): Router {
       if (!accountResult.rows.length) return res.json({ ok: true, mode: "PAPER_RESEARCH", account: null, positions: [], orders: [], disclaimer: "Research simulation only. No broker or live order is connected." });
       const account = accountResult.rows[0];
       const positionsResult = await pool.query(`select symbol, quantity, average_price, realized_pnl, current_price, current_timestamp, updated_at from paper_positions where account_id=$1 order by symbol`, [ACCOUNT_ID]);
-      const ordersResult = await pool.query(`select id, symbol, side, quantity, fill_price, notional, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 100`, [ACCOUNT_ID]);
+      const ordersResult = await pool.query(`select id, symbol, side, quantity, fill_price, notional, realized_pnl, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 100`, [ACCOUNT_ID]);
       let unrealizedPnl = 0;
       const positions = [];
       for (const row of positionsResult.rows) {
@@ -85,7 +86,7 @@ export function createPaperRouter(pool: Pool | null): Router {
       const startingCapital = Number(account.starting_capital);
       const cash = Number(account.cash);
       const equity = cash + positions.reduce((sum, position) => sum + (position.currentPrice == null ? position.averagePrice * position.quantity : position.currentPrice * position.quantity), 0);
-      return res.json({ ok: true, mode: "PAPER_RESEARCH", account: { id: Number(account.id), startingCapital, cash, realizedPnl: Number(account.realized_pnl), unrealizedPnl, equity, returnPct: startingCapital ? (equity / startingCapital) - 1 : 0, openPositions: positions.length, updatedAt: account.updated_at }, positions, orders: ordersResult.rows.map(row => ({ id: row.id, symbol: row.symbol, side: row.side, quantity: Number(row.quantity), fillPrice: row.fill_price == null ? null : Number(row.fill_price), notional: Number(row.notional), fillTimestamp: row.fill_timestamp, status: row.status, note: row.note, rationale: row.rationale, signalSnapshot: row.signal_snapshot ?? {}, createdAt: row.created_at })), marketStatus: "LAST_DAILY_SESSION", disclaimer: "Research simulation only. Fills use the latest persisted daily close; no broker or live order is connected." });
+      return res.json({ ok: true, mode: "PAPER_RESEARCH", account: { id: Number(account.id), startingCapital, cash, realizedPnl: Number(account.realized_pnl), unrealizedPnl, equity, returnPct: startingCapital ? (equity / startingCapital) - 1 : 0, openPositions: positions.length, updatedAt: account.updated_at }, positions, orders: ordersResult.rows.map(row => ({ id: row.id, symbol: row.symbol, side: row.side, quantity: Number(row.quantity), fillPrice: row.fill_price == null ? null : Number(row.fill_price), notional: Number(row.notional), realizedPnl: Number(row.realized_pnl ?? 0), fillTimestamp: row.fill_timestamp, status: row.status, note: row.note, rationale: row.rationale, signalSnapshot: row.signal_snapshot ?? {}, createdAt: row.created_at })), marketStatus: "LAST_DAILY_SESSION", disclaimer: "Research simulation only. Fills use the latest persisted daily close; no broker or live order is connected." });
     } catch (error) {
       return errorResponse(res, 500, "PAPER_STATE_FAILED", error instanceof Error ? error.message : "state_failed");
     }
@@ -151,16 +152,50 @@ export function createPaperRouter(pool: Pool | null): Router {
           realizedPnl += (quote.close - currentAverage) * orderQuantity;
           if (nextQuantity === 0) nextAverage = 0;
         }
-        const order = await client.query(`insert into paper_orders(account_id,symbol,side,quantity,fill_price,notional,fill_timestamp,status,note,rationale,signal_snapshot) values($1,$2,$3,$4,$5,$6,$7,'FILLED',$8,$9,$10) returning id,created_at`, [ACCOUNT_ID, symbol, side, orderQuantity, side === "HOLD" ? quote.close : quote.close, notional, quote.timestamp, note, note || "Manual research action", JSON.stringify(signalSnapshot)]);
+        const executionRealizedPnl = side === "SELL" ? (quote.close - currentAverage) * orderQuantity : 0;
+        const order = await client.query(`insert into paper_orders(account_id,symbol,side,quantity,fill_price,notional,realized_pnl,fill_timestamp,status,note,rationale,signal_snapshot) values($1,$2,$3,$4,$5,$6,$7,$8,'FILLED',$9,$10,$11) returning id,created_at`, [ACCOUNT_ID, symbol, side, orderQuantity, quote.close, notional, executionRealizedPnl, quote.timestamp, note, note || "Manual research action", JSON.stringify(signalSnapshot)]);
         if (nextQuantity === 0) await client.query(`delete from paper_positions where account_id=$1 and symbol=$2`, [ACCOUNT_ID, symbol]);
         else await client.query(`insert into paper_positions(account_id,symbol,quantity,average_price,realized_pnl,current_price,current_timestamp) values($1,$2,$3,$4,$5,$6,$7) on conflict(account_id,symbol) do update set quantity=excluded.quantity,average_price=excluded.average_price,realized_pnl=excluded.realized_pnl,current_price=excluded.current_price,current_timestamp=excluded.current_timestamp,updated_at=now()`, [ACCOUNT_ID, symbol, nextQuantity, nextAverage, realizedPnl, quote.close, quote.timestamp]);
         await client.query(`update paper_accounts set cash=$2, realized_pnl=$3, updated_at=now() where id=$1`, [ACCOUNT_ID, nextCash, accountRealizedPnl + (side === "SELL" ? (quote.close - currentAverage) * orderQuantity : 0)]);
         await client.query("commit");
-        return res.status(201).json({ ok: true, mode: "PAPER_RESEARCH", order: { id: order.rows[0].id, symbol, side, quantity: orderQuantity, fillPrice: quote.close, fillTimestamp: quote.timestamp, notional, signalSnapshot }, cash: nextCash, quoteTimestamp: quote.timestamp, message: side === "HOLD" ? "HOLD recorded; no position or cash changed." : `${side} paper order filled from the latest persisted daily close.` });
+        return res.status(201).json({ ok: true, mode: "PAPER_RESEARCH", order: { id: order.rows[0].id, symbol, side, quantity: orderQuantity, fillPrice: quote.close, fillTimestamp: quote.timestamp, notional, realizedPnl: executionRealizedPnl, signalSnapshot }, cash: nextCash, quoteTimestamp: quote.timestamp, message: side === "HOLD" ? "HOLD recorded; no position or cash changed." : `${side} paper order filled from the latest persisted daily close.` });
       } catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
     } catch (error) {
       return errorResponse(res, 500, "PAPER_ORDER_FAILED", error instanceof Error ? error.message : "order_failed");
     }
+  });
+
+  router.get("/analytics", async (req, res) => {
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    const days = Math.max(1, Math.min(3650, Math.round(Number(req.query.days) || 90)));
+    try {
+      await ensurePaperSchema(pool);
+      const since = new Date(Date.now() - days * 86_400_000);
+      const [summary, bySymbol, byAction, byModelDirection] = await Promise.all([
+        pool.query(`select count(*)::int as actions, count(*) filter (where side in ('BUY','SELL'))::int as trades, count(*) filter (where realized_pnl>0)::int as winning_trades, coalesce(sum(realized_pnl),0) as realized_pnl, coalesce(sum(notional),0) as notional from paper_orders where account_id=$1 and created_at >= $2`, [ACCOUNT_ID, since]),
+        pool.query(`select symbol, count(*)::int as actions, count(*) filter (where side='BUY')::int as buys, count(*) filter (where side='SELL')::int as sells, coalesce(sum(realized_pnl),0) as realized_pnl, coalesce(sum(notional),0) as notional from paper_orders where account_id=$1 and created_at >= $2 group by symbol order by realized_pnl desc, symbol`, [ACCOUNT_ID, since]),
+        pool.query(`select side, count(*)::int as actions, coalesce(sum(realized_pnl),0) as realized_pnl, coalesce(avg(nullif(realized_pnl,0)),0) as average_closed_pnl from paper_orders where account_id=$1 and created_at >= $2 group by side order by side`, [ACCOUNT_ID, since]),
+        pool.query(`select coalesce(signal_snapshot->>'direction','UNKNOWN') as direction, count(*)::int as actions, coalesce(sum(realized_pnl),0) as realized_pnl, count(*) filter (where realized_pnl>0)::int as winning_trades from paper_orders where account_id=$1 and created_at >= $2 group by 1 order by realized_pnl desc, direction`, [ACCOUNT_ID, since]),
+      ]);
+      const row = summary.rows[0];
+      return res.json({ ok: true, periodDays: days, since, summary: { actions: Number(row.actions), trades: Number(row.trades), winningTrades: Number(row.winning_trades), winRate: Number(row.trades) ? Number(row.winning_trades) / Number(row.trades) : null, realizedPnl: Number(row.realized_pnl), notional: Number(row.notional) }, bySymbol: bySymbol.rows.map(item => ({ symbol: item.symbol, actions: Number(item.actions), buys: Number(item.buys), sells: Number(item.sells), realizedPnl: Number(item.realized_pnl), notional: Number(item.notional) })), byAction: byAction.rows.map(item => ({ side: item.side, actions: Number(item.actions), realizedPnl: Number(item.realized_pnl), averageClosedPnl: Number(item.average_closed_pnl) })), byModelDirection: byModelDirection.rows.map(item => ({ direction: item.direction, actions: Number(item.actions), realizedPnl: Number(item.realized_pnl), winningTrades: Number(item.winning_trades) })), disclaimer: "Attribution is descriptive, not proof of predictive skill. HOLD actions and unclosed positions are not treated as wins or losses." });
+    } catch (error) { return errorResponse(res, 500, "PAPER_ANALYTICS_FAILED", error instanceof Error ? error.message : "analytics_failed"); }
+  });
+
+  router.get("/export.csv", async (req, res) => {
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    const days = Math.max(1, Math.min(3650, Math.round(Number(req.query.days) || 3650)));
+    const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    try {
+      await ensurePaperSchema(pool);
+      const since = new Date(Date.now() - days * 86_400_000);
+      const result = await pool.query(`select id, created_at, symbol, side, quantity, fill_price, notional, realized_pnl, status, note, signal_snapshot->>'direction' as signal_direction, signal_snapshot->>'confidence' as signal_confidence, signal_snapshot->>'modelVersion' as model_version from paper_orders where account_id=$1 and created_at >= $2 order by created_at asc`, [ACCOUNT_ID, since]);
+      const headers = ["id", "created_at", "symbol", "side", "quantity", "fill_price", "notional", "realized_pnl", "status", "note", "signal_direction", "signal_confidence", "model_version"];
+      const lines = [headers.join(","), ...result.rows.map(row => [row.id, row.created_at, row.symbol, row.side, row.quantity, row.fill_price, row.notional, row.realized_pnl, row.status, row.note, row.signal_direction, row.signal_confidence, row.model_version].map(csvCell).join(","))];
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="dpredict-paper-trades-${days}d.csv"`);
+      return res.send(`${lines.join("\n")}\n`);
+    } catch (error) { return errorResponse(res, 500, "PAPER_EXPORT_FAILED", error instanceof Error ? error.message : "export_failed"); }
   });
 
   return router;

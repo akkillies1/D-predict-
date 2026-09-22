@@ -44,14 +44,17 @@ import {
   getMarketScan,
   getPredictionPerformance,
   getOptionChain,
+  getPaperAnalytics,
   getPaperState,
   getResearch,
   placePaperOrder,
+  paperExportUrl,
   type Forecast,
   type MarketOverview,
   type MarketPick,
   type OptionRow,
   type PaperState,
+  type PaperAnalytics,
   type LivePrediction,
   type PredictionPerformance,
   type PriceBar,
@@ -182,6 +185,7 @@ export default function DecisionDashboard() {
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
   const [paperState, setPaperState] = useState<PaperState | null>(null);
+  const [paperAnalytics, setPaperAnalytics] = useState<PaperAnalytics | null>(null);
   const [paperCapital, setPaperCapital] = useState("100000");
   const [paperQuantity, setPaperQuantity] = useState("1");
   const [paperNote, setPaperNote] = useState("");
@@ -243,7 +247,7 @@ export default function DecisionDashboard() {
       setLoading(false);
       setEnrichmentLoading(true);
 
-      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, paperResult] =
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, paperResult, paperAnalyticsResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
@@ -251,6 +255,7 @@ export default function DecisionDashboard() {
           getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
           getPaperState(),
+          getPaperAnalytics(90),
         ]);
       if (requestId !== refreshSequence.current) return;
       setResearch(
@@ -270,6 +275,7 @@ export default function DecisionDashboard() {
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setPaperState(paperResult.status === "fulfilled" ? paperResult.value : null);
+      setPaperAnalytics(paperAnalyticsResult.status === "fulfilled" ? paperAnalyticsResult.value : null);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
@@ -440,10 +446,11 @@ export default function DecisionDashboard() {
               "Derivatives",
               "Evidence",
               "Risk",
+              "Paper Lab",
             ].map((item, i) => (
               <a
                 key={item}
-                href={`#${item.toLowerCase()}`}
+                href={`#${item === "Paper Lab" ? "paper-lab" : item.toLowerCase()}`}
                 className={`rounded-lg px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.12em] ${i === 0 ? "bg-[#142a25] text-[#c8f169]" : "text-[#789087] hover:text-[#d9e9dc]"}`}
               >
                 {item}
@@ -1045,7 +1052,7 @@ export default function DecisionDashboard() {
         </section>
 
         <section
-          id="paper-trading"
+          id="paper-lab"
           className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-5 shadow-[0_18px_50px_rgba(0,0,0,.16)]"
         >
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1096,6 +1103,29 @@ export default function DecisionDashboard() {
                   <Label>Recent actions</Label>
                   <div className="mt-3 max-h-36 space-y-2 overflow-auto">{paperState.orders.slice(0, 6).map(order => <div key={order.id} className="flex justify-between gap-3 text-[10px] text-[#9fb4a8]"><span><strong className={tone(order.side === "BUY" ? "LONG" : order.side === "SELL" ? "SHORT" : "FLAT")}>{order.side}</strong> {order.symbol} × {order.quantity}</span><span>{order.fillPrice == null ? "—" : price(order.fillPrice)}</span></div>)}</div>
                 </div>
+              </div>
+              <div className="mt-4 rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div><Label>Ledger attribution · 90 days</Label><p className="mt-1 text-xs text-[#789087]">Only recorded paper actions and realized execution P&L are included. No synthetic returns.</p></div>
+                  <a href={paperExportUrl(3650)} download className="rounded-lg border border-[#345346] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8f169] hover:bg-[#142a25]">Export CSV</a>
+                </div>
+                {paperAnalytics ? <>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <Metric label="Actions" value={String(paperAnalytics.summary.actions)} sub={`${paperAnalytics.summary.trades} BUY/SELL fills`} icon={Activity} />
+                    <Metric label="Win rate" value={pct(paperAnalytics.summary.winRate)} sub={`${paperAnalytics.summary.winningTrades} profitable closes`} icon={Target} />
+                    <Metric label="Ledger P&L" value={price(paperAnalytics.summary.realizedPnl)} sub="realized execution P&L" icon={BarChart3} />
+                  </div>
+                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <div className="h-56 rounded-lg border border-[#1d332f] bg-[#0b1714] p-2">
+                      <Label>P&L by instrument</Label>
+                      <ResponsiveContainer width="100%" height="88%"><BarChart data={paperAnalytics.bySymbol}><CartesianGrid stroke="#1d332f" strokeDasharray="3 3" /><XAxis dataKey="symbol" stroke="#789087" fontSize={10} /><YAxis stroke="#789087" fontSize={10} /><Tooltip contentStyle={{ background: "#0b1714", border: "1px solid #345346", color: "#d7e8d9" }} formatter={(value: number) => [price(value), "Realized P&L"]} /><Bar dataKey="realizedPnl" fill="#c8f169" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer>
+                    </div>
+                    <div className="h-56 rounded-lg border border-[#1d332f] bg-[#0b1714] p-2">
+                      <Label>P&L by model direction</Label>
+                      <ResponsiveContainer width="100%" height="88%"><BarChart data={paperAnalytics.byModelDirection}><CartesianGrid stroke="#1d332f" strokeDasharray="3 3" /><XAxis dataKey="direction" stroke="#789087" fontSize={10} /><YAxis stroke="#789087" fontSize={10} /><Tooltip contentStyle={{ background: "#0b1714", border: "1px solid #345346", color: "#d7e8d9" }} formatter={(value: number) => [price(value), "Realized P&L"]} /><Bar dataKey="realizedPnl" fill="#8fb6ff" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer>
+                    </div>
+                  </div>
+                </> : <div className="mt-4 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-xs text-[#c8b582]">Paper attribution is unavailable until the local database responds. No graph is fabricated.</div>}
               </div>
             </>
           )}
