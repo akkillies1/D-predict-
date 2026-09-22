@@ -1,19 +1,20 @@
-"""Canonical Python ML inference service for D-Predict.
+"""Canonical artifact-only Python ML inference service for D-Predict.
 
 The live engine calls this service instead of maintaining a second TypeScript
-signal model. Training and inference both use training.build_dataset.make_features
-and the same HistGradientBoosting configuration used by the research pipeline.
-Before a production model is exposed, the service runs purge-aware expanding
-walk-forward validation and fits isotonic calibration on strictly OOS forecasts.
-The final model is then fit only on data available at the latest training cutoff.
+signal model. A separate training job uses the shared feature implementation,
+purge-aware walk-forward validation, isotonic calibration, and promotion gates
+to produce a versioned artifact. This request path only loads that artifact;
+it never trains or silently refreshes a model during inference.
 """
 from __future__ import annotations
 
 import hashlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
 
+import joblib
 import numpy as np
 import pandas as pd
 import psycopg2
@@ -45,6 +46,7 @@ MIN_ACTION_MARGIN = 0.10
 MIN_NET_EDGE_PROBABILITY = 0.55
 ROUND_TRIP_COST = float(os.environ.get("SCANNER_ROUND_TRIP_COST", "0.002"))
 DB_URL = os.environ.get("DATABASE_URL")
+MODEL_ARTIFACT_DIR = Path(os.environ.get("MODEL_ARTIFACT_DIR", "/app/models/live"))
 
 app = FastAPI(title="D-Predict ML Inference", version="1.0")
 _cache: dict[str, "ModelBundle"] = {}
@@ -60,6 +62,7 @@ class PredictRequest(BaseModel):
 @dataclass
 class ModelBundle:
     horizon: str
+    feature_set_version: str
     classifier: HistGradientBoostingClassifier
     regressor: HistGradientBoostingRegressor
     calibrators: list[IsotonicRegression | None]
@@ -247,6 +250,7 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     ).hexdigest()[:12]
     return ModelBundle(
         horizon=horizon,
+        feature_set_version=FEATURE_SET_VERSION,
         classifier=clf, regressor=reg, calibrators=calibrators, calibrated=calibrated,
         training_end=training_end, validation_examples=oos_examples,
         calibration_examples=oos_examples if calibrated else 0,
@@ -259,14 +263,52 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     )
 
 
-def _get_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
+def _artifact_path(symbol: str, horizon: str) -> Path:
+    safe_symbol = "".join(character for character in symbol.upper() if character.isalnum() or character in "._-")
+    return MODEL_ARTIFACT_DIR / f"{safe_symbol}_{horizon}_market_v1.joblib"
+
+
+def _save_bundle(symbol: str, bundle: ModelBundle) -> Path:
+    MODEL_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path = _artifact_path(symbol, bundle.horizon)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    joblib.dump(bundle, temporary)
+    temporary.replace(path)
+    return path
+
+
+def _load_bundle(symbol: str, horizon: str) -> ModelBundle:
+    path = _artifact_path(symbol, horizon)
+    if not path.exists():
+        raise HTTPException(status_code=503, detail={
+            "code": "MODEL_ARTIFACT_UNAVAILABLE",
+            "message": f"No validated model artifact is available for {symbol} {horizon}; run the training job before inference.",
+            "artifact": str(path),
+        })
+    try:
+        bundle = joblib.load(path)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail={
+            "code": "MODEL_ARTIFACT_INVALID",
+            "message": f"Validated model artifact could not be loaded: {error}",
+            "artifact": str(path),
+        }) from error
+    if not isinstance(bundle, ModelBundle) or bundle.horizon != horizon or bundle.feature_set_version != FEATURE_SET_VERSION:
+        raise HTTPException(status_code=503, detail={
+            "code": "MODEL_ARTIFACT_INVALID",
+            "message": "Model artifact metadata does not match the requested horizon or feature set.",
+            "artifact": str(path),
+        })
+    return bundle
+
+
+def _get_bundle(symbol: str, horizon: str) -> ModelBundle:
     key = f"{symbol.upper()}:{horizon}"
-    training_end = pd.Timestamp(frame.index.max()).tz_convert("UTC")
     with _cache_lock:
         current = _cache.get(key)
-        if current and current.training_end == training_end:
+        if current:
             return current
-        bundle = _fit_bundle(symbol.upper(), frame, horizon)
+        bundle = _load_bundle(symbol.upper(), horizon)
         _cache[key] = bundle
         return bundle
 
@@ -286,7 +328,7 @@ def _calibrate(bundle: ModelBundle, raw: np.ndarray) -> np.ndarray:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS)}
+    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS), "artifact_directory": str(MODEL_ARTIFACT_DIR), "training_inference_separated": True}
 
 
 @app.post("/predict")
@@ -297,8 +339,13 @@ def predict(request: PredictRequest):
     horizon = _normalize_horizon(request.horizon)
     as_of = pd.Timestamp(request.as_of).tz_convert("UTC") if request.as_of else None
     raw = _load_daily(symbol, as_of)
-    frame = _training_frame(raw, horizon)
-    bundle = _get_bundle(symbol, frame, horizon)
+    bundle = _get_bundle(symbol, horizon)
+    if as_of is not None and as_of < bundle.training_end:
+        raise HTTPException(status_code=409, detail={
+            "code": "MODEL_ARTIFACT_CUTOFF_MISMATCH",
+            "message": "The requested as-of timestamp predates the artifact training cutoff; use a historical artifact trained at or before that timestamp.",
+            "training_cutoff": bundle.training_end.isoformat(),
+        })
 
     # Inference uses the latest feature row, even though it has no future label.
     # Training uses only rows with a known next-day target. This keeps live

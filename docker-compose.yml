@@ -49,6 +49,8 @@ services:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nifty}
       ML_PORT: 4300
     restart: unless-stopped
+    volumes:
+      - ${D_PREDICT_DATA_DIR:-./data/runtime}/ml-models:/app/models/live
     ports:
       - "${ML_PORT:-4300}:4300"
 
