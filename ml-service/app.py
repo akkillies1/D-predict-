@@ -22,15 +22,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 
-from training.build_dataset import FEATURE_SET_VERSION, make_features
+from training.build_dataset import FEATURE_COLUMNS, FEATURE_SET_VERSION, make_features
 
-FEATURE_COLUMNS = [
-    "return_1", "return_5", "return_20", "sma5_ratio", "sma20_ratio", "sma50_ratio",
-    "ema12_ratio", "ema26_ratio", "ema_spread", "rsi14", "atr14_pct", "volatility20",
-    "volume_z20", "day_of_week",
-]
 CLASS_NAMES = ["DOWN", "FLAT", "UP"]
 CLASS_MAP = {"DOWN": 0, "FLAT": 1, "UP": 2}
 SUPPORTED_HORIZONS = {"1d": 1, "3d": 3, "5d": 5}
@@ -41,6 +36,18 @@ MIN_PROMOTION_EXAMPLES = 100
 MIN_PROMOTION_ACCURACY_LIFT = 0.02
 MAX_PROMOTION_LOG_LOSS = 1.05
 MIN_PROMOTION_DIRECTIONAL_ACCURACY = 0.52
+# Calibration must be verified out-of-sample, not merely fit successfully. The
+# isotonic calibrators ship fit on all walk-forward OOF rows; to estimate their
+# honest quality we refit on the early OOF rows and score on the strictly-later
+# remainder, mirroring training/probability_calibration.py's leakage-safe design.
+MAX_PROMOTION_CALIBRATION_GAP = 0.10
+CALIBRATION_EVAL_FRACTION = 0.6
+MIN_CALIBRATION_EVAL_EXAMPLES = 30
+# Promotion point estimates must clear thresholds at their bootstrap confidence
+# bound, not just in expectation, so sampling noise cannot smuggle a weak model
+# through a gate.
+PROMOTION_BOOTSTRAP_ITERATIONS = 1000
+PROMOTION_CONFIDENCE = 0.95
 MIN_ACTION_CONFIDENCE = 0.55
 MIN_ACTION_MARGIN = 0.10
 MIN_NET_EDGE_PROBABILITY = 0.55
@@ -49,7 +56,7 @@ DB_URL = os.environ.get("DATABASE_URL")
 MODEL_ARTIFACT_DIR = Path(os.environ.get("MODEL_ARTIFACT_DIR", "/app/models/live"))
 
 app = FastAPI(title="D-Predict ML Inference", version="1.0")
-_cache: dict[str, "ModelBundle"] = {}
+_cache: dict[str, tuple[float, "ModelBundle"]] = {}
 _cache_lock = Lock()
 
 
@@ -74,6 +81,14 @@ class ModelBundle:
     oos_majority_baseline: float
     oos_log_loss: float
     oos_directional_accuracy: float | None
+    accuracy_lift_ci_low: float
+    log_loss_ci_high: float
+    directional_accuracy_ci_low: float | None
+    calibration_gap: float | None
+    calibration_brier: float | None
+    calibration_log_loss: float | None
+    calibration_eval_examples: int
+    calibration_verified: bool
     return_residual_quantiles: tuple[float, float, float]
     return_residuals: np.ndarray
     promotion_ready: bool
@@ -179,21 +194,98 @@ def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
     directional_mask = np.isin(actual, [0, 2]) & np.isin(predictions, [0, 2])
     directional_accuracy = (float(np.mean(predictions[directional_mask] == actual[directional_mask]))
                             if np.any(directional_mask) else None)
+
+    # Nonparametric bootstrap over OOF rows. Each replicate resamples the
+    # validation set with replacement and recomputes the three promotion
+    # statistics, giving a sampling distribution we take confidence bounds from.
+    alpha = 1.0 - PROMOTION_CONFIDENCE
+    lift_samples: list[float] = []
+    loss_samples: list[float] = []
+    directional_samples: list[float] = []
+    if examples:
+        rng = np.random.default_rng(42)
+        for _ in range(PROMOTION_BOOTSTRAP_ITERATIONS):
+            idx = rng.integers(0, examples, examples)
+            a_b = actual[idx]
+            p_b = predictions[idx]
+            lift_samples.append(float(np.mean(a_b == p_b)) - float(np.bincount(a_b, minlength=3).max() / examples))
+            try:
+                loss_samples.append(float(log_loss(a_b, raw_probs[idx], labels=[0, 1, 2])))
+            except ValueError:
+                pass
+            dm_b = directional_mask[idx]
+            if np.any(dm_b):
+                directional_samples.append(float(np.mean(p_b[dm_b] == a_b[dm_b])))
+
+    def _bound(samples: list[float], quantile: float) -> float:
+        arr = np.asarray(samples, dtype=float)
+        return float(np.quantile(arr, quantile)) if arr.size else float("nan")
+
+    accuracy_lift_ci_low = _bound(lift_samples, alpha / 2)
+    log_loss_ci_high = _bound(loss_samples, 1 - alpha / 2)
+    directional_accuracy_ci_low = _bound(directional_samples, alpha / 2) if directional_samples else None
+
+    lift = accuracy - majority_baseline
     checks = {
         "minimum_examples": examples >= MIN_PROMOTION_EXAMPLES,
-        "beats_majority_baseline": accuracy - majority_baseline >= MIN_PROMOTION_ACCURACY_LIFT,
+        "beats_majority_baseline": lift >= MIN_PROMOTION_ACCURACY_LIFT,
+        "beats_majority_baseline_ci": not np.isnan(accuracy_lift_ci_low) and accuracy_lift_ci_low >= MIN_PROMOTION_ACCURACY_LIFT,
         "probability_quality": probability_log_loss <= MAX_PROMOTION_LOG_LOSS,
+        "probability_quality_ci": not np.isnan(log_loss_ci_high) and log_loss_ci_high <= MAX_PROMOTION_LOG_LOSS,
         "directional_accuracy": directional_accuracy is not None and directional_accuracy >= MIN_PROMOTION_DIRECTIONAL_ACCURACY,
+        "directional_accuracy_ci": (directional_accuracy_ci_low is not None
+                                    and not np.isnan(directional_accuracy_ci_low)
+                                    and directional_accuracy_ci_low >= MIN_PROMOTION_DIRECTIONAL_ACCURACY),
     }
     return {
         "examples": examples,
         "accuracy": accuracy,
         "majority_baseline": majority_baseline,
+        "accuracy_lift": lift,
         "log_loss": probability_log_loss,
         "directional_accuracy": directional_accuracy,
+        "accuracy_lift_ci_low": accuracy_lift_ci_low,
+        "log_loss_ci_high": log_loss_ci_high,
+        "directional_accuracy_ci_low": directional_accuracy_ci_low,
         "checks": checks,
         "promotion_ready": all(checks.values()),
     }
+
+
+def _calibration_quality(raw_probs: np.ndarray, actual: np.ndarray) -> dict | None:
+    """Leakage-safe out-of-sample estimate of isotonic calibration quality.
+
+    The shipped calibrators use every OOF row, so scoring them on those same rows
+    would be optimistically in-sample. Instead we fit fresh isotonic calibrators
+    on the chronologically-early OOF rows and measure the calibration error on
+    the strictly-later remainder. A large gap means the model's confidence is not
+    trustworthy even where isotonic 'succeeded', so promotion is blocked.
+    """
+    n = int(len(actual))
+    split = int(n * CALIBRATION_EVAL_FRACTION)
+    if split < MIN_CALIBRATION_HISTORY or n - split < MIN_CALIBRATION_EVAL_EXAMPLES:
+        return None
+    fit_raw, fit_y = raw_probs[:split], actual[:split]
+    eval_raw, eval_y = raw_probs[split:], actual[split:]
+    eval_calibrators: list[IsotonicRegression] = []
+    for cls_idx in range(3):
+        raw = fit_raw[:, cls_idx]
+        y = (fit_y == cls_idx).astype(float)
+        if len(np.unique(raw)) < 2 or len(np.unique(y)) < 2:
+            return None
+        iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+        iso.fit(raw, y)
+        eval_calibrators.append(iso)
+    calibrated = np.column_stack([eval_calibrators[c].predict(eval_raw[:, c]) for c in range(3)])
+    totals = calibrated.sum(axis=1, keepdims=True)
+    totals[totals <= 0] = 1.0
+    calibrated = calibrated / totals
+    confidence = calibrated.max(axis=1)
+    correct = (calibrated.argmax(axis=1) == eval_y).astype(float)
+    gap = float(abs(confidence.mean() - correct.mean()))
+    brier = float(np.mean([brier_score_loss((eval_y == c).astype(int), calibrated[:, c]) for c in range(3)]))
+    cal_log_loss = float(log_loss(eval_y, calibrated, labels=[0, 1, 2]))
+    return {"gap": gap, "brier": brier, "log_loss": cal_log_loss, "eval_examples": int(len(eval_y))}
 
 
 def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST) -> dict:
@@ -236,7 +328,9 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
             cal.fit(raw, y)
             calibrators.append(cal)
     calibrated = all(c is not None for c in calibrators)
-    promotion_ready = promotion["promotion_ready"] and calibrated
+    cal_quality = _calibration_quality(raw_probs, actual) if calibrated else None
+    calibration_verified = cal_quality is not None and cal_quality["gap"] <= MAX_PROMOTION_CALIBRATION_GAP
+    promotion_ready = promotion["promotion_ready"] and calibration_verified
 
     clf = _classifier()
     clf.fit(frame[FEATURE_COLUMNS], frame["target_class"].map(CLASS_MAP))
@@ -246,7 +340,7 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     signature = hashlib.sha256(
         (symbol.upper() + "|" + horizon + "|" + FEATURE_SET_VERSION + "|" + training_end.isoformat()
          + "|histgb:lr=.05,max_iter=250,max_leaf_nodes=15,l2=1,seed=42|cal="
-         + ("isotonic" if calibrated else "raw") + "|features=" + ",".join(FEATURE_COLUMNS)).encode()
+         + ("isotonic" if calibration_verified else "raw") + "|features=" + ",".join(FEATURE_COLUMNS)).encode()
     ).hexdigest()[:12]
     return ModelBundle(
         horizon=horizon,
@@ -256,16 +350,25 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
         calibration_examples=oos_examples if calibrated else 0,
         oos_accuracy=promotion["accuracy"], oos_majority_baseline=promotion["majority_baseline"],
         oos_log_loss=promotion["log_loss"], oos_directional_accuracy=promotion["directional_accuracy"],
+        accuracy_lift_ci_low=promotion["accuracy_lift_ci_low"],
+        log_loss_ci_high=promotion["log_loss_ci_high"],
+        directional_accuracy_ci_low=promotion["directional_accuracy_ci_low"],
+        calibration_gap=cal_quality["gap"] if cal_quality else None,
+        calibration_brier=cal_quality["brier"] if cal_quality else None,
+        calibration_log_loss=cal_quality["log_loss"] if cal_quality else None,
+        calibration_eval_examples=cal_quality["eval_examples"] if cal_quality else 0,
+        calibration_verified=calibration_verified,
         return_residual_quantiles=tuple(float(value) for value in np.quantile(residuals, [0.1, 0.5, 0.9])),
         return_residuals=residuals,
         promotion_ready=promotion_ready,
-        model_version=f"market-v1-{horizon}-histgb-{signature}",
+        model_version=f"{FEATURE_SET_VERSION}-{horizon}-histgb-{signature}",
     )
 
 
 def _artifact_path(symbol: str, horizon: str) -> Path:
     safe_symbol = "".join(character for character in symbol.upper() if character.isalnum() or character in "._-")
-    return MODEL_ARTIFACT_DIR / f"{safe_symbol}_{horizon}_market_v1.joblib"
+    version_slug = FEATURE_SET_VERSION.replace("-", "_")
+    return MODEL_ARTIFACT_DIR / f"{safe_symbol}_{horizon}_{version_slug}.joblib"
 
 
 def _save_bundle(symbol: str, bundle: ModelBundle) -> Path:
@@ -304,12 +407,19 @@ def _load_bundle(symbol: str, horizon: str) -> ModelBundle:
 
 def _get_bundle(symbol: str, horizon: str) -> ModelBundle:
     key = f"{symbol.upper()}:{horizon}"
+    path = _artifact_path(symbol.upper(), horizon)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
     with _cache_lock:
         current = _cache.get(key)
-        if current:
-            return current
+        # Reuse the cached bundle only when the artifact on disk is unchanged;
+        # a retrained artifact (new mtime) forces a reload without a restart.
+        if current and mtime is not None and current[0] == mtime:
+            return current[1]
         bundle = _load_bundle(symbol.upper(), horizon)
-        _cache[key] = bundle
+        _cache[key] = (mtime if mtime is not None else 0.0, bundle)
         return bundle
 
 
@@ -378,21 +488,40 @@ def predict(request: PredictRequest):
         "expected_return": expected_return, "confidence": confidence,
         "return_interval": return_interval, "probability_net_positive": probability_net_positive,
         "probability_margin": action["probability_margin"],
-        "calibration_status": "CALIBRATED" if bundle.calibrated else "UNCALIBRATED",
+        "calibration_status": "CALIBRATED" if bundle.calibration_verified else ("UNCALIBRATED" if not bundle.calibrated else "CALIBRATION_UNVERIFIED"),
         "prediction_status": prediction_status,
         "action_status": action["status"], "action_reasons": action["reasons"],
         "promotion_checks": {
             "minimum_examples": bundle.validation_examples >= MIN_PROMOTION_EXAMPLES,
             "beats_majority_baseline": bundle.oos_accuracy - bundle.oos_majority_baseline >= MIN_PROMOTION_ACCURACY_LIFT,
+            "beats_majority_baseline_ci": not np.isnan(bundle.accuracy_lift_ci_low) and bundle.accuracy_lift_ci_low >= MIN_PROMOTION_ACCURACY_LIFT,
             "probability_quality": bundle.oos_log_loss <= MAX_PROMOTION_LOG_LOSS,
+            "probability_quality_ci": not np.isnan(bundle.log_loss_ci_high) and bundle.log_loss_ci_high <= MAX_PROMOTION_LOG_LOSS,
             "directional_accuracy": bundle.oos_directional_accuracy is not None and bundle.oos_directional_accuracy >= MIN_PROMOTION_DIRECTIONAL_ACCURACY,
+            "directional_accuracy_ci": bundle.directional_accuracy_ci_low is not None and not np.isnan(bundle.directional_accuracy_ci_low) and bundle.directional_accuracy_ci_low >= MIN_PROMOTION_DIRECTIONAL_ACCURACY,
             "calibration_available": bundle.calibrated,
+            "calibration_quality": bundle.calibration_verified,
         },
         "oos_metrics": {
             "accuracy": bundle.oos_accuracy,
             "majority_baseline": bundle.oos_majority_baseline,
+            "accuracy_lift": bundle.oos_accuracy - bundle.oos_majority_baseline,
             "log_loss": bundle.oos_log_loss,
             "directional_accuracy": bundle.oos_directional_accuracy,
+        },
+        "confidence_intervals": {
+            "level": PROMOTION_CONFIDENCE,
+            "accuracy_lift_low": None if np.isnan(bundle.accuracy_lift_ci_low) else bundle.accuracy_lift_ci_low,
+            "log_loss_high": None if np.isnan(bundle.log_loss_ci_high) else bundle.log_loss_ci_high,
+            "directional_accuracy_low": bundle.directional_accuracy_ci_low,
+        },
+        "calibration_metrics": {
+            "verified": bundle.calibration_verified,
+            "gap": bundle.calibration_gap,
+            "brier": bundle.calibration_brier,
+            "log_loss": bundle.calibration_log_loss,
+            "eval_examples": bundle.calibration_eval_examples,
+            "max_gap_threshold": MAX_PROMOTION_CALIBRATION_GAP,
         },
         "model_version": bundle.model_version, "feature_set_version": FEATURE_SET_VERSION,
         "training_cutoff": bundle.training_end.isoformat(),

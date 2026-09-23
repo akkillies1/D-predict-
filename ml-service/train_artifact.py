@@ -29,6 +29,12 @@ def train_one(symbol: str, horizon: str) -> dict:
         "oos_majority_baseline": bundle.oos_majority_baseline,
         "oos_log_loss": bundle.oos_log_loss,
         "oos_directional_accuracy": bundle.oos_directional_accuracy,
+        "accuracy_lift_ci_low": bundle.accuracy_lift_ci_low,
+        "log_loss_ci_high": bundle.log_loss_ci_high,
+        "directional_accuracy_ci_low": bundle.directional_accuracy_ci_low,
+        "calibration_verified": bundle.calibration_verified,
+        "calibration_gap": bundle.calibration_gap,
+        "calibration_brier": bundle.calibration_brier,
     }
     print(json.dumps(report, indent=2))
     return report

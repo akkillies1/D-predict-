@@ -17,4 +17,5 @@ def test_missing_artifact_is_explicit_abstention(monkeypatch):
 
 def test_artifact_path_is_symbol_and_horizon_scoped(monkeypatch):
     monkeypatch.setattr(app, "MODEL_ARTIFACT_DIR", Path("/tmp/dpredict-artifacts"))
-    assert app._artifact_path("nifty", "3d").name == "NIFTY_3d_market_v1.joblib"
+    expected = f"NIFTY_3d_{app.FEATURE_SET_VERSION.replace('-', '_')}.joblib"
+    assert app._artifact_path("nifty", "3d").name == expected

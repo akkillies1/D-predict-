@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss, mean_absolute_error, mean_squared_error
 
+from .build_dataset import FEATURE_COLUMNS
 from .dataset import DatasetSpec, PointInTimeDataset, make_segments
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,11 +25,6 @@ DATA_DIR = ROOT / "data" / "training"
 MODEL_DIR = ROOT / "models"
 load_dotenv(ROOT / ".env")
 
-FEATURE_COLUMNS = [
-    "return_1", "return_5", "return_20", "sma5_ratio", "sma20_ratio", "sma50_ratio",
-    "ema12_ratio", "ema26_ratio", "ema_spread", "rsi14", "atr14_pct", "volatility20",
-    "volume_z20", "day_of_week",
-]
 CLASS_MAP = {"DOWN": 0, "FLAT": 1, "UP": 2}
 CLASS_NAMES = ["DOWN", "FLAT", "UP"]
 DEFAULT_VALIDATION_FRACTION = 0.20

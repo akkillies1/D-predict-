@@ -18,6 +18,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, log_loss, m
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from .build_dataset import FEATURE_SET_VERSION
 from .train_baseline import CLASS_MAP, CLASS_NAMES, FEATURE_COLUMNS
 from .walk_forward import PURGE_ROWS, load_frame
 
@@ -116,7 +117,7 @@ def compare(symbol: str, horizon: str, folds: int, candidates: tuple[str, ...] =
         "horizon": horizon,
         "folds": folds,
         "purge_rows": purge,
-        "feature_set": "market-v1",
+        "feature_set": FEATURE_SET_VERSION,
         "candidates": results,
         "promotion": "NONE",
         "note": "Diagnostic OOS comparison only; candidate selection requires an independent promotion protocol.",
