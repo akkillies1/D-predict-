@@ -16,6 +16,7 @@ import {
   searchInstruments,
 } from "@/lib/localApi";
 import type { ChargeBreakdown, LiveMessage, MarketOverview, PaperOrder, PaperProduct, PaperState, OrderType } from "@/lib/localApi";
+import MarketSessionClock from "@/components/MarketSessionClock";
 
 const money = (value?: number | null) => value == null ? "—" : `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
 const num = (value?: number | null) => value == null ? "—" : value.toLocaleString("en-IN", { maximumFractionDigits: 2 });
@@ -24,7 +25,7 @@ const tone = (value: number) => value > 0 ? "text-[#c8f169]" : value < 0 ? "text
 
 type Tab = "POSITIONS" | "HOLDINGS" | "ORDER_BOOK" | "TRADE_BOOK";
 
-export default function TradingDesk() {
+export default function TradingDesk({ embedded = false }: { embedded?: boolean } = {}) {
   const [state, setState] = useState<PaperState | null>(null);
   const [busy, setBusy] = useState(false);
   const [capital, setCapital] = useState("1000000");
@@ -202,6 +203,7 @@ export default function TradingDesk() {
                 <span className={`h-1.5 w-1.5 rounded-full ${state?.marketLive ? "bg-[#c8f169]" : "bg-[#e5b55f]"}`} />
                 {state?.marketLive ? "Market live" : "Market closed"}
               </span>
+              {!embedded && <MarketSessionClock />}
               <span className="inline-flex items-center gap-1 text-[10px] text-[#5c736a]">
                 <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-[#c8f169]" : "bg-[#ff9d91]"}`} />
                 {connected ? "live feed" : "reconnecting…"}

@@ -33,7 +33,6 @@ import {
 } from "recharts";
 import {
   addToWatchlist,
-  createPaperAccount,
   getForecast,
   getInstruments,
   getLatestSignal,
@@ -44,17 +43,11 @@ import {
   getMarketScan,
   getPredictionPerformance,
   getOptionChain,
-  getPaperAnalytics,
-  getPaperState,
   getResearch,
-  placePaperOrder,
-  paperExportUrl,
   type Forecast,
   type MarketOverview,
   type MarketPick,
   type OptionRow,
-  type PaperState,
-  type PaperAnalytics,
   type LivePrediction,
   type PredictionPerformance,
   type PriceBar,
@@ -63,6 +56,8 @@ import {
 } from "@/lib/localApi";
 import { chooseInitialSymbol } from "@/lib/dashboard";
 import LiveTickerSearch from "@/components/LiveTickerSearch";
+import MarketSessionClock from "@/components/MarketSessionClock";
+import TradingDesk from "@/components/TradingDesk";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 
@@ -184,13 +179,6 @@ export default function DecisionDashboard() {
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
-  const [paperState, setPaperState] = useState<PaperState | null>(null);
-  const [paperAnalytics, setPaperAnalytics] = useState<PaperAnalytics | null>(null);
-  const [paperCapital, setPaperCapital] = useState("100000");
-  const [paperQuantity, setPaperQuantity] = useState("1");
-  const [paperNote, setPaperNote] = useState("");
-  const [paperBusy, setPaperBusy] = useState(false);
-  const [paperMessage, setPaperMessage] = useState<string | null>(null);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -247,15 +235,13 @@ export default function DecisionDashboard() {
       setLoading(false);
       setEnrichmentLoading(true);
 
-      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, paperResult, paperAnalyticsResult] =
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
           getPredictionPerformance(30),
           getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
-          getPaperState(),
-          getPaperAnalytics(90),
         ]);
       if (requestId !== refreshSequence.current) return;
       setResearch(
@@ -274,39 +260,12 @@ export default function DecisionDashboard() {
         livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
-      setPaperState(paperResult.status === "fulfilled" ? paperResult.value : null);
-      setPaperAnalytics(paperAnalyticsResult.status === "fulfilled" ? paperAnalyticsResult.value : null);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
       if (requestId === refreshSequence.current) setEnrichmentLoading(false);
     }
   }, [forecastHorizon, symbol]);
-
-  const initializePaperAccount = useCallback(async () => {
-    const capital = Number(paperCapital);
-    if (!Number.isFinite(capital) || capital <= 0) return setPaperMessage("Enter a positive virtual starting fund.");
-    setPaperBusy(true);
-    try {
-      await createPaperAccount(capital);
-      setPaperMessage(`Research fund initialized at ${price(capital)}.`);
-      setPaperState(await getPaperState());
-    } catch (error) { setPaperMessage(error instanceof Error ? error.message : "Unable to initialize paper account."); }
-    finally { setPaperBusy(false); }
-  }, [paperCapital]);
-
-  const executePaperAction = useCallback(async (side: "BUY" | "SELL" | "HOLD") => {
-    const quantity = Number(paperQuantity);
-    if (side !== "HOLD" && (!Number.isInteger(quantity) || quantity <= 0)) return setPaperMessage("Quantity must be a positive whole number.");
-    setPaperBusy(true);
-    try {
-      const result = await placePaperOrder({ symbol, side, quantity: side === "HOLD" ? 0 : quantity, note: paperNote });
-      setPaperMessage(result.message);
-      setPaperState(await getPaperState());
-      setPaperNote("");
-    } catch (error) { setPaperMessage(error instanceof Error ? error.message : "Paper action failed."); }
-    finally { setPaperBusy(false); }
-  }, [paperNote, paperQuantity, symbol]);
 
   useEffect(() => {
     void refresh();
@@ -458,6 +417,7 @@ export default function DecisionDashboard() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
+            <MarketSessionClock className="hidden md:inline-flex" />
             <span
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] ${connected ? "border-[#3d5b38] bg-[#142419] text-[#c8f169]" : "border-[#5a4328] bg-[#21180e] text-[#e5b55f]"}`}
             >
@@ -1057,78 +1017,15 @@ export default function DecisionDashboard() {
         >
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <Label>Research execution lab</Label>
+              <Label>Research execution desk</Label>
               <h2 className="mt-1 font-display text-xl font-semibold">Paper trading · {symbol}</h2>
-              <p className="mt-1 text-xs text-[#789087]">Virtual funds only. Orders fill from the latest persisted daily close and never reach a broker.</p>
+              <p className="mt-1 text-xs text-[#789087]">Virtual funds only. Market and limit orders fill only when a live tick crosses them — after hours they queue and never reach a broker.</p>
             </div>
             <span className="rounded-full border border-[#5b4b2b] px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8b582]">RESEARCH ONLY</span>
           </div>
-          {!paperState?.account ? (
-            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-              <label className="block text-xs text-[#9fb4a8]">
-                Virtual starting fund
-                <input value={paperCapital} onChange={event => setPaperCapital(event.target.value)} inputMode="decimal" className="mt-2 w-full rounded-lg border border-[#345346] bg-[#09130f] px-3 py-2 font-mono-ui text-sm text-[#d7e8d9] outline-none focus:border-[#c8f169]" aria-label="Virtual starting fund" />
-              </label>
-              <button type="button" disabled={paperBusy} onClick={() => void initializePaperAccount()} className="rounded-lg border border-[#476238] bg-[#17301f] px-4 py-2 text-xs font-semibold text-[#c8f169] transition-transform active:scale-[.97] disabled:opacity-50">{paperBusy ? "Initializing…" : "Open research fund"}</button>
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                <Metric label="Equity" value={price(paperState.account.equity)} sub="cash + marked positions" icon={BarChart3} />
-                <Metric label="Cash" value={price(paperState.account.cash)} sub="available virtual cash" icon={Database} />
-                <Metric label="Return" value={pct(paperState.account.returnPct)} sub="from starting fund" icon={ArrowUpRight} />
-                <Metric label="Realized P&L" value={price(paperState.account.realizedPnl)} sub="closed research trades" icon={Target} />
-                <Metric label="Unrealized P&L" value={price(paperState.account.unrealizedPnl)} sub="latest daily close mark" icon={Activity} />
-              </div>
-              <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_.9fr]">
-                <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
-                  <div className="flex items-center justify-between gap-3"><div><Label>Action panel</Label><div className="mt-1 text-sm font-semibold text-[#d7e8d9]">{symbol} · {price(market?.close)}</div></div><span className="font-mono-ui text-[9px] text-[#789087]">{paperState.marketStatus}</span></div>
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <label className="text-xs text-[#9fb4a8]">Quantity<input value={paperQuantity} onChange={event => setPaperQuantity(event.target.value)} inputMode="numeric" className="mt-2 w-full rounded-lg border border-[#345346] bg-[#0b1714] px-3 py-2 font-mono-ui text-sm text-[#d7e8d9] outline-none" /></label>
-                    <label className="text-xs text-[#9fb4a8]">Research note<input value={paperNote} onChange={event => setPaperNote(event.target.value)} placeholder="Why this action?" className="mt-2 w-full rounded-lg border border-[#345346] bg-[#0b1714] px-3 py-2 text-sm text-[#d7e8d9] outline-none" /></label>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button type="button" disabled={paperBusy} onClick={() => void executePaperAction("BUY")} className="rounded-lg border border-[#476238] bg-[#17301f] px-4 py-2 text-xs font-semibold text-[#c8f169] transition-transform active:scale-[.97] disabled:opacity-50">BUY</button>
-                    <button type="button" disabled={paperBusy} onClick={() => void executePaperAction("SELL")} className="rounded-lg border border-[#633d38] bg-[#291817] px-4 py-2 text-xs font-semibold text-[#ff9d91] transition-transform active:scale-[.97] disabled:opacity-50">SELL</button>
-                    <button type="button" disabled={paperBusy} onClick={() => void executePaperAction("HOLD")} className="rounded-lg border border-[#5b4b2b] bg-[#211b10] px-4 py-2 text-xs font-semibold text-[#e5b55f] transition-transform active:scale-[.97] disabled:opacity-50">HOLD / RECORD</button>
-                  </div>
-                  <div className="mt-3 text-[10px] text-[#789087]">Signal context: <strong className="text-[#d7e8d9]">{livePrediction?.action_status ?? signal?.direction ?? "NO CURRENT SIGNAL"}</strong>. Manual actions remain allowed as research experiments; the ledger records the model context.</div>
-                  {paperMessage && <div className="mt-3 rounded-lg border border-[#345346] bg-[#10231e] p-3 text-xs text-[#c8f169]">{paperMessage}</div>}
-                </div>
-                <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
-                  <Label>Open positions</Label>
-                  <div className="mt-3 space-y-2">
-                    {paperState.positions.length ? paperState.positions.map(position => <div key={position.symbol} className="flex items-center justify-between rounded-lg border border-[#29463b] px-3 py-2 text-xs"><span><strong className="text-[#d7e8d9]">{position.symbol}</strong><span className="ml-2 text-[#789087]">{position.quantity} @ {price(position.averagePrice)}</span></span><span className={tone((position.unrealizedPnl ?? 0) >= 0 ? "LONG" : "SHORT")}>{price(position.unrealizedPnl)}</span></div>) : <div className="text-xs text-[#789087]">No open positions. Use HOLD to record a research decision without changing cash.</div>}
-                  </div>
-                  <Label>Recent actions</Label>
-                  <div className="mt-3 max-h-36 space-y-2 overflow-auto">{paperState.orders.slice(0, 6).map(order => <div key={order.id} className="flex justify-between gap-3 text-[10px] text-[#9fb4a8]"><span><strong className={tone(order.side === "BUY" ? "LONG" : order.side === "SELL" ? "SHORT" : "FLAT")}>{order.side}</strong> {order.symbol} × {order.quantity}</span><span>{order.fillPrice == null ? "—" : price(order.fillPrice)}</span></div>)}</div>
-                </div>
-              </div>
-              <div className="mt-4 rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
-                <div className="flex flex-wrap items-end justify-between gap-3">
-                  <div><Label>Ledger attribution · 90 days</Label><p className="mt-1 text-xs text-[#789087]">Only recorded paper actions and realized execution P&L are included. No synthetic returns.</p></div>
-                  <a href={paperExportUrl(3650)} download className="rounded-lg border border-[#345346] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8f169] hover:bg-[#142a25]">Export CSV</a>
-                </div>
-                {paperAnalytics ? <>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <Metric label="Actions" value={String(paperAnalytics.summary.actions)} sub={`${paperAnalytics.summary.trades} BUY/SELL fills`} icon={Activity} />
-                    <Metric label="Win rate" value={pct(paperAnalytics.summary.winRate)} sub={`${paperAnalytics.summary.winningTrades} profitable closes`} icon={Target} />
-                    <Metric label="Ledger P&L" value={price(paperAnalytics.summary.realizedPnl)} sub="realized execution P&L" icon={BarChart3} />
-                  </div>
-                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                    <div className="h-56 rounded-lg border border-[#1d332f] bg-[#0b1714] p-2">
-                      <Label>P&L by instrument</Label>
-                      <ResponsiveContainer width="100%" height="88%"><BarChart data={paperAnalytics.bySymbol}><CartesianGrid stroke="#1d332f" strokeDasharray="3 3" /><XAxis dataKey="symbol" stroke="#789087" fontSize={10} /><YAxis stroke="#789087" fontSize={10} /><Tooltip contentStyle={{ background: "#0b1714", border: "1px solid #345346", color: "#d7e8d9" }} formatter={(value: number) => [price(value), "Realized P&L"]} /><Bar dataKey="realizedPnl" fill="#c8f169" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer>
-                    </div>
-                    <div className="h-56 rounded-lg border border-[#1d332f] bg-[#0b1714] p-2">
-                      <Label>P&L by model direction</Label>
-                      <ResponsiveContainer width="100%" height="88%"><BarChart data={paperAnalytics.byModelDirection}><CartesianGrid stroke="#1d332f" strokeDasharray="3 3" /><XAxis dataKey="direction" stroke="#789087" fontSize={10} /><YAxis stroke="#789087" fontSize={10} /><Tooltip contentStyle={{ background: "#0b1714", border: "1px solid #345346", color: "#d7e8d9" }} formatter={(value: number) => [price(value), "Realized P&L"]} /><Bar dataKey="realizedPnl" fill="#8fb6ff" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer>
-                    </div>
-                  </div>
-                </> : <div className="mt-4 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-xs text-[#c8b582]">Paper attribution is unavailable until the local database responds. No graph is fabricated.</div>}
-              </div>
-            </>
-          )}
+          <div className="mt-4">
+            <TradingDesk embedded />
+          </div>
           <div className="mt-4 text-[10px] leading-relaxed text-[#789087]">This workspace is a simulation ledger for research and education. It does not provide investment advice, does not guarantee outcomes, and does not submit orders to any exchange or broker.</div>
         </section>
 
