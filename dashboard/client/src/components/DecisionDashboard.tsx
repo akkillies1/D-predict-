@@ -44,7 +44,9 @@ import {
   getPredictionPerformance,
   getOptionChain,
   getResearch,
+  paperLiveUrl,
   type Forecast,
+  type LiveMessage,
   type MarketOverview,
   type MarketPick,
   type OptionRow,
@@ -60,6 +62,41 @@ import MarketSessionClock from "@/components/MarketSessionClock";
 import TradingDesk from "@/components/TradingDesk";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
+const TIMEFRAME_KEY = "dpredict:chart-timeframe";
+
+type ChartTimeframe = "1m" | "1d" | "1w" | "1mo";
+const TIMEFRAMES: Array<{ id: ChartTimeframe; label: string; unit: string; hint: string }> = [
+  { id: "1m", label: "1m", unit: "minute", hint: "One-minute bars from the live collector feed" },
+  { id: "1d", label: "1D", unit: "daily", hint: "Daily bars" },
+  { id: "1w", label: "1W", unit: "weekly", hint: "Weekly bars aggregated from persisted daily bars (Mon–Sun sessions)" },
+  { id: "1mo", label: "1M", unit: "monthly", hint: "Monthly bars aggregated from persisted daily bars" },
+];
+
+function istDayKey(value: string) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value)); }
+function bucketKey(value: string, mode: "day" | "week" | "month") {
+  const day = istDayKey(value);
+  if (mode === "day") return day;
+  if (mode === "month") return day.slice(0, 7);
+  const [y, m, d] = day.split("-").map(Number);
+  const utc = Date.UTC(y, m - 1, d);
+  const dow = new Date(utc).getUTCDay();
+  const weekStart = new Date(utc - ((dow + 6) % 7) * 86400000);
+  return `${weekStart.getUTCFullYear()}-${String(weekStart.getUTCMonth() + 1).padStart(2, "0")}-${String(weekStart.getUTCDate()).padStart(2, "0")}`;
+}
+function resampleBars(bars: PriceBar[], mode: "week" | "month"): PriceBar[] {
+  const groups = new Map<string, PriceBar[]>();
+  for (const bar of bars) { const key = bucketKey(bar.timestamp, mode); const rows = groups.get(key); if (rows) rows.push(bar); else groups.set(key, [bar]); }
+  return [...groups.values()].map(rows => {
+    const volumes = rows.map(row => row.volume).filter((value): value is number => value != null);
+    return { timestamp: rows[rows.length - 1].timestamp, open: rows[0].open, high: Math.max(...rows.map(row => row.high)), low: Math.min(...rows.map(row => row.low)), close: rows[rows.length - 1].close, volume: volumes.length ? volumes.reduce((sum, value) => sum + value, 0) : null };
+  });
+}
+function formatBarTime(timestamp: string, timeframe: ChartTimeframe) {
+  const date = new Date(timestamp);
+  if (timeframe === "1m") return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  if (timeframe === "1mo") return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "2-digit" }).format(date);
+  return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }).format(date);
+}
 
 function pct(value?: number | null) {
   return value == null || !Number.isFinite(value)
@@ -172,6 +209,14 @@ export default function DecisionDashboard() {
   const [forecastHorizon, setForecastHorizon] = useState<1 | 3 | 5>(5);
   const [market, setMarket] = useState<MarketOverview | null>(null);
   const [history, setHistory] = useState<PriceBar[]>([]);
+  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>(() => {
+    const saved = localStorage.getItem(TIMEFRAME_KEY);
+    return saved === "1m" || saved === "1w" || saved === "1mo" ? saved : "1d";
+  });
+  const [liveQuote, setLiveQuote] = useState<MarketOverview | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const symbolRef = useRef(symbol);
+  symbolRef.current = symbol;
   const [signal, setSignal] = useState<Signal | null>(null);
   const [options, setOptions] = useState<OptionRow[]>([]);
   const [research, setResearch] = useState<ResearchResult | null>(null);
@@ -189,6 +234,7 @@ export default function DecisionDashboard() {
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const refreshSequence = useRef(0);
+  const predictionGate = useRef({ key: "", until: 0, wait: 15000 });
 
   const selectSymbol = useCallback(
     async (next: string, name?: string | null) => {
@@ -219,7 +265,7 @@ export default function DecisionDashboard() {
       const [health, live, bars, latest, forecastResult] = await Promise.allSettled([
         getLocalHealth(),
         getLiveQuote(symbol),
-        getMarketHistory(symbol, "1d"),
+        getMarketHistory(symbol, chartTimeframe === "1m" ? "1m" : "1d", undefined, chartTimeframe === "1m" ? 400 : chartTimeframe === "1d" ? 140 : 520),
         getLatestSignal(symbol),
         getForecast(symbol, forecastHorizon),
       ]);
@@ -235,15 +281,27 @@ export default function DecisionDashboard() {
       setLoading(false);
       setEnrichmentLoading(true);
 
+      // When the model endpoint honestly 503s (no promoted model), back off
+      // exponentially instead of hammering it every cycle and flooding the console.
+      const predictionKey = `${symbol}:${forecastHorizon}`;
+      const gate = predictionGate.current;
+      const skipPrediction = gate.key === predictionKey && Date.now() < gate.until;
+
       const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
           getPredictionPerformance(30),
-          getLivePrediction(symbol, forecastHorizon),
+          skipPrediction ? Promise.resolve(null) : getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
         ]);
       if (requestId !== refreshSequence.current) return;
+      if (!skipPrediction) {
+        const value = livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null;
+        setLivePrediction(value);
+        if (value) { gate.key = predictionKey; gate.wait = 15000; gate.until = 0; }
+        else { gate.wait = Math.min(300000, Math.max(15000, gate.key === predictionKey ? gate.wait : 15000) * 2); gate.key = predictionKey; gate.until = Date.now() + gate.wait; }
+      }
       setResearch(
         researchResult.status === "fulfilled" ? researchResult.value : null
       );
@@ -256,16 +314,13 @@ export default function DecisionDashboard() {
       setPredictionPerformance(
         performanceResult.status === "fulfilled" ? performanceResult.value : null
       );
-      setLivePrediction(
-        livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null
-      );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
       if (requestId === refreshSequence.current) setEnrichmentLoading(false);
     }
-  }, [forecastHorizon, symbol]);
+  }, [chartTimeframe, forecastHorizon, symbol]);
 
   useEffect(() => {
     void refresh();
@@ -297,22 +352,75 @@ export default function DecisionDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let retry: number | undefined;
+    let closed = false;
+    const connect = () => {
+      try { socket = new WebSocket(paperLiveUrl()); } catch { return; }
+      wsRef.current = socket;
+      socket.onopen = () => socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current }));
+      socket.onmessage = event => {
+        let message: LiveMessage; try { message = JSON.parse(String(event.data)) as LiveMessage; } catch { return; }
+        if (message.type === "quote") {
+          const envelope = message as Extract<LiveMessage, { type: "quote" }>;
+          if (envelope.symbol === symbolRef.current && envelope.quote?.ok) setLiveQuote(envelope.quote as MarketOverview);
+        }
+      };
+      socket.onclose = () => { wsRef.current = null; if (!closed) retry = window.setTimeout(connect, 4000); };
+      socket.onerror = () => socket?.close();
+    };
+    connect();
+    return () => { closed = true; if (retry) window.clearTimeout(retry); socket?.close(); wsRef.current = null; };
+  }, []);
+  useEffect(() => {
+    setLiveQuote(null);
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "watch", symbol }));
+  }, [symbol]);
+
   const thesis = signal?.tradeThesis;
+  const liveActive = liveQuote?.status === "LIVE" && liveQuote.close != null && !!liveQuote.timestamp;
+  const displayBars = useMemo(() => {
+    const base = chartTimeframe === "1w" || chartTimeframe === "1mo" ? resampleBars(history, chartTimeframe === "1w" ? "week" : "month") : history;
+    const quote = liveQuote;
+    if (!quote || quote.close == null || !quote.timestamp || (quote.status !== "LIVE" && quote.status !== "CACHED")) return base;
+    const bars = [...base];
+    const last = bars[bars.length - 1];
+    if (chartTimeframe === "1m") {
+      // The hub quote carries the newest persisted 1-minute bar verbatim: refresh it in
+      // place, or append it when it opens a new minute. Nothing is interpolated.
+      if (last && last.timestamp === quote.timestamp) bars[bars.length - 1] = { ...last, open: quote.open ?? last.open, high: quote.high ?? last.high, low: quote.low ?? last.low, close: quote.close, volume: quote.volume ?? last.volume };
+      else if (!last || Date.parse(quote.timestamp) > Date.parse(last.timestamp)) bars.push({ timestamp: quote.timestamp, open: quote.open ?? quote.close, high: quote.high ?? quote.close, low: quote.low ?? quote.close, close: quote.close, volume: quote.volume });
+      return bars;
+    }
+    const mode = chartTimeframe === "1d" ? "day" : chartTimeframe === "1w" ? "week" : "month";
+    const quoteKey = bucketKey(quote.timestamp, mode);
+    const lastKey = last ? bucketKey(last.timestamp, mode) : null;
+    if (last && quoteKey === lastKey) {
+      // The forming bucket's close becomes the live last price; OHLC extremes only widen.
+      bars[bars.length - 1] = { ...last, high: Math.max(last.high, quote.high ?? last.high), low: Math.min(last.low, quote.low ?? last.low), close: quote.close };
+    } else if (!last || (lastKey && quoteKey > lastKey)) {
+      bars.push({ timestamp: quote.timestamp, open: quote.close, high: quote.close, low: quote.close, close: quote.close, volume: null });
+    }
+    return bars;
+  }, [chartTimeframe, history, liveQuote]);
   const chart = useMemo(
     () => {
-      const bars = history.map((bar, index) => {
-        const closes = history.slice(Math.max(0, index - 19), index + 1).map(item => item.close);
-        const ema12Window = history.slice(Math.max(0, index - 11), index + 1).map(item => item.close);
-        const ema26Window = history.slice(Math.max(0, index - 25), index + 1).map(item => item.close);
+      const bars = displayBars.map((bar, index) => {
+        const closes = displayBars.slice(Math.max(0, index - 19), index + 1).map(item => item.close);
+        const ema12Window = displayBars.slice(Math.max(0, index - 11), index + 1).map(item => item.close);
+        const ema26Window = displayBars.slice(Math.max(0, index - 25), index + 1).map(item => item.close);
         const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
-        return { ...bar, sma20: average(closes), ema12: average(ema12Window), ema26: average(ema26Window), time: new Date(bar.timestamp).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) };
+        return { ...bar, sma20: average(closes), ema12: average(ema12Window), ema26: average(ema26Window), time: formatBarTime(bar.timestamp, chartTimeframe) };
       });
-      const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...(forecast?.bands ?? []).flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
+      // The forecast cone projects trading days ahead; it is only meaningful on the daily axis.
+      const bands = chartTimeframe === "1d" ? forecast?.bands ?? [] : [];
+      const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...bands.flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
       const min = values.length ? Math.min(...values) : 0;
       const max = values.length ? Math.max(...values) : 1;
-      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands: forecast?.bands ?? [] };
+      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands };
     },
-    [forecast, history]
+    [chartTimeframe, displayBars, forecast]
   );
   const optionSummary = useMemo(() => {
     const grouped = new Map<
@@ -610,16 +718,40 @@ export default function DecisionDashboard() {
 
         <section className="grid gap-5 xl:grid-cols-[1.45fr_.55fr]">
           <Card className="p-5">
-            <div className="flex items-end justify-between">
+            <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <Label>Price action / live local feed</Label>
+                <Label>Price action · WebSocket live feed</Label>
                 <h2 className="mt-1 font-display text-xl font-semibold">
                   {symbol}
                 </h2>
+                <div className="mt-1 flex items-center gap-1.5 font-mono-ui text-[9px] uppercase tracking-[.12em]">
+                  <span className={`h-1.5 w-1.5 rounded-full ${liveActive ? "animate-pulse bg-[#c8f169]" : "bg-[#e5b55f]"}`} />
+                  <span className={liveActive ? "text-[#c8f169]" : "text-[#c8b582]"}>
+                    {liveActive
+                      ? `Live tick ${liveQuote?.close != null ? liveQuote.close.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : ""} · ${liveQuote?.timestamp ? formatBarTime(liveQuote.timestamp, "1m") : ""} IST`
+                      : "Feed idle — showing last verified session"}
+                  </span>
+                </div>
               </div>
-              <span className="font-mono-ui text-[9px] text-[#70887d]">
-                {history.length} bars
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="font-mono-ui text-[9px] text-[#70887d]">
+                  {TIMEFRAMES.find(item => item.id === chartTimeframe)?.unit} · {chart.bars.length} bars
+                </span>
+                <div className="flex items-center gap-1 rounded-lg border border-[#1d332f] bg-[#09130f] p-1" role="group" aria-label="Chart timeframe">
+                  {TIMEFRAMES.map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      title={item.hint}
+                      aria-pressed={chartTimeframe === item.id}
+                      onClick={() => { setChartTimeframe(item.id); localStorage.setItem(TIMEFRAME_KEY, item.id); }}
+                      className={`rounded-md px-2.5 py-1 font-mono-ui text-[10px] transition-colors ${chartTimeframe === item.id ? "bg-[#1d332f] text-[#c8f169]" : "text-[#789087] hover:text-[#d7e8d9]"}`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="mt-4 h-[340px]">
               {chart.bars.length ? (() => {
@@ -644,7 +776,7 @@ export default function DecisionDashboard() {
                   <text x="28" y="14" fill="#e5b55f" fontSize="10">SMA20</text><text x="82" y="14" fill="#76b9ff" fontSize="10">EMA12</text><text x="140" y="14" fill="#d19cff" fontSize="10">EMA26</text><text x="28" y="264" fill="#70887d" fontSize="9">VOLUME</text>{chart.bands.length ? <text x="850" y="264" fill="#c8f169" fontSize="9">FORECAST CONE</text> : null}
                 </svg>;
               })() : (
-                <Empty text="No historical bars returned by the local API." />
+                <Empty text={chartTimeframe === "1m" ? "No minute bars collected for this instrument yet — the feed stores them during market sessions." : "No historical bars returned by the local API."} />
               )}
             </div>
           </Card>
