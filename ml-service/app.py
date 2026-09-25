@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
 import joblib
 import numpy as np
@@ -22,7 +23,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from training.build_dataset import FEATURE_COLUMNS, FEATURE_SET_VERSION, make_features
 
@@ -55,9 +59,51 @@ ROUND_TRIP_COST = float(os.environ.get("SCANNER_ROUND_TRIP_COST", "0.002"))
 DB_URL = os.environ.get("DATABASE_URL")
 MODEL_ARTIFACT_DIR = Path(os.environ.get("MODEL_ARTIFACT_DIR", "/app/models/live"))
 
+# --- Meta layer ("predict the predictions"). The base 3-class model currently
+# has no validated directional edge, so the meta model does NOT try to add one.
+# It is a selective-prediction layer: it learns the probability that the base
+# call is CORRECT and is only allowed to tighten the action gate. It earns
+# promotion solely by proving, at a bootstrap confidence bound, that acting on
+# its highest-confidence subset is more accurate than acting on everything. If
+# it cannot prove that, meta_ready is False and /predict behaves exactly as the
+# base-only path did. It can never manufacture or loosen edge. ---
+META_CONTEXT_COLUMNS = ["volatility20", "atr14_pct"]
+META_FEATURE_NAMES = [
+    "prob_down", "prob_flat", "prob_up", "confidence", "margin", "entropy",
+    "is_flat_call", "expected_return", "abs_expected_return", "edge_over_cost",
+    "prob_net_positive", "volatility20", "atr14_pct",
+]
+META_REGRESSOR = LogisticRegression  # noqa: F811 (documentation alias)
+MIN_META_EXAMPLES = 200
+META_FOLDS = 4
+META_PURGE_ROWS = 5
+META_COVERAGE_LEVELS = (0.2, 0.3, 0.4, 0.5)
+MIN_META_SELECTED_COVERAGE = 0.3
+MIN_META_ACCURACY_LIFT = 0.03
+MIN_META_AUC = 0.52
+MIN_META_CONFIDENCE = 0.55
+META_BOOTSTRAP_ITERATIONS = 1000
+META_CONFIDENCE = 0.95
+META_VERSION = "meta-v1"
+
 app = FastAPI(title="D-Predict ML Inference", version="1.0")
 _cache: dict[str, tuple[float, "ModelBundle"]] = {}
 _cache_lock = Lock()
+_train_lock = Lock()
+
+# Automatic training cadence. Off by default so inference-only deployments are
+# unaffected; enabled with AUTO_TRAIN_ENABLED. The scheduler is a separate
+# nightly-ish loop, intentionally decoupled from the per-poll prediction path.
+AUTO_TRAIN_ENABLED = os.environ.get("AUTO_TRAIN_ENABLED", "false").lower() in {"1", "true", "yes"}
+AUTO_TRAIN_INTERVAL_HOURS = max(0.1, float(os.environ.get("AUTO_TRAIN_INTERVAL_HOURS", "24")))
+AUTO_TRAIN_ON_STARTUP = os.environ.get("AUTO_TRAIN_ON_STARTUP", "false").lower() in {"1", "true", "yes"}
+AUTO_TRAIN_HORIZONS = [h.strip().lower() for h in os.environ.get("AUTO_TRAIN_HORIZONS", DEFAULT_HORIZON).split(",") if h.strip()]
+
+
+class TrainRequest(BaseModel):
+    horizons: list[str] | None = None
+    force_symbols: list[str] | None = None
+    trigger: str = "MANUAL"
 
 
 class PredictRequest(BaseModel):
@@ -92,6 +138,18 @@ class ModelBundle:
     return_residual_quantiles: tuple[float, float, float]
     return_residuals: np.ndarray
     promotion_ready: bool
+    meta_classifier: object | None
+    meta_feature_names: list[str]
+    meta_ready: bool
+    meta_examples: int
+    meta_oos_auc: float | None
+    meta_oos_accuracy: float | None
+    meta_oos_log_loss: float | None
+    meta_auc_ci_low: float | None
+    meta_coverage_accuracy: dict[str, float]
+    meta_accuracy_lift_ci_low: float | None
+    meta_selected_coverage: float | None
+    meta_version: str
     model_version: str
 
 
@@ -154,7 +212,7 @@ def _regressor() -> HistGradientBoostingRegressor:
     )
 
 
-def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]:
+def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray, np.ndarray]:
     min_train = max(200, len(frame) // (folds + 2))
     remaining = len(frame) - min_train
     block = max(1, remaining // folds)
@@ -162,6 +220,7 @@ def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple
     actual: list[int] = []
     predicted_returns: list[float] = []
     actual_returns: list[float] = []
+    context_rows: list[np.ndarray] = []
     for fold in range(folds):
         train_end = min_train + fold * block
         valid_start = min(len(frame) - 1, train_end + purge_rows)
@@ -178,10 +237,12 @@ def _walk_forward(frame: pd.DataFrame, purge_rows: int, folds: int = 5) -> tuple
         actual.extend(valid["target_class"].map(CLASS_MAP).astype(int).tolist())
         predicted_returns.extend(reg.predict(valid[FEATURE_COLUMNS]).tolist())
         actual_returns.extend(valid["target_return"].astype(float).tolist())
+        context_rows.append(valid[META_CONTEXT_COLUMNS].to_numpy(dtype=float))
     if not raw_probs:
         raise HTTPException(status_code=503, detail="Walk-forward validation produced no OOS rows")
     residuals = np.asarray(actual_returns, dtype=float) - np.asarray(predicted_returns, dtype=float)
-    return np.vstack(raw_probs), np.asarray(actual, dtype=int), int(sum(len(x) for x in raw_probs)), np.asarray(predicted_returns), residuals
+    context = np.vstack(context_rows)
+    return np.vstack(raw_probs), np.asarray(actual, dtype=int), int(sum(len(x) for x in raw_probs)), np.asarray(predicted_returns), residuals, context
 
 
 def _promotion_report(raw_probs: np.ndarray, actual: np.ndarray) -> dict:
@@ -288,7 +349,196 @@ def _calibration_quality(raw_probs: np.ndarray, actual: np.ndarray) -> dict | No
     return {"gap": gap, "brier": brier, "log_loss": cal_log_loss, "eval_examples": int(len(eval_y))}
 
 
-def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST) -> dict:
+def _probability_net_positive(prediction_index: int, expected_return: float, residuals: np.ndarray, round_trip_cost: float = ROUND_TRIP_COST) -> float:
+    """P(the trade clears round-trip cost) under the empirical OOS residual law.
+
+    Mirrors the /predict computation so meta-features are identical at training
+    and serving time. residuals is the global OOS return-residual sample.
+    """
+    shocked = expected_return + residuals
+    if prediction_index == 2:  # UP
+        return float(np.mean(shocked > round_trip_cost))
+    if prediction_index == 0:  # DOWN
+        return float(np.mean(-shocked > round_trip_cost))
+    return float(np.mean(np.abs(shocked) <= round_trip_cost))
+
+
+def _build_meta_features(raw_probs: np.ndarray, predicted_returns: np.ndarray, context: np.ndarray, residuals: np.ndarray) -> np.ndarray:
+    """Leakage-free meta-features derived only from per-fold OOS base outputs.
+
+    Every input here (raw_probs, predicted_returns) came from a base model
+    trained strictly on earlier rows, and context columns are point-in-time, so
+    the meta layer never sees the label it is trying to predict except through
+    the correctness target built separately.
+    """
+    n = raw_probs.shape[0]
+    eps = 1e-12
+    rows = np.empty((n, len(META_FEATURE_NAMES)), dtype=float)
+    log3 = float(np.log(3.0))
+    for i in range(n):
+        p = np.asarray(raw_probs[i], dtype=float)
+        ordered = np.sort(p)[::-1]
+        confidence = float(ordered[0])
+        margin = float(ordered[0] - ordered[1]) if p.size > 1 else confidence
+        entropy = float(-np.sum(p * np.log(p + eps)) / log3)
+        call = int(np.argmax(p))
+        expected_return = float(predicted_returns[i])
+        sign = 1.0 if call == 2 else (-1.0 if call == 0 else 0.0)
+        edge_over_cost = sign * expected_return - ROUND_TRIP_COST
+        pnp = _probability_net_positive(call, expected_return, residuals)
+        rows[i] = [
+            float(p[0]), float(p[1]), float(p[2]), confidence, margin, entropy,
+            1.0 if call == 1 else 0.0, expected_return, abs(expected_return),
+            edge_over_cost, pnp, float(context[i][0]), float(context[i][1]),
+        ]
+    return rows
+
+
+def _meta_classifier_pipeline():
+    # Simple, low-variance stacker: ~13 standardized features over a few hundred
+    # OOS rows. A boosting meta-model would overfit the stack and fabricate edge.
+    return make_pipeline(StandardScaler(), LogisticRegression(C=0.5, max_iter=1000, random_state=42))
+
+
+def _meta_walk_forward(meta_x: np.ndarray, correct: np.ndarray, folds: int = META_FOLDS, purge_rows: int = META_PURGE_ROWS) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Nested purged walk-forward producing honest OOS meta predictions.
+
+    The meta correctness-classifier is trained only on earlier OOS rows and
+    scores a strictly-later, purge-separated block, so it never evaluates on rows
+    it fit. Returns (oos_meta_prob, oos_correct, oos_row_index) over the scored
+    subset, or None when there is not enough history or only one label class.
+    """
+    n = int(len(correct))
+    if n < MIN_META_EXAMPLES:
+        return None
+    min_train = max(120, n // (folds + 2))
+    remaining = n - min_train
+    block = max(1, remaining // folds)
+    prob_parts: list[np.ndarray] = []
+    idx_parts: list[np.ndarray] = []
+    for fold in range(folds):
+        train_end = min_train + fold * block
+        valid_start = min(n - 1, train_end + purge_rows)
+        valid_end = min(n, valid_start + block)
+        if valid_end <= valid_start:
+            continue
+        train_y = correct[:train_end]
+        if len(np.unique(train_y)) < 2:
+            continue
+        clf = _meta_classifier_pipeline()
+        clf.fit(meta_x[:train_end], train_y)
+        proba = clf.predict_proba(meta_x[valid_start:valid_end])
+        classes = list(clf.classes_)
+        col = classes.index(1) if 1 in classes else classes[-1]
+        prob_parts.append(proba[:, col])
+        idx_parts.append(np.arange(valid_start, valid_end))
+    if not prob_parts:
+        return None
+    oos_prob = np.concatenate(prob_parts)
+    oos_idx = np.concatenate(idx_parts)
+    return oos_prob, correct[oos_idx], oos_idx
+
+
+def _selective_lift_samples(meta_prob: np.ndarray, correct: np.ndarray, coverage: float) -> tuple[float, float]:
+    k = max(1, int(round(len(correct) * coverage)))
+    order = np.argsort(meta_prob)[::-1][:k]
+    selected_accuracy = float(np.mean(correct[order]))
+    unconditional = float(np.mean(correct))
+    return selected_accuracy, selected_accuracy - unconditional
+
+
+def _meta_promotion(oos_prob: np.ndarray, oos_correct: np.ndarray) -> dict:
+    """Bootstrap-CI promotion for the selective-prediction meta layer.
+
+    meta_ready requires BOTH: (a) the correctness classifier beats a coin flip
+    on AUC at its CI low, and (b) at some coverage >= MIN_META_SELECTED_COVERAGE,
+    base-call accuracy on the meta-selected subset beats unconditional base
+    accuracy by >= MIN_META_ACCURACY_LIFT at the CI low. The chosen coverage is
+    the largest level that clears (b), so the gate acts on as many names as it
+    can while still provably improving precision.
+    """
+    examples = int(len(oos_correct))
+    unconditional = float(np.mean(oos_correct)) if examples else 0.0
+    try:
+        auc = float(roc_auc_score(oos_correct, oos_prob)) if len(np.unique(oos_correct)) > 1 else 0.5
+    except ValueError:
+        auc = 0.5
+    accuracy = float(np.mean((oos_prob >= 0.5).astype(int) == oos_correct)) if examples else 0.0
+    try:
+        mlog = float(log_loss(oos_correct, np.clip(oos_prob, 1e-6, 1 - 1e-6), labels=[0, 1]))
+    except ValueError:
+        mlog = float("nan")
+    coverage_accuracy = {f"{int(c * 100)}": _selective_lift_samples(oos_prob, oos_correct, c)[0] for c in META_COVERAGE_LEVELS}
+
+    alpha = 1.0 - META_CONFIDENCE
+    rng = np.random.default_rng(42)
+    auc_samples: list[float] = []
+    lift_samples: dict[float, list[float]] = {c: [] for c in META_COVERAGE_LEVELS}
+    if examples:
+        for _ in range(META_BOOTSTRAP_ITERATIONS):
+            idx = rng.integers(0, examples, examples)
+            c_b = oos_correct[idx]
+            p_b = oos_prob[idx]
+            if len(np.unique(c_b)) > 1:
+                try:
+                    auc_samples.append(float(roc_auc_score(c_b, p_b)))
+                except ValueError:
+                    pass
+            for cov in META_COVERAGE_LEVELS:
+                lift_samples[cov].append(_selective_lift_samples(p_b, c_b, cov)[1])
+
+    def _q(samples: list[float], quantile: float) -> float:
+        arr = np.asarray(samples, dtype=float)
+        return float(np.quantile(arr, quantile)) if arr.size else float("nan")
+
+    auc_ci_low = _q(auc_samples, alpha / 2)
+    lift_ci_low = {cov: _q(lift_samples[cov], alpha / 2) for cov in META_COVERAGE_LEVELS}
+
+    selected_coverage: float | None = None
+    selected_lift_ci_low: float | None = None
+    for cov in sorted(META_COVERAGE_LEVELS, reverse=True):
+        if cov >= MIN_META_SELECTED_COVERAGE and not np.isnan(lift_ci_low[cov]) and lift_ci_low[cov] >= MIN_META_ACCURACY_LIFT:
+            selected_coverage = cov
+            selected_lift_ci_low = lift_ci_low[cov]
+            break
+
+    checks = {
+        "minimum_examples": examples >= MIN_META_EXAMPLES,
+        "auc_beats_chance": not np.isnan(auc_ci_low) and auc_ci_low >= MIN_META_AUC,
+        "selective_lift": selected_coverage is not None,
+    }
+    return {
+        "examples": examples,
+        "unconditional_accuracy": unconditional,
+        "auc": auc,
+        "auc_ci_low": auc_ci_low,
+        "accuracy": accuracy,
+        "log_loss": mlog,
+        "coverage_accuracy": coverage_accuracy,
+        "coverage_lift_ci_low": {f"{int(c * 100)}": lift_ci_low[c] for c in META_COVERAGE_LEVELS},
+        "selected_coverage": selected_coverage,
+        "selected_accuracy": coverage_accuracy[f"{int(selected_coverage * 100)}"] if selected_coverage is not None else None,
+        "accuracy_lift_ci_low": selected_lift_ci_low,
+        "checks": checks,
+        "meta_ready": examples >= MIN_META_EXAMPLES and bool(checks["auc_beats_chance"]) and bool(checks["selective_lift"]),
+    }
+
+
+def _fit_meta(meta_x: np.ndarray, correct: np.ndarray) -> tuple[object | None, dict]:
+    """Evaluate the meta layer OOS, then fit a final classifier on all OOS rows."""
+    wf = _meta_walk_forward(meta_x, correct)
+    if wf is None:
+        return None, {"meta_ready": False, "reason": "insufficient_oos_history_or_single_class", "examples": int(len(correct))}
+    oos_prob, oos_correct, _ = wf
+    report = _meta_promotion(oos_prob, oos_correct)
+    classifier = None
+    if len(np.unique(correct)) >= 2:
+        classifier = _meta_classifier_pipeline()
+        classifier.fit(meta_x, correct)
+    return classifier, report
+
+
+def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST, meta_probability: float | None = None, meta_ready: bool = False) -> dict:
     ordered = np.sort(probabilities)[::-1]
     confidence = float(ordered[0])
     margin = float(ordered[0] - ordered[1]) if len(ordered) > 1 else confidence
@@ -309,13 +559,29 @@ def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: fl
         reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
     if probability_net_positive < MIN_NET_EDGE_PROBABILITY:
         reasons.append("PROBABILITY_NET_EDGE_TOO_LOW")
+    # Meta gate only tightens, and only when a validated meta layer exists. A
+    # ready meta layer can veto an otherwise-actionable directional call it
+    # believes is likely wrong; an absent/unpromoted meta layer imposes no extra
+    # constraint, so it can never regress a base model that earned promotion.
+    if meta_ready and (meta_probability is None or meta_probability < MIN_META_CONFIDENCE):
+        reasons.append("META_CONFIDENCE_TOO_LOW")
     if reasons:
         return {"status": "WATCH_LOW_EDGE", "reasons": reasons, "probability_margin": margin}
     return {"status": "ACTIONABLE_LONG" if prediction == "UP" else "ACTIONABLE_SHORT", "reasons": ["CONFIDENCE_MARGIN_AND_NET_EDGE_CLEAR"], "probability_margin": margin}
 
 
+def _none_if_nan(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if np.isnan(f) else f
+
+
 def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
-    raw_probs, actual, oos_examples, _, residuals = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
+    raw_probs, actual, oos_examples, predicted_returns, residuals, context = _walk_forward(frame, SUPPORTED_HORIZONS[horizon])
     promotion = _promotion_report(raw_probs, actual)
     calibrators: list[IsotonicRegression | None] = []
     for cls_idx in range(3):
@@ -332,6 +598,15 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     calibration_verified = cal_quality is not None and cal_quality["gap"] <= MAX_PROMOTION_CALIBRATION_GAP
     promotion_ready = promotion["promotion_ready"] and calibration_verified
 
+    # Meta layer: predict whether the base call (argmax of raw OOS probs) is
+    # correct. Trained/evaluated with its own nested purged walk-forward so it
+    # can only earn promotion via honest selective-prediction lift.
+    base_pred = np.argmax(raw_probs, axis=1)
+    meta_correct = (base_pred == actual).astype(int)
+    meta_x = _build_meta_features(raw_probs, predicted_returns, context, residuals)
+    meta_classifier, meta_report = _fit_meta(meta_x, meta_correct)
+    meta_ready = bool(meta_report.get("meta_ready"))
+
     clf = _classifier()
     clf.fit(frame[FEATURE_COLUMNS], frame["target_class"].map(CLASS_MAP))
     reg = _regressor()
@@ -340,7 +615,9 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     signature = hashlib.sha256(
         (symbol.upper() + "|" + horizon + "|" + FEATURE_SET_VERSION + "|" + training_end.isoformat()
          + "|histgb:lr=.05,max_iter=250,max_leaf_nodes=15,l2=1,seed=42|cal="
-         + ("isotonic" if calibration_verified else "raw") + "|features=" + ",".join(FEATURE_COLUMNS)).encode()
+         + ("isotonic" if calibration_verified else "raw")
+         + "|" + META_VERSION + "=" + ("ready" if meta_ready else "dormant")
+         + "|features=" + ",".join(FEATURE_COLUMNS)).encode()
     ).hexdigest()[:12]
     return ModelBundle(
         horizon=horizon,
@@ -361,6 +638,18 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
         return_residual_quantiles=tuple(float(value) for value in np.quantile(residuals, [0.1, 0.5, 0.9])),
         return_residuals=residuals,
         promotion_ready=promotion_ready,
+        meta_classifier=meta_classifier,
+        meta_feature_names=list(META_FEATURE_NAMES),
+        meta_ready=meta_ready,
+        meta_examples=int(meta_report.get("examples", 0)),
+        meta_oos_auc=_none_if_nan(meta_report.get("auc")),
+        meta_oos_accuracy=_none_if_nan(meta_report.get("accuracy")),
+        meta_oos_log_loss=_none_if_nan(meta_report.get("log_loss")),
+        meta_auc_ci_low=_none_if_nan(meta_report.get("auc_ci_low")),
+        meta_coverage_accuracy=dict(meta_report.get("coverage_accuracy", {})),
+        meta_accuracy_lift_ci_low=_none_if_nan(meta_report.get("accuracy_lift_ci_low")),
+        meta_selected_coverage=meta_report.get("selected_coverage"),
+        meta_version=META_VERSION,
         model_version=f"{FEATURE_SET_VERSION}-{horizon}-histgb-{signature}",
     )
 
@@ -436,6 +725,16 @@ def _calibrate(bundle: ModelBundle, raw: np.ndarray) -> np.ndarray:
     return values
 
 
+def _meta_probability(bundle: ModelBundle, meta_x: np.ndarray) -> float | None:
+    """P(the base call is correct) from the meta layer, or None if dormant."""
+    if bundle.meta_classifier is None:
+        return None
+    proba = bundle.meta_classifier.predict_proba(meta_x)[0]
+    classes = list(bundle.meta_classifier.classes_)
+    col = classes.index(1) if 1 in classes else classes[-1]
+    return float(proba[col])
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS), "artifact_directory": str(MODEL_ARTIFACT_DIR), "training_inference_separated": True}
@@ -478,10 +777,21 @@ def predict(request: PredictRequest):
         probability_net_positive = float(np.mean(-(expected_return + bundle.return_residuals) > ROUND_TRIP_COST))
     else:
         probability_net_positive = float(np.mean(np.abs(expected_return + bundle.return_residuals) <= ROUND_TRIP_COST))
-    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready, probability_net_positive)
+    meta_context = latest[META_CONTEXT_COLUMNS].to_numpy(dtype=float)
+    meta_x = _build_meta_features(np.asarray(raw_probs).reshape(1, -1), np.array([expected_return]), meta_context, bundle.return_residuals)
+    meta_probability = _meta_probability(bundle, meta_x)
+    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready, probability_net_positive, meta_probability=meta_probability, meta_ready=bundle.meta_ready)
+
+    # Freshness is reported independently of the action gate: a model can be
+    # current while data is stale, or data live while the model lags the last bar.
+    latest_data_ts = pd.Timestamp(raw.index.max()).tz_convert("UTC")
+    data_age_days = (pd.Timestamp.now(tz="UTC") - latest_data_ts).total_seconds() / 86400.0
+    model_status = "MODEL_STALE" if latest_data_ts > bundle.training_end else "READY"
+    data_status = "DATA_STALE" if data_age_days > 3 else "LIVE"
 
     return {
         "ok": True, "symbol": symbol, "timestamp": latest_timestamp.isoformat(), "horizon": horizon,
+        "model_status": model_status, "data_status": data_status,
         "prediction": prediction,
         "probabilities": {"DOWN": float(probs[0]), "FLAT": float(probs[1]), "UP": float(probs[2])},
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},
@@ -523,11 +833,124 @@ def predict(request: PredictRequest):
             "eval_examples": bundle.calibration_eval_examples,
             "max_gap_threshold": MAX_PROMOTION_CALIBRATION_GAP,
         },
+        "meta_probability": meta_probability,
+        "meta": {
+            "version": bundle.meta_version,
+            "ready": bundle.meta_ready,
+            "probability": meta_probability,
+            "min_confidence": MIN_META_CONFIDENCE,
+            "examples": bundle.meta_examples,
+            "oos_auc": bundle.meta_oos_auc,
+            "oos_auc_ci_low": bundle.meta_auc_ci_low,
+            "oos_accuracy": bundle.meta_oos_accuracy,
+            "oos_log_loss": bundle.meta_oos_log_loss,
+            "selected_coverage": bundle.meta_selected_coverage,
+            "accuracy_lift_ci_low": bundle.meta_accuracy_lift_ci_low,
+            "coverage_accuracy": bundle.meta_coverage_accuracy,
+            "features": {name: float(meta_x[0][i]) for i, name in enumerate(bundle.meta_feature_names)},
+        },
         "model_version": bundle.model_version, "feature_set_version": FEATURE_SET_VERSION,
         "training_cutoff": bundle.training_end.isoformat(),
         "validation_oos_examples": bundle.validation_examples, "calibration_examples": bundle.calibration_examples,
         "features": {column: float(latest.iloc[0][column]) for column in FEATURE_COLUMNS},
     }
+
+
+@app.get("/training/coverage")
+def training_coverage(horizons: str | None = None):
+    import auto_train
+
+    horizon_list = [h.strip().lower() for h in horizons.split(",")] if horizons else None
+    try:
+        return auto_train.coverage_report(horizon_list)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"COVERAGE_FAILED: {error}") from error
+
+
+@app.post("/train/auto")
+def train_auto(request: TrainRequest):
+    import auto_train
+
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={"code": "TRAINING_IN_PROGRESS", "message": "Another training run is already active."})
+    try:
+        return auto_train.run_auto_training(
+            trigger=request.trigger if request.trigger in {"AUTO_NEW_DATA", "SCHEDULED", "MANUAL"} else "MANUAL",
+            horizons=request.horizons,
+            force_symbols=request.force_symbols,
+        )
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"AUTO_TRAINING_FAILED: {error}") from error
+    finally:
+        _train_lock.release()
+
+
+@app.post("/train/stale")
+def train_stale(request: TrainRequest):
+    import auto_train
+
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={"code": "TRAINING_IN_PROGRESS", "message": "Another training run is already active."})
+    try:
+        return auto_train.retrain_all_stale(request.horizons)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"AUTO_TRAINING_FAILED: {error}") from error
+    finally:
+        _train_lock.release()
+
+
+@app.post("/train/{symbol}")
+def train_symbol(symbol: str, horizon: str = DEFAULT_HORIZON):
+    import auto_train
+
+    clean = symbol.strip().upper()
+    if not clean or len(clean) > 32:
+        raise HTTPException(status_code=400, detail="INVALID_SYMBOL")
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail={"code": "TRAINING_IN_PROGRESS", "message": "Another training run is already active."})
+    try:
+        return auto_train.train_single_symbol(clean, horizon, trigger="MANUAL")
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"TRAINING_FAILED: {error}") from error
+    finally:
+        _train_lock.release()
+
+
+def _scheduler_loop() -> None:
+    """Background cadence, decoupled from prediction polls. Never overlaps a
+    manual/auto HTTP run because it shares the same training lock."""
+    def _run(reason: str) -> None:
+        if not _train_lock.acquire(blocking=False):
+            print(f"[auto-train] skipped {reason}: another run active", flush=True)
+            return
+        try:
+            import auto_train
+
+            report = auto_train.run_auto_training(trigger="SCHEDULED", horizons=AUTO_TRAIN_HORIZONS)
+            print(f"[auto-train] {reason} run {report['training_run_id']}: {report['summary']}", flush=True)
+        except Exception as error:
+            print(f"[auto-train] {reason} run failed: {error}", flush=True)
+        finally:
+            _train_lock.release()
+
+    interval_seconds = AUTO_TRAIN_INTERVAL_HOURS * 3600.0
+    if AUTO_TRAIN_ON_STARTUP:
+        _run("startup")
+    while True:
+        time.sleep(interval_seconds)
+        _run("scheduled")
+
+
+if AUTO_TRAIN_ENABLED:
+    Thread(target=_scheduler_loop, name="auto-train-scheduler", daemon=True).start()
 
 
 if __name__ == "__main__":

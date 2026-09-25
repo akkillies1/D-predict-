@@ -6,6 +6,7 @@ import pg from "pg";
 import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
 import { createPaperRouter } from "./paperRoutes.js";
+import { attachLiveHub } from "./liveHub.js";
 import { rankMarketCandidates } from "./marketScanner.js";
 
 dotenv.config();
@@ -150,12 +151,74 @@ app.get("/api/predictions/live", async (req, res) => {
   const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(process.env.ML_INFERENCE_TIMEOUT_MS ?? 15000)));
   try {
     const response = await fetch(`${base}/predict`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol, horizon }), signal: controller.signal });
-    const body = await response.json().catch(() => ({ ok: false, error: "ML_INVALID_RESPONSE" }));
-    return res.status(200).json({ ok: response.ok, ...body });
+    const body = await response.json().catch(() => ({ detail: "ML_INVALID_RESPONSE" }));
+    // Propagate the upstream status instead of masking ML failures behind HTTP 200, and
+    // guarantee an honest `ok` so the client never renders a broken body as a prediction.
+    if (!response.ok) return res.status(response.status).json({ ...body, ok: false, error: body?.error ?? "ML_UPSTREAM_ERROR" });
+    return res.json({ ...body, ok: true });
   } catch (error) {
-    return res.status(200).json({ ok: false, error: "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "inference_unavailable" });
+    return res.status(503).json({ ok: false, error: "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "inference_unavailable" });
   } finally {
     clearTimeout(timeout);
+  }
+});
+
+async function mlFetch(path: string, init: RequestInit = {}, timeoutMs = 15000) {
+  const base = (process.env.ML_INFERENCE_URL ?? "http://ml:4300").replace(/\/$/, "");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  try {
+    const response = await fetch(`${base}${path}`, { ...init, signal: controller.signal });
+    const body = await response.json().catch(() => ({ ok: false, error: "ML_INVALID_RESPONSE" }));
+    return { status: response.status, body };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+app.get("/api/training/coverage", async (req, res) => {
+  const horizons = String(req.query.horizons ?? "").trim();
+  const query = horizons ? `?horizons=${encodeURIComponent(horizons)}` : "";
+  try {
+    const { body } = await mlFetch(`/training/coverage${query}`);
+    return res.status(200).json(body);
+  } catch (error) {
+    return res.status(200).json({ ok: false, error: "ML_COVERAGE_UNAVAILABLE", message: error instanceof Error ? error.message : "coverage_unavailable" });
+  }
+});
+
+// Training runs are long (fitting the whole active universe); allow several minutes.
+const TRAIN_TIMEOUT_MS = Math.max(60000, Number(process.env.ML_TRAIN_TIMEOUT_MS ?? 600000));
+
+app.post("/api/training/run", async (req, res) => {
+  const trigger = ["AUTO_NEW_DATA", "SCHEDULED", "MANUAL"].includes(String(req.body?.trigger)) ? req.body.trigger : "MANUAL";
+  const payload = { trigger, horizons: req.body?.horizons ?? null, force_symbols: req.body?.forceSymbols ?? null };
+  try {
+    const { body } = await mlFetch("/train/auto", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }, TRAIN_TIMEOUT_MS);
+    return res.status(200).json(body);
+  } catch (error) {
+    return res.status(200).json({ ok: false, error: "ML_TRAINING_UNAVAILABLE", message: error instanceof Error ? error.message : "training_unavailable" });
+  }
+});
+
+app.post("/api/training/retrain-stale", async (req, res) => {
+  try {
+    const { body } = await mlFetch("/train/stale", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ horizons: req.body?.horizons ?? null }) }, TRAIN_TIMEOUT_MS);
+    return res.status(200).json(body);
+  } catch (error) {
+    return res.status(200).json({ ok: false, error: "ML_TRAINING_UNAVAILABLE", message: error instanceof Error ? error.message : "training_unavailable" });
+  }
+});
+
+app.post("/api/training/:symbol/retrain", async (req, res) => {
+  const symbol = String(req.params.symbol ?? "").trim().toUpperCase();
+  const horizon = String(req.query.horizon ?? req.body?.horizon ?? "1d").trim().toLowerCase();
+  if (!symbol || symbol.length > 32) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  try {
+    const { body } = await mlFetch(`/train/${encodeURIComponent(symbol)}?horizon=${encodeURIComponent(horizon)}`, { method: "POST" }, TRAIN_TIMEOUT_MS);
+    return res.status(200).json(body);
+  } catch (error) {
+    return res.status(200).json({ ok: false, error: "ML_TRAINING_UNAVAILABLE", message: error instanceof Error ? error.message : "training_unavailable" });
   }
 });
 
@@ -365,6 +428,7 @@ app.post("/api/ipo/analyze", async (req, res) => {
 });
 
 const server = app.listen(port, "0.0.0.0", () => console.log(`D-predict backend listening on ${port}`));
+attachLiveHub(server, pool);
 const shutdown = async () => { server.close(); await pool?.end(); process.exit(0); };
 process.on("SIGINT", shutdown); process.on("SIGTERM", shutdown);
 export { app };

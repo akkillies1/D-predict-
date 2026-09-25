@@ -1170,6 +1170,9 @@ export default function DecisionDashboard() {
                 </div>
               ))}
             </div>
+            <p className="mt-3 text-[10px] leading-relaxed text-[#5c736a]">
+              Accuracy is measured only for the horizons the engine records to the ledger (currently 1d). The 3d and 5d selectors drive live forward inference for display, but their outcomes are not yet tracked here, so no multi-horizon accuracy is implied.
+            </p>
             </>
           ) : (
             <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">

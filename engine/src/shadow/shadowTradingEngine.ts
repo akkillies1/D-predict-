@@ -14,6 +14,16 @@ const MAX_QUOTE_AGE_MS = Math.max(15_000, Number(process.env.SHADOW_MAX_QUOTE_AG
 const LOTS = Math.max(1, Math.floor(Number(process.env.SHADOW_LOTS ?? 1)));
 const NEW_DECISION_WINDOW_MS = Math.max(30_000, Number(process.env.SHADOW_DECISION_WINDOW_SECONDS ?? 180) * 1000);
 
+// Approximate discount-broker option costs: flat fee per executed order plus an
+// ad-valorem slice of premium turnover covering STT/exchange/SEBI/GST/stamp.
+const FEE_FIXED_PER_ORDER = Math.max(0, Number(process.env.SHADOW_FEE_FIXED_PER_ORDER ?? 20));
+const FEE_BPS_PER_SIDE = Math.max(0, Number(process.env.SHADOW_FEE_BPS_PER_SIDE ?? 15));
+const MAX_SPOT_AGE_MS = 72 * 3_600_000;
+
+function feesForSide(price: number, quantity: number): number {
+  return Math.round((FEE_FIXED_PER_ORDER + (price * quantity * FEE_BPS_PER_SIDE) / 10_000) * 100) / 100;
+}
+
 type Quote = { timestamp: Date; ltp: number | null; bid: number | null; ask: number | null };
 
 type Construction = {
@@ -36,6 +46,22 @@ type Construction = {
 function buyFill(quote: Quote): number | null { return quote.ask ?? quote.ltp ?? (quote.bid !== null ? quote.bid : null); }
 function sellMark(quote: Quote): number | null { return quote.bid ?? quote.ltp ?? (quote.ask !== null ? quote.ask : null); }
 function quoteIsFresh(quote: Quote, now: Date): boolean { return now.getTime() - quote.timestamp.getTime() <= MAX_QUOTE_AGE_MS; }
+
+// NSE index options expire at 15:30 IST (10:00 UTC) on the expiry date.
+function expiryCutoffUtc(expiryDate: unknown): number {
+  const d = expiryDate instanceof Date ? expiryDate : new Date(String(expiryDate));
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 10, 0, 0);
+}
+
+async function latestUnderlyingSpot(instrumentId: string, now: Date): Promise<{ spot: number; timestamp: Date } | null> {
+  const result = await pool.query(`select market_timestamp, close from price_bars where instrument_id = $1 and timeframe = '1m' order by market_timestamp desc limit 1`, [instrumentId]);
+  if (!result.rows.length) return null;
+  const row = result.rows[0];
+  const timestamp = new Date(row.market_timestamp);
+  if (now.getTime() - timestamp.getTime() > MAX_SPOT_AGE_MS) return null;
+  const close = Number(row.close);
+  return Number.isFinite(close) && close > 0 ? { spot: close, timestamp } : null;
+}
 
 async function latestQuote(contractId: string): Promise<Quote | null> {
   const result = await pool.query(`select market_timestamp as timestamp, ltp, bid, ask from option_snapshots where contract_id = $1 order by market_timestamp desc limit 1`, [contractId]);
@@ -76,53 +102,70 @@ async function openShadowTrade(trade: Construction, now: Date): Promise<void> {
   const entryPrice = buyFill(quote);
   if (entryPrice === null || entryPrice <= 0) { console.log(`[shadow] ${trade.symbol} construction=${trade.id}: invalid entry quote; waiting`); return; }
   const quantity = trade.lotSize * LOTS;
+  const entryFees = feesForSide(entryPrice, quantity);
   await pool.query(
     `insert into shadow_trades (
        trade_construction_id, signal_decision_id, contract_id, status, direction,
        quantity, lot_size, entry_price, entry_bid, entry_ask, entry_ltp,
        entry_timestamp, entry_quote_timestamp, stop_loss, target, expiry_date,
-       current_price, current_quote_timestamp, unrealized_pnl, entry_metadata
-     ) values ($1,$2,$3,'OPEN',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$7,$12,0,$16::jsonb)
+       current_price, current_quote_timestamp, unrealized_pnl, entry_fees, entry_metadata
+     ) values ($1,$2,$3,'OPEN',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$7,$12,0,$16,$17::jsonb)
      on conflict (trade_construction_id) do nothing`,
     [trade.id, trade.signalId, trade.contractId, trade.direction, quantity, trade.lotSize, entryPrice,
      quote.bid, quote.ask, quote.ltp, now, quote.timestamp, trade.stopLoss, trade.target, trade.expiryDate,
+     entryFees,
      JSON.stringify({ mode: "SHADOW", fillModel: "ASK_ON_ENTRY_BID_ON_EXIT", lots: LOTS, symbol: trade.symbol,
        strike: trade.strike, optionType: trade.optionType, signalTimestamp: trade.signalTimestamp.toISOString(),
-       constructionEntryLow: trade.entryLow, constructionEntryHigh: trade.entryHigh })]
+       constructionEntryLow: trade.entryLow, constructionEntryHigh: trade.entryHigh,
+       feeModel: { fixedPerOrder: FEE_FIXED_PER_ORDER, bpsPerSide: FEE_BPS_PER_SIDE } })]
   );
-  console.log(`[shadow] OPEN ${trade.symbol} ${trade.optionType} ${trade.strike} qty=${quantity} entry=${entryPrice.toFixed(2)} SL=${trade.stopLoss.toFixed(2)} target=${trade.target.toFixed(2)}`);
+  console.log(`[shadow] OPEN ${trade.symbol} ${trade.optionType} ${trade.strike} qty=${quantity} entry=${entryPrice.toFixed(2)} fees=${entryFees.toFixed(2)} SL=${trade.stopLoss.toFixed(2)} target=${trade.target.toFixed(2)}`);
 }
 
 async function updateOpenTrades(now: Date): Promise<void> {
-  const result = await pool.query(`select st.id, st.contract_id as "contractId", st.quantity, st.entry_price as "entryPrice", st.stop_loss as "stopLoss", st.target, st.expiry_date as "expiryDate" from shadow_trades st where st.status = 'OPEN' order by st.entry_timestamp asc`);
+  const result = await pool.query(`select st.id, st.contract_id as "contractId", st.quantity, st.entry_price as "entryPrice", st.stop_loss as "stopLoss", st.target, st.expiry_date as "expiryDate", oc.strike, oc.option_type as "optionType", oc.instrument_id as "instrumentId" from shadow_trades st join option_contracts oc on oc.contract_id = st.contract_id where st.status = 'OPEN' order by st.entry_timestamp asc`);
   for (const row of result.rows) {
     const quote = await latestQuote(row.contractId);
     const quantity = Number(row.quantity); const entryPrice = Number(row.entryPrice); const stopLoss = Number(row.stopLoss); const target = Number(row.target);
-    const expiryReached = now.toISOString().slice(0, 10) >= String(row.expiryDate);
+    const expiryReached = now.getTime() >= expiryCutoffUtc(row.expiryDate);
 
-    if (!quote) {
-      if (expiryReached) console.log(`[shadow] id=${row.id}: expiry reached but no option quote exists; cannot realize expiry P&L`);
+    const mark = quote ? sellMark(quote) : null;
+    const usableMark = mark !== null && mark > 0 ? mark : null;
+    const fresh = quote !== null && quoteIsFresh(quote, now);
+
+    if (expiryReached && (!fresh || usableMark === null)) {
+      // No executable quote at expiry: settle at intrinsic value from the underlying,
+      // like the exchange does, instead of leaving the position open forever.
+      const spotInfo = await latestUnderlyingSpot(row.instrumentId, now);
+      if (!spotInfo) { console.log(`[shadow] id=${row.id}: expiry reached but no fresh quote and no underlying spot; cannot settle`); continue; }
+      const strike = Number(row.strike);
+      const intrinsic = row.optionType === "CE" ? Math.max(0, spotInfo.spot - strike) : Math.max(0, strike - spotInfo.spot);
+      const pnl = (intrinsic - entryPrice) * quantity;
+      const exitFees = feesForSide(intrinsic, quantity);
+      await pool.query(`update shadow_trades set status='CLOSED', current_price=$2, current_quote_timestamp=$3, unrealized_pnl=0, realized_pnl=$4, exit_price=$2, exit_timestamp=$3, exit_reason='EXPIRY_SETTLED', exit_fees=$6, exit_metadata=$5::jsonb, updated_at=now() where id=$1 and status='OPEN'`,
+        [row.id, intrinsic, spotInfo.timestamp, pnl, JSON.stringify({ fillModel: "INTRINSIC_ON_EXPIRY", spot: spotInfo.spot, spotTimestamp: spotInfo.timestamp.toISOString(), strike, optionType: row.optionType }), exitFees]);
+      console.log(`[shadow] SETTLE id=${row.id} reason=EXPIRY_SETTLED intrinsic=${intrinsic.toFixed(2)} spot=${spotInfo.spot.toFixed(2)} grossPnl=${pnl.toFixed(2)} exitFees=${exitFees.toFixed(2)}`);
       continue;
     }
 
-    const mark = sellMark(quote);
-    if (mark === null || mark <= 0) {
-      if (expiryReached) console.log(`[shadow] id=${row.id}: expiry reached but option quote has no executable mark; cannot realize expiry P&L`);
+    if (usableMark === null) {
+      console.log(`[shadow] id=${row.id}: no executable option quote; keeping trade open without fabricating an exit or P&L update`);
       continue;
     }
 
-    const fresh = quoteIsFresh(quote, now);
-    const pnl = (mark - entryPrice) * quantity;
+    const pnl = (usableMark - entryPrice) * quantity;
     let exitReason: string | null = null;
-    if (mark <= stopLoss && fresh) exitReason = "PRICE_STOP";
-    else if (mark >= target && fresh) exitReason = "PROFIT_TARGET";
+    if (usableMark <= stopLoss && fresh) exitReason = "PRICE_STOP";
+    else if (usableMark >= target && fresh) exitReason = "PROFIT_TARGET";
     else if (expiryReached && fresh) exitReason = "EXPIRY";
 
     if (exitReason) {
-      await pool.query(`update shadow_trades set status='CLOSED', current_price=$2, current_quote_timestamp=$3, unrealized_pnl=0, realized_pnl=$4, exit_price=$2, exit_timestamp=$3, exit_reason=$5, exit_metadata=$6::jsonb, updated_at=now() where id=$1 and status='OPEN'`, [row.id, mark, quote.timestamp, pnl, exitReason, JSON.stringify({ fillModel: "BID_ON_EXIT" })]);
-      console.log(`[shadow] CLOSE id=${row.id} reason=${exitReason} exit=${mark.toFixed(2)} pnl=${pnl.toFixed(2)}`);
+      const exitFees = feesForSide(usableMark, quantity);
+      const quoteTs = quote!.timestamp;
+      await pool.query(`update shadow_trades set status='CLOSED', current_price=$2, current_quote_timestamp=$3, unrealized_pnl=0, realized_pnl=$4, exit_price=$2, exit_timestamp=$3, exit_reason=$5, exit_fees=$7, exit_metadata=$6::jsonb, updated_at=now() where id=$1 and status='OPEN'`, [row.id, usableMark, quoteTs, pnl, exitReason, JSON.stringify({ fillModel: "BID_ON_EXIT" }), exitFees]);
+      console.log(`[shadow] CLOSE id=${row.id} reason=${exitReason} exit=${usableMark.toFixed(2)} grossPnl=${pnl.toFixed(2)} exitFees=${exitFees.toFixed(2)}`);
     } else if (fresh) {
-      await pool.query(`update shadow_trades set current_price=$2, current_quote_timestamp=$3, unrealized_pnl=$4, updated_at=now() where id=$1 and status='OPEN'`, [row.id, mark, quote.timestamp, pnl]);
+      await pool.query(`update shadow_trades set current_price=$2, current_quote_timestamp=$3, unrealized_pnl=$4, updated_at=now() where id=$1 and status='OPEN'`, [row.id, usableMark, quote!.timestamp, pnl]);
     } else {
       console.log(`[shadow] id=${row.id}: quote is stale; keeping trade open without fabricating an exit or P&L update`);
     }
@@ -130,7 +173,7 @@ async function updateOpenTrades(now: Date): Promise<void> {
 }
 
 async function snapshotEquity(now: Date): Promise<void> {
-  const result = await pool.query(`select coalesce(sum(case when status='CLOSED' then realized_pnl else 0 end),0) as realized, coalesce(sum(case when status='OPEN' then unrealized_pnl else 0 end),0) as unrealized, count(*) filter (where status='OPEN')::int as open_trades, count(*) filter (where status='CLOSED')::int as closed_trades from shadow_trades`);
+  const result = await pool.query(`select coalesce(sum(case when status='CLOSED' then realized_pnl - coalesce(entry_fees,0) - coalesce(exit_fees,0) else 0 end),0) as realized, coalesce(sum(case when status='OPEN' then unrealized_pnl - coalesce(entry_fees,0) else 0 end),0) as unrealized, count(*) filter (where status='OPEN')::int as open_trades, count(*) filter (where status='CLOSED')::int as closed_trades from shadow_trades`);
   const row = result.rows[0]; const realized = Number(row.realized); const unrealized = Number(row.unrealized); const equity = STARTING_CAPITAL + realized + unrealized;
   const peakResult = await pool.query(`select coalesce(max(peak_equity), $1) as peak from shadow_equity_snapshots`, [STARTING_CAPITAL]);
   const peak = Math.max(STARTING_CAPITAL, Number(peakResult.rows[0].peak), equity); const drawdown = equity - peak;

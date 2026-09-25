@@ -35,6 +35,13 @@ def train_one(symbol: str, horizon: str) -> dict:
         "calibration_verified": bundle.calibration_verified,
         "calibration_gap": bundle.calibration_gap,
         "calibration_brier": bundle.calibration_brier,
+        "meta_ready": bundle.meta_ready,
+        "meta_examples": bundle.meta_examples,
+        "meta_oos_auc": bundle.meta_oos_auc,
+        "meta_auc_ci_low": bundle.meta_auc_ci_low,
+        "meta_selected_coverage": bundle.meta_selected_coverage,
+        "meta_accuracy_lift_ci_low": bundle.meta_accuracy_lift_ci_low,
+        "meta_coverage_accuracy": bundle.meta_coverage_accuracy,
     }
     print(json.dumps(report, indent=2))
     return report

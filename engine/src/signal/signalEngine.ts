@@ -1,6 +1,6 @@
 import { pool, getActiveSymbols, getInstrumentId } from "../db.js";
 import { config } from "../config.js";
-import { predictWithValidatedModel } from "../mlClient.js";
+import { predictWithValidatedModel, fetchModelStates } from "../mlClient.js";
 
 type Direction = "BULLISH" | "BEARISH" | "NEUTRAL";
 
@@ -33,9 +33,10 @@ function toDirection(prediction: "DOWN" | "FLAT" | "UP"): Direction {
 }
 
 function reasonCodes(prediction: "DOWN" | "FLAT" | "UP", calibration: string, status: string, actionStatus: string): string[] {
+  const calibrationReason = calibration === "CALIBRATED" ? "PROBABILITY_CALIBRATED" : calibration === "CALIBRATION_UNVERIFIED" ? "PROBABILITY_CALIBRATION_UNVERIFIED" : "PROBABILITY_UNCALIBRATED";
   return [
     `ML_${prediction}`,
-    calibration === "CALIBRATED" ? "PROBABILITY_CALIBRATED" : "PROBABILITY_UNCALIBRATED",
+    calibrationReason,
     status === "PROMOTION_READY" ? "OOS_PROMOTION_READY" : "OOS_GATE_ABSTAIN",
     `ACTION_${actionStatus}`,
     "PYTHON_RESEARCH_MODEL",
@@ -89,6 +90,9 @@ async function runForSymbol(symbol: string): Promise<void> {
         predictionStatus: prediction.prediction_status,
         promotionChecks: prediction.promotion_checks,
         oosMetrics: prediction.oos_metrics,
+        metaProbability: prediction.meta_probability,
+        metaReady: prediction.meta?.ready ?? false,
+        meta: prediction.meta,
         featureSetVersion: prediction.feature_set_version,
         trainingCutoff: prediction.training_cutoff,
         validationOosExamples: prediction.validation_oos_examples,
@@ -103,9 +107,9 @@ async function runForSymbol(symbol: string): Promise<void> {
   await pool.query(
     `insert into prediction_ledger (
        symbol, timestamp, horizon, model_version,
-       market_probability, expected_return, confidence, regime, evidence, input_snapshot
+       market_probability, meta_probability, expected_return, confidence, regime, evidence, input_snapshot
      )
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)
      on conflict do nothing`,
     [
       symbol,
@@ -113,6 +117,7 @@ async function runForSymbol(symbol: string): Promise<void> {
       prediction.horizon,
       prediction.model_version,
       marketProbability,
+      prediction.meta_probability,
       prediction.expected_return,
       prediction.confidence,
       context.regime,
@@ -129,6 +134,12 @@ async function runForSymbol(symbol: string): Promise<void> {
         predictionStatus: prediction.prediction_status,
         promotionChecks: prediction.promotion_checks,
         oosMetrics: prediction.oos_metrics,
+        metaProbability: prediction.meta_probability,
+        metaReady: prediction.meta?.ready ?? false,
+        metaAuc: prediction.meta?.oos_auc ?? null,
+        metaSelectedCoverage: prediction.meta?.selected_coverage ?? null,
+        metaCoverageAccuracy: prediction.meta?.coverage_accuracy ?? null,
+        metaVersion: prediction.meta?.version ?? null,
         featureSetVersion: prediction.feature_set_version,
         trainingCutoff: prediction.training_cutoff,
       }),
@@ -146,11 +157,21 @@ async function runForSymbol(symbol: string): Promise<void> {
 }
 
 export async function runSignalEngine(): Promise<void> {
+  // Consult model coverage so instruments that simply have no trained artifact
+  // yet are skipped cleanly instead of throwing a 503 every cycle (which used
+  // to abort the whole signal pass). Empty map => coverage unavailable: fall
+  // back to attempting every symbol, still isolated per symbol below.
+  const modelStates = await fetchModelStates("1d");
   for (const symbol of await getActiveSymbols()) {
+    const state = modelStates.get(symbol.toUpperCase());
+    if (state && state !== "UP_TO_DATE" && state !== "STALE") {
+      console.log(`[signal] ${symbol}: skipped, model not ready (${state})`);
+      continue;
+    }
     try {
       await runForSymbol(symbol);
     } catch (error) {
-      console.error(`[signal] ${symbol}: validated ML inference unavailable`, error);
+      console.error(`[signal] ${symbol}: validated ML inference failed; continuing with next instrument`, error);
     }
   }
 }
