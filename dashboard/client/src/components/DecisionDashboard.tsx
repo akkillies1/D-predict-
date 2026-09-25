@@ -831,8 +831,10 @@ export default function DecisionDashboard() {
                 Pick of the day · up to five instruments
               </h2>
               <p className="mt-1 text-xs text-[#789087]">
-                Ranks fresh or last-session data, calibrated predictions, and
-                positive expected return after assumed costs.
+                Ranks fresh or last-session data. Signal-grade picks need a
+                calibrated model that cleared the OOS gate; otherwise qualifying
+                instruments surface as momentum-evidence picks from realized
+                closes — never a fabricated forecast.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -861,9 +863,22 @@ export default function DecisionDashboard() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="font-mono-ui text-[9px] text-[#70887d]">
-                        RANK {String(index + 1).padStart(2, "0")} ·{" "}
-                        {pick.horizon}
+                      <div className="flex items-center gap-2 font-mono-ui text-[9px] text-[#70887d]">
+                        <span>RANK {String(index + 1).padStart(2, "0")} · {pick.horizon}</span>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 uppercase tracking-[.1em] ${
+                            pick.basis === "MODEL"
+                              ? "border-[#476238] text-[#c8f169]"
+                              : "border-[#5b4b2b] text-[#c8b582]"
+                          }`}
+                          title={
+                            pick.basis === "MODEL"
+                              ? "Validated model signal that cleared the OOS promotion gate."
+                              : "Ranked from realized closes only — a technical-evidence screen, not a forward return forecast."
+                          }
+                        >
+                          {pick.basis === "MODEL" ? "Model signal" : "Momentum evidence"}
+                        </span>
                       </div>
                       <div className="mt-1 font-display text-2xl font-semibold">
                         {pick.symbol}
@@ -883,7 +898,7 @@ export default function DecisionDashboard() {
                         {pct(pick.expectedReturn)}
                       </div>
                       <div className="text-[10px] text-[#789087]">
-                        net {pct(pick.netExpectedReturn)}
+                        {pick.basis === "MODEL" ? "expected" : "realized 20d"} · net {pct(pick.netExpectedReturn)}
                       </div>
                     </div>
                   </div>
@@ -920,11 +935,12 @@ export default function DecisionDashboard() {
             </div>
           ) : (
             <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
-              No instrument currently clears the scanner gates. This is an
-              intentional abstention, not a missing prediction.{" "}
+              No instrument currently clears the scanner. This is an intentional
+              abstention, not a missing prediction: neither a model signal nor a
+              positive realized-momentum trend net of cost qualified.{" "}
               {scanExcluded.length
-                ? `${scanExcluded.length} candidates were excluded for insufficient history, stale data, uncalibrated probabilities, or costs.`
-                : "The local API may be offline or the active universe has no evaluated predictions yet."}
+                ? `${scanExcluded.length} candidates were excluded for insufficient history, stale data, or non-positive momentum after assumed costs.`
+                : "The local API may be offline or the active universe has no evaluated data yet."}
             </div>
           )}
         </section>
