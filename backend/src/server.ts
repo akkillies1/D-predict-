@@ -233,23 +233,29 @@ app.get("/api/instruments", async (_req, res) => {
 app.get("/api/instruments/discover", async (req, res) => {
   const query = String(req.query.q ?? "").trim();
   if (query.length < 1) return res.json({ ok: true, instruments: [] });
-  try {
-    let local: Array<Record<string, unknown>> = [];
-    if (pool) {
-      try {
-        const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
-        local = result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source }));
-      } catch (error) {
-        console.warn("local instrument discovery skipped:", error instanceof Error ? error.message : error);
-      }
+  let local: Array<Record<string, unknown>> = [];
+  if (pool) {
+    try {
+      const result = await pool.query(`select symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source as source from instruments where upper(symbol) like $1 or upper(coalesce(name,'')) like $1 or exists (select 1 from unnest(aliases) alias where upper(alias) like $1) order by case when upper(symbol) = upper($2) then 0 when upper(symbol) like upper($2) || '%' then 1 else 2 end, symbol limit 25`, [`%${query.toUpperCase()}%`, query]);
+      local = result.rows.map((row) => ({ symbol: row.symbol, exchange: row.exchange, lotSize: row.lot_size, isActive: row.is_active, name: row.name, providerSymbol: row.provider_symbol, instrumentType: row.instrument_type, source: row.source }));
+    } catch (error) {
+      console.warn("local instrument discovery skipped:", error instanceof Error ? error.message : error);
     }
+  }
+  // The provider lookup is best-effort: a transient network/parse failure must
+  // never turn a valid request into a 500 or discard the local matches we found.
+  let online: Array<Record<string, unknown>> = [];
+  try {
     const response = await fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`, { headers: { "User-Agent": "D-Predict/2.0" } });
-    if (!response.ok) return res.json({ ok: true, instruments: local });
-    const payload = await response.json() as { quotes?: Array<{ symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string; exchDisp?: string }> };
-    const online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).sort((left, right) => { const rank = (quote: typeof left) => /\.(NS|BO)$/i.test(quote.symbol ?? "") || /\b(NSE|BSE|India)\b/i.test(`${quote.exchange} ${quote.exchDisp}`) ? 0 : 1; return rank(left) - rank(right); }).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
-    const merged = [...local, ...online.filter((item) => !local.some((existing) => existing.symbol === item.symbol))];
-    return res.json({ ok: true, instruments: merged.slice(0, 25) });
-  } catch (error) { return res.status(500).json({ ok: false, error: "INSTRUMENT_DISCOVERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
+    if (response.ok) {
+      const payload = await response.json() as { quotes?: Array<{ symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string; exchDisp?: string }> };
+      online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).sort((left, right) => { const rank = (quote: typeof left) => /\.(NS|BO)$/i.test(quote.symbol ?? "") || /\b(NSE|BSE|India)\b/i.test(`${quote.exchange} ${quote.exchDisp}`) ? 0 : 1; return rank(left) - rank(right); }).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
+    }
+  } catch (error) {
+    console.warn("online instrument discovery skipped:", error instanceof Error ? error.message : error);
+  }
+  const merged = [...local, ...online.filter((item) => !local.some((existing) => existing.symbol === item.symbol))];
+  return res.json({ ok: true, instruments: merged.slice(0, 25) });
 });
 
 app.post("/api/instruments", async (req, res) => {
