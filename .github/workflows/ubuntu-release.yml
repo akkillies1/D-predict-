@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, for example 2.0.0'
+        description: 'Release version, for example 2.0.2'
         required: true
-        default: '2.0.0'
+        default: '2.0.2'
   push:
     tags:
       - 'v*.*.*'
@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Determine release tag
         id: release

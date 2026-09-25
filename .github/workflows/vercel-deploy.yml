@@ -1,0 +1,43 @@
+name: Vercel Marketing Deploy
+
+# Publishes the static marketing site in /marketing to Vercel.
+# Requires three repository Secrets (Settings → Secrets and variables → Actions):
+#   VERCEL_TOKEN      – account token from https://vercel.com/account/tokens
+#   VERCEL_ORG_ID     – team id shown in the Vercel project Settings → Environment Variables
+#   VERCEL_PROJECT_ID – project id for the linked marketing project
+# Create the Vercel project once (import the repo, framework: Other,
+# output directory: marketing) or run `vercel link` locally, then copy the ids.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'marketing/**'
+      - 'vercel.json'
+      - '.github/workflows/vercel-deploy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Deploy marketing site to production
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel deploy --prod --yes --token "$VERCEL_TOKEN"

@@ -1,6 +1,6 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.2"
 #endif
 #ifndef MyAppSourceRef
 #define MyAppSourceRef "main"
