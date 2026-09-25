@@ -60,6 +60,7 @@ import { chooseInitialSymbol } from "@/lib/dashboard";
 import LiveTickerSearch from "@/components/LiveTickerSearch";
 import MarketSessionClock from "@/components/MarketSessionClock";
 import TradingDesk from "@/components/TradingDesk";
+import PriceChart, { type ChartOverlays } from "@/components/PriceChart";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 const TIMEFRAME_KEY = "dpredict:chart-timeframe";
@@ -97,6 +98,14 @@ function formatBarTime(timestamp: string, timeframe: ChartTimeframe) {
   if (timeframe === "1mo") return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "2-digit" }).format(date);
   return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" }).format(date);
 }
+
+const CHART_LEGEND: Array<{ key: keyof ChartOverlays; label: string; color: string }> = [
+  { key: "sma20", label: "SMA20", color: "#e5b55f" },
+  { key: "ema12", label: "EMA12", color: "#76b9ff" },
+  { key: "ema26", label: "EMA26", color: "#d19cff" },
+  { key: "volume", label: "VOLUME", color: "#70887d" },
+  { key: "cone", label: "FORECAST P10·P50·P90", color: "#c8f169" },
+];
 
 function pct(value?: number | null) {
   return value == null || !Number.isFinite(value)
@@ -214,6 +223,7 @@ export default function DecisionDashboard() {
     return saved === "1m" || saved === "1w" || saved === "1mo" ? saved : "1d";
   });
   const [liveQuote, setLiveQuote] = useState<MarketOverview | null>(null);
+  const [chartOverlays, setChartOverlays] = useState<ChartOverlays>({ sma20: true, ema12: true, ema26: true, volume: true, cone: true });
   const wsRef = useRef<WebSocket | null>(null);
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
@@ -753,29 +763,32 @@ export default function DecisionDashboard() {
                 </div>
               </div>
             </div>
-            <div className="mt-4 h-[340px]">
-              {chart.bars.length ? (() => {
-                const width = 1000;
-                const priceTop = 12;
-                const priceBottom = 238;
-                const volumeTop = 270;
-                const volumeBottom = 326;
-                const futureDays = chart.bands.length ? Math.max(...chart.bands.map(band => band.day)) : 0;
-                const totalPoints = Math.max(1, chart.bars.length - 1 + futureDays);
-                const xFor = (index: number) => 24 + (index / totalPoints) * (width - 48);
-                const yFor = (value: number) => priceBottom - ((value - chart.min) / (chart.max - chart.min)) * (priceBottom - priceTop);
-                const line = (key: "sma20" | "ema12" | "ema26") => chart.bars.map((bar, index) => `${xFor(index)},${yFor(bar[key])}`).join(" ");
-                return <svg viewBox={`0 0 ${width} 340`} className="h-full w-full" role="img" aria-label={`${symbol} candlestick chart with volume, moving averages, and forecast cone`} preserveAspectRatio="none">
-                  {[0, 1, 2, 3].map(step => { const y = priceTop + step * ((priceBottom - priceTop) / 3); return <line key={step} x1="24" x2="976" y1={y} y2={y} stroke="#18302a" strokeDasharray="3 5" />; })}
-                  <line x1="24" x2="976" y1={volumeTop - 8} y2={volumeTop - 8} stroke="#29463b" />
-                  {chart.bands.length ? <polygon points={[...chart.bands.map(band => `${xFor(chart.bars.length - 1 + band.day)},${yFor(band.p90)}`), ...[...chart.bands].reverse().map(band => `${xFor(chart.bars.length - 1 + band.day)},${yFor(band.p10)}`)].join(" ")} fill="#c8f169" fillOpacity=".1" stroke="#c8f169" strokeOpacity=".35" strokeDasharray="4 4" /> : null}
-                  {chart.bars.map((bar, index) => { const x = xFor(index); const candleWidth = Math.max(2, Math.min(9, (width - 48) / totalPoints * .62)); const bullish = bar.close >= bar.open; const color = bullish ? "#c8f169" : "#ff9d91"; const volumeHeight = ((bar.volume ?? 0) / chart.volumeMax) * (volumeBottom - volumeTop); return <g key={bar.timestamp}><title>{`${bar.time} O ${bar.open} H ${bar.high} L ${bar.low} C ${bar.close} V ${bar.volume ?? 0}`}</title><line x1={x} x2={x} y1={yFor(bar.high)} y2={yFor(bar.low)} stroke={color} strokeWidth="1" /><rect x={x - candleWidth / 2} y={Math.min(yFor(bar.open), yFor(bar.close))} width={candleWidth} height={Math.max(1.5, Math.abs(yFor(bar.open) - yFor(bar.close)))} fill={color} opacity=".9" /><rect x={x - candleWidth / 2} y={volumeBottom - volumeHeight} width={candleWidth} height={volumeHeight} fill={color} opacity=".3" /></g>; })}
-                  <polyline points={line("sma20")} fill="none" stroke="#e5b55f" strokeWidth="1.4" strokeDasharray="5 3" />
-                  <polyline points={line("ema12")} fill="none" stroke="#76b9ff" strokeWidth="1.2" />
-                  <polyline points={line("ema26")} fill="none" stroke="#d19cff" strokeWidth="1.2" />
-                  <text x="28" y="14" fill="#e5b55f" fontSize="10">SMA20</text><text x="82" y="14" fill="#76b9ff" fontSize="10">EMA12</text><text x="140" y="14" fill="#d19cff" fontSize="10">EMA26</text><text x="28" y="264" fill="#70887d" fontSize="9">VOLUME</text>{chart.bands.length ? <text x="850" y="264" fill="#c8f169" fontSize="9">FORECAST CONE</text> : null}
-                </svg>;
-              })() : (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              {CHART_LEGEND.filter(item => item.key !== "cone" || chart.bands.length > 0).map(item => (
+                <button
+                  key={item.key}
+                  type="button"
+                  aria-pressed={chartOverlays[item.key]}
+                  onClick={() => setChartOverlays(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] tracking-[.1em] transition-all ${chartOverlays[item.key] ? "border-[#29463b] bg-[#0d1a15] text-[#d7e8d9]" : "border-[#1a2a24] bg-transparent text-[#4f6459] line-through"}`}
+                  title={chartOverlays[item.key] ? `Hide ${item.label}` : `Show ${item.label}`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: chartOverlays[item.key] ? item.color : "#33453c" }} />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 h-[360px]">
+              {chart.bars.length ? (
+                <PriceChart
+                  bars={chart.bars}
+                  bands={chart.bands}
+                  minuteScale={chartTimeframe === "1m"}
+                  livePrice={liveQuote?.close ?? null}
+                  liveActive={liveActive}
+                  overlays={chartOverlays}
+                />
+              ) : (
                 <Empty text={chartTimeframe === "1m" ? "No minute bars collected for this instrument yet — the feed stores them during market sessions." : "No historical bars returned by the local API."} />
               )}
             </div>
