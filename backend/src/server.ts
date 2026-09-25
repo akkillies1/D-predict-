@@ -152,8 +152,18 @@ app.get("/api/predictions/live", async (req, res) => {
   try {
     const response = await fetch(`${base}/predict`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol, horizon }), signal: controller.signal });
     const body = await response.json().catch(() => ({ detail: "ML_INVALID_RESPONSE" }));
-    // Propagate the upstream status instead of masking ML failures behind HTTP 200, and
-    // guarantee an honest `ok` so the client never renders a broken body as a prediction.
+    // A model that abstains, has no trained bundle, or a symbol with no daily
+    // history is an expected "no live prediction" outcome — not an outage. ML
+    // signals these as 404 (no history) / 503 (bundle not ready). Report them as
+    // a normal empty result (HTTP 200, ok:false) carrying the real reason so the
+    // browser stops logging a failed resource on every poll, while genuine
+    // failures (4xx contract violations, 5xx, ML unreachable) stay non-2xx.
+    if (response.status === 404 || response.status === 503) {
+      const reason = typeof body?.detail === "string" ? body.detail : (body?.detail?.message ?? null);
+      return res.json({ ok: false, status: "NO_LIVE_PREDICTION", error: response.status === 404 ? "NO_PREDICTION_HISTORY" : "MODEL_NOT_READY", reason, symbol, horizon });
+    }
+    // Propagate any other upstream status instead of masking it behind HTTP 200,
+    // and guarantee an honest `ok` so the client never renders a broken body.
     if (!response.ok) return res.status(response.status).json({ ...body, ok: false, error: body?.error ?? "ML_UPSTREAM_ERROR" });
     return res.json({ ...body, ok: true });
   } catch (error) {
