@@ -787,6 +787,7 @@ export default function DecisionDashboard() {
                   livePrice={liveQuote?.close ?? null}
                   liveActive={liveActive}
                   overlays={chartOverlays}
+                  linesStorageKey={`dpredict:chart-lines:${symbol}`}
                 />
               ) : (
                 <Empty text={chartTimeframe === "1m" ? "No minute bars collected for this instrument yet — the feed stores them during market sessions." : "No historical bars returned by the local API."} />

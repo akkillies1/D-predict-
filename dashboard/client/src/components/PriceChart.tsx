@@ -13,6 +13,7 @@ import {
   type IPriceLine,
   type ISeriesApi,
   type LineData,
+  type MouseEventParams,
   type UTCTimestamp,
 } from "lightweight-charts";
 
@@ -38,16 +39,29 @@ type Props = {
   livePrice: number | null;
   liveActive: boolean;
   overlays: ChartOverlays;
+  linesStorageKey?: string;
 };
 
 type Tooltip = { x: number; y: number; bar: ChartBar } | null;
+type DrawPoint = { time: number; price: number };
+type DrawLine = { id: string; kind: "h"; price: number } | { id: string; kind: "trend"; from: DrawPoint; to: DrawPoint };
+type DrawTool = "off" | "h" | "trend";
 
 const BULL = "#c8f169";
 const BEAR = "#ff9d91";
+const DRAW_COLOR = "#e5b55f";
 const toTime = (timestamp: string) => Math.floor(Date.parse(timestamp) / 1000) as UTCTimestamp;
 const fmt = (value: number) => value.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+const uid = () => Math.random().toString(36).slice(2, 10);
+const segmentDistance = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared)) : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+};
 
-export default function PriceChart({ bars, bands, minuteScale, livePrice, liveActive, overlays }: Props) {
+export default function PriceChart({ bars, bands, minuteScale, livePrice, liveActive, overlays, linesStorageKey }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -59,6 +73,25 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
   const metaRef = useRef<Map<number, ChartBar>>(new Map());
   const appliedRef = useRef<{ first: string; length: number } | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip>(null);
+  const [tool, setTool] = useState<DrawTool>("off");
+  const [draft, setDraft] = useState<DrawPoint | null>(null);
+  const [lines, setLines] = useState<DrawLine[]>([]);
+  const toolRef = useRef<DrawTool>("off");
+  const draftRef = useRef<DrawPoint | null>(null);
+  const linesRef = useRef<DrawLine[]>([]);
+  const drawnHandlesRef = useRef<{ priceLines: IPriceLine[]; trendSeries: ISeriesApi<"Line">[] }>({ priceLines: [], trendSeries: [] });
+  const selectTool = (next: DrawTool) => {
+    const value = toolRef.current === next ? "off" : next;
+    toolRef.current = value;
+    draftRef.current = null;
+    setDraft(null);
+    setTool(value);
+  };
+  const clearLines = () => {
+    draftRef.current = null;
+    setDraft(null);
+    setLines([]);
+  };
 
   useEffect(() => {
     const el = containerRef.current;
@@ -84,6 +117,9 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
       localization: { locale: "en-IN" },
     });
     chartRef.current = chart;
+    // The chart instance is brand new; any handles left in the ref belong to a
+    // previous instance (HMR remount) and must not be removed from this chart.
+    drawnHandlesRef.current = { priceLines: [], trendSeries: [] };
     // Own the sizing explicitly so the chart is correct even when it mounts
     // while throttled (background tab); autoSize's ResizeObserver + rAF render
     // loop are paused when the page is hidden, leaving the buffer unsized.
@@ -127,10 +163,74 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
       setTooltip({ x: param.point.x, y: param.point.y, bar });
     });
 
+    // Drawing layer: active-tool clicks place price levels (one click) or
+    // trend lines (two clicks); right-click deletes the nearest drawn line.
+    const onClick = (param: MouseEventParams) => {
+      const activeTool = toolRef.current;
+      const candles = candleRef.current;
+      if (activeTool === "off" || !param.point || !candles) return;
+      const price = candles.coordinateToPrice(param.point.y);
+      if (price == null) return;
+      if (activeTool === "h") {
+        setLines(prev => [...prev, { id: uid(), kind: "h", price }]);
+        return;
+      }
+      const time = chart.timeScale().coordinateToTime(param.point.x);
+      if (time == null) return;
+      const point = { time: Number(time), price };
+      if (!draftRef.current) {
+        draftRef.current = point;
+        setDraft(point);
+      } else {
+        const first = draftRef.current;
+        draftRef.current = null;
+        setDraft(null);
+        const [from, to] = first.time <= point.time ? [first, point] : [point, first];
+        setLines(prev => [...prev, { id: uid(), kind: "trend", from, to }]);
+      }
+    };
+    chart.subscribeClick(onClick);
+    const onContextMenu = (event: MouseEvent) => {
+      const candles = candleRef.current;
+      if (!candles || !linesRef.current.length) return;
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      let nearest: { id: string; distance: number } | null = null;
+      for (const line of linesRef.current) {
+        let distance = Number.POSITIVE_INFINITY;
+        if (line.kind === "h") {
+          const py = candles.priceToCoordinate(line.price);
+          if (py != null) distance = Math.abs(py - y);
+        } else {
+          const x1 = chart.timeScale().timeToCoordinate(line.from.time as UTCTimestamp);
+          const x2 = chart.timeScale().timeToCoordinate(line.to.time as UTCTimestamp);
+          const y1 = candles.priceToCoordinate(line.from.price);
+          const y2 = candles.priceToCoordinate(line.to.price);
+          if (x1 != null && x2 != null && y1 != null && y2 != null) distance = segmentDistance(x, y, x1, y1, x2, y2);
+        }
+        if (distance < 12 && (!nearest || distance < nearest.distance)) nearest = { id: line.id, distance };
+      }
+      if (nearest) setLines(prev => prev.filter(line => line.id !== nearest!.id));
+    };
+    el.addEventListener("contextmenu", onContextMenu);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      draftRef.current = null;
+      setDraft(null);
+      toolRef.current = "off";
+      setTool("off");
+    };
+    window.addEventListener("keydown", onKey);
+
     return () => {
+      window.removeEventListener("keydown", onKey);
+      el.removeEventListener("contextmenu", onContextMenu);
       resizeRef.current?.disconnect();
       resizeRef.current = null;
       chart.remove();
+      drawnHandlesRef.current = { priceLines: [], trendSeries: [] };
       chartRef.current = null;
       candleRef.current = null;
       volumeRef.current = null;
@@ -224,9 +324,94 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     }
   }, [liveActive, livePrice]);
 
+  // Paint user-drawn lines: price levels become price lines on the candle
+  // series; trend lines get their own two-point series (rebuilt on change).
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candles = candleRef.current;
+    if (!chart || !candles) return;
+    const handles = drawnHandlesRef.current;
+    for (const priceLine of handles.priceLines) candles.removePriceLine(priceLine);
+    for (const series of handles.trendSeries) chart.removeSeries(series);
+    handles.priceLines = [];
+    handles.trendSeries = [];
+    for (const line of lines) {
+      if (line.kind === "h") {
+        handles.priceLines.push(candles.createPriceLine({
+          price: line.price, color: DRAW_COLOR, lineWidth: 1, lineStyle: LineStyle.Solid,
+          axisLabelVisible: true, title: "level",
+        }));
+      } else {
+        const series = chart.addSeries(LineSeries, {
+          color: DRAW_COLOR, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        });
+        series.setData([
+          { time: line.from.time as UTCTimestamp, value: line.from.price },
+          { time: line.to.time as UTCTimestamp, value: line.to.price },
+        ]);
+        handles.trendSeries.push(series);
+      }
+    }
+  }, [lines]);
+
+  useEffect(() => {
+    draftRef.current = null;
+    setDraft(null);
+    toolRef.current = "off";
+    setTool("off");
+    if (!linesStorageKey) { setLines([]); return; }
+    try {
+      const parsed = JSON.parse(localStorage.getItem(linesStorageKey) ?? "[]");
+      setLines(Array.isArray(parsed) ? parsed.filter(line =>
+        (line?.kind === "h" && Number.isFinite(line.price)) ||
+        (line?.kind === "trend" && [line.from?.time, line.from?.price, line.to?.time, line.to?.price].every(Number.isFinite))
+      ) : []);
+    } catch { setLines([]); }
+  }, [linesStorageKey]);
+
+  useEffect(() => {
+    linesRef.current = lines;
+    if (!linesStorageKey) return;
+    try { localStorage.setItem(linesStorageKey, JSON.stringify(lines)); } catch { /* storage full or blocked */ }
+  }, [lines, linesStorageKey]);
+
   return (
     <div className="relative h-full w-full">
-      <div ref={containerRef} className="absolute inset-0" />
+      <div ref={containerRef} className="absolute inset-0" style={{ cursor: tool === "off" ? "default" : "crosshair" }} />
+      <div className="absolute right-14 top-1 z-10 flex items-center gap-1">
+        {tool !== "off" ? (
+          <span className="mr-1 rounded-md border border-[#1d332f] bg-[#0a1512]/90 px-2 py-1 font-mono-ui text-[9px] text-[#c8b582]">
+            {tool === "h" ? "click to place a level · right-click deletes · Esc stops" : draft ? "click to set the end point · Esc cancels" : "click to set the start point · Esc stops"}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          aria-pressed={tool === "h"}
+          onClick={() => selectTool("h")}
+          title="Draw horizontal price level: pick the tool, then click the chart. Right-click a line to delete it."
+          className={`rounded-md border px-2 py-1 font-mono-ui text-[10px] transition-colors ${tool === "h" ? "border-[#4e4226] bg-[#211d12] text-[#e5b55f]" : "border-[#1d332f] bg-[#0a1512]/90 text-[#789087] hover:text-[#d7e8d9]"}`}
+        >
+          — Level
+        </button>
+        <button
+          type="button"
+          aria-pressed={tool === "trend"}
+          onClick={() => selectTool("trend")}
+          title="Draw trend line: pick the tool, then click a start and an end point. Right-click a line to delete it."
+          className={`rounded-md border px-2 py-1 font-mono-ui text-[10px] transition-colors ${tool === "trend" ? "border-[#4e4226] bg-[#211d12] text-[#e5b55f]" : "border-[#1d332f] bg-[#0a1512]/90 text-[#789087] hover:text-[#d7e8d9]"}`}
+        >
+          ╱ Trend
+        </button>
+        <button
+          type="button"
+          onClick={clearLines}
+          disabled={!lines.length}
+          title={`Delete all ${lines.length} drawn lines`}
+          className="rounded-md border border-[#1d332f] bg-[#0a1512]/90 px-2 py-1 font-mono-ui text-[10px] text-[#789087] transition-colors hover:text-[#ff9d91] disabled:cursor-default disabled:opacity-40 disabled:hover:text-[#789087]"
+        >
+          ✕ {lines.length || ""}
+        </button>
+      </div>
       {tooltip ? (
         <div
           className="pointer-events-none absolute z-10 min-w-[150px] rounded-lg border border-[#1d332f] bg-[#0a1512]/95 px-2.5 py-1.5 font-mono-ui text-[10px] leading-relaxed shadow-[0_10px_30px_rgba(0,0,0,.4)]"
