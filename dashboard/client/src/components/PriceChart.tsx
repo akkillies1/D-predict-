@@ -89,7 +89,7 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     // loop are paused when the page is hidden, leaving the buffer unsized.
     const ro = new ResizeObserver(entries => {
       const box = entries[0]?.contentRect;
-      if (box && box.width > 0 && box.height > 0) chart.resize(box.height, box.width);
+      if (box && box.width > 0 && box.height > 0) chart.resize(box.width, box.height);
     });
     ro.observe(el);
     resizeRef.current = ro;
