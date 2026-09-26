@@ -176,12 +176,23 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     }
     appliedRef.current = { first: bars[0].timestamp, length: bars.length };
 
-    // Forecast cone: three dashed/solid lines fanning from the last close into
-    // the projected trading days — no fabricated path between the quantiles.
+    // Baseline cone: three dashed/solid lines fanning from the last close into
+    // the next N trading days (weekends skipped — bands are trading-day based).
+    // The quantiles come from the statistical baseline endpoint, not a model.
     const lastTime = Number(toTime(last.timestamp));
+    const coneTime = (day: number): number => {
+      let t = lastTime;
+      let added = 0;
+      while (added < day) {
+        t += 86400;
+        const weekday = new Date(t * 1000).getUTCDay();
+        if (weekday !== 0 && weekday !== 6) added += 1;
+      }
+      return t;
+    };
     const coneLine = (key: "p10" | "median" | "p90"): LineData[] => [
       { time: lastTime as UTCTimestamp, value: last.close },
-      ...bands.map(band => ({ time: (lastTime + band.day * 86400) as UTCTimestamp, value: band[key] })),
+      ...bands.map(band => ({ time: coneTime(band.day) as UTCTimestamp, value: band[key] })),
     ];
     if (bands.length) {
       coneRefs.current[0]?.setData(coneLine("p10"));

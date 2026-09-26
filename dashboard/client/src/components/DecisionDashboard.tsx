@@ -104,7 +104,7 @@ const CHART_LEGEND: Array<{ key: keyof ChartOverlays; label: string; color: stri
   { key: "ema12", label: "EMA12", color: "#76b9ff" },
   { key: "ema26", label: "EMA26", color: "#d19cff" },
   { key: "volume", label: "VOLUME", color: "#70887d" },
-  { key: "cone", label: "FORECAST P10·P50·P90", color: "#c8f169" },
+  { key: "cone", label: "BASELINE P10·P50·P90", color: "#c8f169" },
 ];
 
 function pct(value?: number | null) {
@@ -771,7 +771,7 @@ export default function DecisionDashboard() {
                   aria-pressed={chartOverlays[item.key]}
                   onClick={() => setChartOverlays(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] tracking-[.1em] transition-all ${chartOverlays[item.key] ? "border-[#29463b] bg-[#0d1a15] text-[#d7e8d9]" : "border-[#1a2a24] bg-transparent text-[#4f6459] line-through"}`}
-                  title={chartOverlays[item.key] ? `Hide ${item.label}` : `Show ${item.label}`}
+                  title={item.key === "cone" ? "Statistical baseline: historical daily drift ± √time log-vol extrapolated from realized closes — not a model prediction" : chartOverlays[item.key] ? `Hide ${item.label}` : `Show ${item.label}`}
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: chartOverlays[item.key] ? item.color : "#33453c" }} />
                   {item.label}
@@ -792,6 +792,13 @@ export default function DecisionDashboard() {
                 <Empty text={chartTimeframe === "1m" ? "No minute bars collected for this instrument yet — the feed stores them during market sessions." : "No historical bars returned by the local API."} />
               )}
             </div>
+            {chart.bands.length && chartOverlays.cone ? (
+              <p className="mt-2 text-[9px] leading-relaxed text-[#5f7869]">
+                Cone = statistical baseline: {forecast?.daysOfHistoryUsed ?? chart.bars.length} daily closes
+                extrapolated with historical drift ± √time log-vol on trading-day steps. No ML model
+                contributes to it — model signals abstain until an artifact clears the OOS promotion gate.
+              </p>
+            ) : null}
           </Card>
           <Card className="p-5">
             <Label>Model decision / reasons</Label>
@@ -829,9 +836,17 @@ export default function DecisionDashboard() {
           <Card className="p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <Label>Research forecast / {instrumentName ?? symbol}</Label>
-                <h2 className="mt-1 font-display text-xl font-semibold">
+                <Label>Statistical baseline forecast / {instrumentName ?? symbol}</Label>
+                <h2 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold">
                   Next {forecastHorizon} trading days
+                  {forecast?.status === "STATISTICAL_BASELINE" ? (
+                    <span
+                      className="rounded-md border border-[#4e4226] bg-[#211d12] px-2 py-0.5 font-mono-ui text-[9px] tracking-[.12em] text-[#e5b55f]"
+                      title="These bands are extrapolated from historical daily log returns (drift ± √time volatility). No ML model contributes to them; model signals stay abstained until an artifact clears the OOS promotion gate."
+                    >
+                      NO MODEL — HISTORICAL EXTRAPOLATION
+                    </span>
+                  ) : null}
                 </h2>
               </div>
               <select
