@@ -430,6 +430,7 @@ export default function DecisionDashboard() {
       // daily vol — a coarser approximation, labelled as such under the chart.
       let bands: ChartBand[] = [];
       let channel: ChartBand[] = [];
+      let containment: { pct: number; windows: number; label: string } | null = null;
       if (forecast && bars.length) {
         const anchor = bars[bars.length - 1].close;
         const mu = Math.log(1 + forecast.expectedReturn) / forecast.horizonDays;
@@ -448,11 +449,31 @@ export default function DecisionDashboard() {
         else bands = pick(Array.from({ length: forecastHorizon }, (_, i) => quantile(i + 1)));
         const visibleDays = chartTimeframe === "1m" ? bars.length / 390 : chartTimeframe === "1w" ? bars.length * 5 : chartTimeframe === "1mo" ? bars.length * 21 : bars.length;
         channel = pick(Array.from({ length: 40 }, (_, i) => quantile(-((i + 1) * visibleDays / 40))));
+        // Containment metric: how many realized k-bar log moves actually landed
+        // inside the baseline's own ±1.2816σ√t band. A calibrated 80% band
+        // should measure near 80%; a big gap means the cone is miscalibrated.
+        const daysPerBar = chartTimeframe === "1m" ? 1 / 390 : chartTimeframe === "1w" ? 5 : chartTimeframe === "1mo" ? 21 : 1;
+        const horizonBars = chartTimeframe === "1m" ? [5, 15, 30, 60, 120] : chartTimeframe === "1w" ? [1, 2, 4] : chartTimeframe === "1mo" ? [1, 2] : [1, 2, 3, 5];
+        const unit = chartTimeframe === "1m" ? "m" : chartTimeframe === "1w" ? "w" : chartTimeframe === "1mo" ? "mo" : "d";
+        let inside = 0;
+        let windows = 0;
+        for (const k of horizonBars) {
+          if (k >= bars.length) continue;
+          const spanDays = k * daysPerBar;
+          const spread = 1.2816 * sigma * Math.sqrt(spanDays);
+          const drift = mu * spanDays;
+          for (let j = k; j < bars.length; j++) {
+            const move = Math.log(bars[j].close / bars[j - k].close);
+            if (Math.abs(move - drift) <= spread) inside += 1;
+            windows += 1;
+          }
+        }
+        if (windows >= 30) containment = { pct: (inside / windows) * 100, windows, label: horizonBars.filter(k => k < bars.length).map(k => `${k}${unit}`).join("/") };
       }
       const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...bands.flatMap(band => [band.p10, band.p90]), ...channel.flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
       const min = values.length ? Math.min(...values) : 0;
       const max = values.length ? Math.max(...values) : 1;
-      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands, channel };
+      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands, channel, containment };
     },
     [chartTimeframe, displayBars, forecast, forecastHorizon]
   );
@@ -821,7 +842,8 @@ export default function DecisionDashboard() {
             {chart.bands.length && (chartOverlays.cone || chartOverlays.channel) ? (
               <p className="mt-2 text-[9px] leading-relaxed text-[#5f7869]">
                 {chartOverlays.cone ? <>Cone = statistical baseline: {forecast?.daysOfHistoryUsed ?? chart.bars.length} daily closes extrapolated with historical drift ± √time log-vol, rescaled to {chartTimeframe === "1m" ? "in-session minute steps (iid assumption — coarser at this granularity)" : chartTimeframe === "1w" ? "weekly (5-day) steps" : chartTimeframe === "1mo" ? "monthly (21-day) steps" : `${forecastHorizon}-day steps`}. No ML model contributes to it.</> : null}
-                {chartOverlays.channel && chart.channel.length ? <> {chartOverlays.cone ? "Channel = the same model projected backwards over the visible window — a baseline containment check, not a forecast." : "Channel = statistical baseline (drift ± √time log-vol) projected backwards over the visible window — a baseline containment check, not a forecast."}</> : null} Model signals abstain until an artifact clears the OOS promotion gate.
+                {chartOverlays.channel && chart.channel.length ? <> {chartOverlays.cone ? "Channel = the same model projected backwards over the visible window — a baseline containment check, not a forecast." : "Channel = statistical baseline (drift ± √time log-vol) projected backwards over the visible window — a baseline containment check, not a forecast."}</> : null}
+                {chartOverlays.channel && chart.containment ? <> Measured containment: realized {chart.containment.label} moves fell inside the ±1.28σ band {chart.containment.pct.toFixed(1)}% of the time across {chart.containment.windows.toLocaleString("en-IN")} historical windows — a calibrated 80% band should measure near 80%{chart.containment.pct < 65 || chart.containment.pct > 92 ? "; this gap means the baseline is miscalibrated for this instrument/timeframe" : ""}.</> : null} Model signals abstain until an artifact clears the OOS promotion gate.
               </p>
             ) : null}
           </Card>
