@@ -75,6 +75,34 @@ class Poller:
                 symbol, run_id, len(valid), dropped,
             )
 
+    def run_price_bar_backfill(self) -> None:
+        """One-time startup catch-up: yfinance caps 1m history at ~7 days, so
+        this pulls the widest window available and lets the idempotent upsert
+        fill whatever bars the collector missed while it was down."""
+        run_id = uuid.uuid4()
+        for symbol in self._db.active_symbols():
+            try:
+                bars = self._yahoo.fetch_price_bars(symbol, period="7d", interval="1m")
+            except Exception:
+                logger.exception("yahoo 1m backfill failed for %s (run=%s)", symbol, run_id)
+                continue
+
+            valid, dropped = [], 0
+            for bar in bars:
+                problems = validate_price_bar(bar)
+                if problems:
+                    dropped += 1
+                    logger.warning("dropped backfill bar %s: %s", bar, problems)
+                else:
+                    valid.append(bar)
+
+            if valid:
+                self._db.save_price_bars(valid, run_id)
+            logger.info(
+                "price_bar_backfill symbol=%s run=%s saved=%d dropped=%d",
+                symbol, run_id, len(valid), dropped,
+            )
+
     def _symbols(self) -> list[str]:
         return self._db.active_symbols()
 
@@ -83,6 +111,12 @@ class Poller:
         scheduler (APScheduler / cron-triggered invocation) once this is stable."""
         last_option_poll = 0.0
         last_price_poll = 0.0
+
+        logger.info("starting collector with 1m price backfill")
+        try:
+            self.run_price_bar_backfill()
+        except Exception:
+            logger.exception("1m price backfill failed; continuing with live polls")
 
         while True:
             now = time.monotonic()
