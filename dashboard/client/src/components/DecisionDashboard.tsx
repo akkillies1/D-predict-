@@ -60,7 +60,7 @@ import { chooseInitialSymbol } from "@/lib/dashboard";
 import LiveTickerSearch from "@/components/LiveTickerSearch";
 import MarketSessionClock from "@/components/MarketSessionClock";
 import TradingDesk from "@/components/TradingDesk";
-import PriceChart, { type ChartOverlays } from "@/components/PriceChart";
+import PriceChart, { type ChartOverlays, type ChartBand } from "@/components/PriceChart";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 const TIMEFRAME_KEY = "dpredict:chart-timeframe";
@@ -105,6 +105,7 @@ const CHART_LEGEND: Array<{ key: keyof ChartOverlays; label: string; color: stri
   { key: "ema26", label: "EMA26", color: "#d19cff" },
   { key: "volume", label: "VOLUME", color: "#70887d" },
   { key: "cone", label: "BASELINE P10·P50·P90", color: "#c8f169" },
+  { key: "channel", label: "BACKTEST CHANNEL", color: "#8fa69a" },
 ];
 
 function pct(value?: number | null) {
@@ -223,7 +224,7 @@ export default function DecisionDashboard() {
     return saved === "1m" || saved === "1w" || saved === "1mo" ? saved : "1d";
   });
   const [liveQuote, setLiveQuote] = useState<MarketOverview | null>(null);
-  const [chartOverlays, setChartOverlays] = useState<ChartOverlays>({ sma20: true, ema12: true, ema26: true, volume: true, cone: true });
+  const [chartOverlays, setChartOverlays] = useState<ChartOverlays>({ sma20: true, ema12: true, ema26: true, volume: true, cone: true, channel: true });
   const wsRef = useRef<WebSocket | null>(null);
   const symbolRef = useRef(symbol);
   symbolRef.current = symbol;
@@ -423,14 +424,37 @@ export default function DecisionDashboard() {
         const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
         return { ...bar, sma20: average(closes), ema12: average(ema12Window), ema26: average(ema26Window), time: formatBarTime(bar.timestamp, chartTimeframe) };
       });
-      // The forecast cone projects trading days ahead; it is only meaningful on the daily axis.
-      const bands = chartTimeframe === "1d" ? forecast?.bands ?? [] : [];
-      const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...bands.flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
+      // Baseline cone (forward) and backtest channel (backward): the same
+      // drift ± √time log-vol model the forecast panel uses, rescaled to the
+      // timeframe's step. Minute cones assume iid minute returns derived from
+      // daily vol — a coarser approximation, labelled as such under the chart.
+      let bands: ChartBand[] = [];
+      let channel: ChartBand[] = [];
+      if (forecast && bars.length) {
+        const anchor = bars[bars.length - 1].close;
+        const mu = Math.log(1 + forecast.expectedReturn) / forecast.horizonDays;
+        const sigma = forecast.dailyVolatility;
+        const quantile = (day: number): ChartBand | null => {
+          const span = Math.abs(day);
+          if (!(span > 0) || !Number.isFinite(span)) return null;
+          const drift = mu * day;
+          const spread = 1.2816 * sigma * Math.sqrt(span);
+          return { day, p10: anchor * Math.exp(drift - spread), median: anchor * Math.exp(drift), p90: anchor * Math.exp(drift + spread) };
+        };
+        const pick = (values: (ChartBand | null)[]) => values.filter((band): band is ChartBand => band !== null);
+        if (chartTimeframe === "1m") bands = pick(Array.from({ length: 26 }, (_, i) => quantile((i + 1) / 26)));
+        else if (chartTimeframe === "1w") bands = pick(Array.from({ length: 12 }, (_, i) => quantile((i + 1) * 5)));
+        else if (chartTimeframe === "1mo") bands = pick(Array.from({ length: 6 }, (_, i) => quantile((i + 1) * 21)));
+        else bands = pick(Array.from({ length: forecastHorizon }, (_, i) => quantile(i + 1)));
+        const visibleDays = chartTimeframe === "1m" ? bars.length / 390 : chartTimeframe === "1w" ? bars.length * 5 : chartTimeframe === "1mo" ? bars.length * 21 : bars.length;
+        channel = pick(Array.from({ length: 40 }, (_, i) => quantile(-((i + 1) * visibleDays / 40))));
+      }
+      const values = [...bars.flatMap(bar => [bar.high, bar.low]), ...bands.flatMap(band => [band.p10, band.p90]), ...channel.flatMap(band => [band.p10, band.p90])].filter(Number.isFinite);
       const min = values.length ? Math.min(...values) : 0;
       const max = values.length ? Math.max(...values) : 1;
-      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands };
+      return { bars, min, max: max === min ? min + 1 : max, volumeMax: Math.max(1, ...bars.map(bar => bar.volume ?? 0)), bands, channel };
     },
-    [chartTimeframe, displayBars, forecast]
+    [chartTimeframe, displayBars, forecast, forecastHorizon]
   );
   const optionSummary = useMemo(() => {
     const grouped = new Map<
@@ -764,14 +788,14 @@ export default function DecisionDashboard() {
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {CHART_LEGEND.filter(item => item.key !== "cone" || chart.bands.length > 0).map(item => (
+              {CHART_LEGEND.filter(item => (item.key !== "cone" || chart.bands.length > 0) && (item.key !== "channel" || chart.channel.length > 0)).map(item => (
                 <button
                   key={item.key}
                   type="button"
                   aria-pressed={chartOverlays[item.key]}
                   onClick={() => setChartOverlays(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] tracking-[.1em] transition-all ${chartOverlays[item.key] ? "border-[#29463b] bg-[#0d1a15] text-[#d7e8d9]" : "border-[#1a2a24] bg-transparent text-[#4f6459] line-through"}`}
-                  title={item.key === "cone" ? "Statistical baseline: historical daily drift ± √time log-vol extrapolated from realized closes — not a model prediction" : chartOverlays[item.key] ? `Hide ${item.label}` : `Show ${item.label}`}
+                  title={item.key === "cone" ? "Statistical baseline: historical daily drift ± √time log-vol extrapolated from realized closes — not a model prediction" : item.key === "channel" ? "The same baseline projected backwards from the last close — how much of visible history the model would have contained" : chartOverlays[item.key] ? `Hide ${item.label}` : `Show ${item.label}`}
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: chartOverlays[item.key] ? item.color : "#33453c" }} />
                   {item.label}
@@ -783,6 +807,7 @@ export default function DecisionDashboard() {
                 <PriceChart
                   bars={chart.bars}
                   bands={chart.bands}
+                  channel={chart.channel}
                   minuteScale={chartTimeframe === "1m"}
                   livePrice={liveQuote?.close ?? null}
                   liveActive={liveActive}
@@ -793,11 +818,10 @@ export default function DecisionDashboard() {
                 <Empty text={chartTimeframe === "1m" ? "No minute bars collected for this instrument yet — the feed stores them during market sessions." : "No historical bars returned by the local API."} />
               )}
             </div>
-            {chart.bands.length && chartOverlays.cone ? (
+            {chart.bands.length && (chartOverlays.cone || chartOverlays.channel) ? (
               <p className="mt-2 text-[9px] leading-relaxed text-[#5f7869]">
-                Cone = statistical baseline: {forecast?.daysOfHistoryUsed ?? chart.bars.length} daily closes
-                extrapolated with historical drift ± √time log-vol on trading-day steps. No ML model
-                contributes to it — model signals abstain until an artifact clears the OOS promotion gate.
+                {chartOverlays.cone ? <>Cone = statistical baseline: {forecast?.daysOfHistoryUsed ?? chart.bars.length} daily closes extrapolated with historical drift ± √time log-vol, rescaled to {chartTimeframe === "1m" ? "in-session minute steps (iid assumption — coarser at this granularity)" : chartTimeframe === "1w" ? "weekly (5-day) steps" : chartTimeframe === "1mo" ? "monthly (21-day) steps" : `${forecastHorizon}-day steps`}. No ML model contributes to it.</> : null}
+                {chartOverlays.channel && chart.channel.length ? <> {chartOverlays.cone ? "Channel = the same model projected backwards over the visible window — a baseline containment check, not a forecast." : "Channel = statistical baseline (drift ± √time log-vol) projected backwards over the visible window — a baseline containment check, not a forecast."}</> : null} Model signals abstain until an artifact clears the OOS promotion gate.
               </p>
             ) : null}
           </Card>

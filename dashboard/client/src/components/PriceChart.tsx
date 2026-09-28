@@ -30,11 +30,15 @@ export type ChartBar = {
   ema26: number;
 };
 export type ChartBand = { day: number; p10: number; median: number; p90: number };
-export type ChartOverlays = { sma20: boolean; ema12: boolean; ema26: boolean; volume: boolean; cone: boolean };
+// `day` is an offset in trading days from the last bar: positive for the
+// forecast cone, negative for the backtest channel, fractional for
+// sub-session steps (e.g. minute bars).
+export type ChartOverlays = { sma20: boolean; ema12: boolean; ema26: boolean; volume: boolean; cone: boolean; channel: boolean };
 
 type Props = {
   bars: ChartBar[];
   bands: ChartBand[];
+  channel: ChartBand[];
   minuteScale: boolean;
   livePrice: number | null;
   liveActive: boolean;
@@ -50,6 +54,7 @@ type DrawTool = "off" | "h" | "trend";
 const BULL = "#c8f169";
 const BEAR = "#ff9d91";
 const DRAW_COLOR = "#e5b55f";
+const CHANNEL_COLOR = "#8fa69a";
 const toTime = (timestamp: string) => Math.floor(Date.parse(timestamp) / 1000) as UTCTimestamp;
 const fmt = (value: number) => value.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -61,13 +66,14 @@ const segmentDistance = (px: number, py: number, ax: number, ay: number, bx: num
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 };
 
-export default function PriceChart({ bars, bands, minuteScale, livePrice, liveActive, overlays, linesStorageKey }: Props) {
+export default function PriceChart({ bars, bands, channel, minuteScale, livePrice, liveActive, overlays, linesStorageKey }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const lineRefs = useRef<Partial<Record<"sma20" | "ema12" | "ema26", ISeriesApi<"Line">>>>({});
   const coneRefs = useRef<ISeriesApi<"Line">[]>([]);
+  const channelRefs = useRef<ISeriesApi<"Line">[]>([]);
   const liveLineRef = useRef<IPriceLine | null>(null);
   const resizeRef = useRef<ResizeObserver | null>(null);
   const metaRef = useRef<Map<number, ChartBar>>(new Map());
@@ -154,6 +160,11 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
       chart.addSeries(LineSeries, lineOptions(BULL, LineStyle.Solid)),
       chart.addSeries(LineSeries, lineOptions(BULL, LineStyle.Dashed)),
     ];
+    channelRefs.current = [
+      chart.addSeries(LineSeries, lineOptions(CHANNEL_COLOR, LineStyle.Dotted)),
+      chart.addSeries(LineSeries, lineOptions(CHANNEL_COLOR, LineStyle.Dotted)),
+      chart.addSeries(LineSeries, lineOptions(CHANNEL_COLOR, LineStyle.Dotted)),
+    ];
 
     chart.subscribeCrosshairMove(param => {
       if (!param.time || !param.point) { setTooltip(null); return; }
@@ -236,6 +247,7 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
       volumeRef.current = null;
       lineRefs.current = {};
       coneRefs.current = [];
+      channelRefs.current = [];
       liveLineRef.current = null;
       appliedRef.current = null;
       metaRef.current = new Map();
@@ -276,24 +288,61 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     }
     appliedRef.current = { first: bars[0].timestamp, length: bars.length };
 
-    // Baseline cone: three dashed/solid lines fanning from the last close into
-    // the next N trading days (weekends skipped — bands are trading-day based).
-    // The quantiles come from the statistical baseline endpoint, not a model.
+    // Baseline cone (forward) and backtest channel (backward): quantile lines
+    // fanning from the last close. `day` is trading days ahead; negative days
+    // walk the same √time envelope backwards over visible history, and
+    // fractional days step inside the trading session (minute bars).
     const lastTime = Number(toTime(last.timestamp));
+    const SESSION_START_UTC_MINUTES = 225; // 09:15 IST
+    const SESSION_END_UTC_MINUTES = 630;   // 15:30 IST
     const coneTime = (day: number): number => {
+      const sign = day < 0 ? -1 : 1;
+      const abs = Math.abs(day);
+      const whole = Math.floor(abs);
+      const fraction = abs - whole;
       let t = lastTime;
       let added = 0;
-      while (added < day) {
-        t += 86400;
+      while (added < whole) {
+        t += sign * 86400;
         const weekday = new Date(t * 1000).getUTCDay();
         if (weekday !== 0 && weekday !== 6) added += 1;
       }
+      if (fraction > 1e-9) {
+        const targetMinutes = Math.round(fraction * 390);
+        let moved = 0;
+        while (moved < targetMinutes) {
+          t += sign * 60;
+          const date = new Date(t * 1000);
+          const weekday = date.getUTCDay();
+          const minuteOfDay = date.getUTCHours() * 60 + date.getUTCMinutes();
+          if (weekday === 0 || weekday === 6) continue;
+          // Only in-session minutes count; overnight gaps and weekends are
+          // walked through in either direction.
+          if (minuteOfDay >= SESSION_START_UTC_MINUTES && minuteOfDay <= SESSION_END_UTC_MINUTES) moved += 1;
+        }
+      }
       return t;
     };
-    const coneLine = (key: "p10" | "median" | "p90"): LineData[] => [
-      { time: lastTime as UTCTimestamp, value: last.close },
-      ...bands.map(band => ({ time: coneTime(band.day) as UTCTimestamp, value: band[key] })),
-    ];
+    // Monotonic clamping: day-boundary and session-boundary walks can put two
+    // adjacent bands on the same or reversed minute; the chart asserts on
+    // ascending times, so nudge collisions forward by one minute.
+    const coneLine = (key: "p10" | "median" | "p90"): LineData[] => {
+      const points: LineData[] = [{ time: lastTime as UTCTimestamp, value: last.close }];
+      for (const band of bands) {
+        const time = Math.max(coneTime(band.day), Number(points[points.length - 1].time) + 60) as UTCTimestamp;
+        points.push({ time, value: band[key] });
+      }
+      return points;
+    };
+    const channelLine = (key: "p10" | "median" | "p90"): LineData[] => {
+      const points: LineData[] = [];
+      for (const band of [...channel].reverse()) {
+        const floor = points.length ? Number(points[points.length - 1].time) + 60 : Number.NEGATIVE_INFINITY;
+        points.push({ time: Math.max(coneTime(band.day), floor) as UTCTimestamp, value: band[key] });
+      }
+      points.push({ time: Math.max(lastTime, (points.length ? Number(points[points.length - 1].time) + 60 : lastTime)) as UTCTimestamp, value: last.close });
+      return points;
+    };
     if (bands.length) {
       coneRefs.current[0]?.setData(coneLine("p10"));
       coneRefs.current[1]?.setData(coneLine("median"));
@@ -301,7 +350,14 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     } else {
       for (const series of coneRefs.current) series.setData([]);
     }
-  }, [bars, bands, minuteScale]);
+    if (channel.length) {
+      channelRefs.current[0]?.setData(channelLine("p10"));
+      channelRefs.current[1]?.setData(channelLine("median"));
+      channelRefs.current[2]?.setData(channelLine("p90"));
+    } else {
+      for (const series of channelRefs.current) series.setData([]);
+    }
+  }, [bars, bands, channel, minuteScale]);
 
   useEffect(() => {
     lineRefs.current.sma20?.applyOptions({ visible: overlays.sma20 });
@@ -310,7 +366,9 @@ export default function PriceChart({ bars, bands, minuteScale, livePrice, liveAc
     volumeRef.current?.applyOptions({ visible: overlays.volume });
     const coneVisible = overlays.cone && bands.length > 0;
     for (const series of coneRefs.current) series.applyOptions({ visible: coneVisible });
-  }, [overlays, bands.length]);
+    const channelVisible = overlays.channel && channel.length > 0;
+    for (const series of channelRefs.current) series.applyOptions({ visible: channelVisible });
+  }, [overlays, bands.length, channel.length]);
 
   useEffect(() => {
     const candles = candleRef.current;
