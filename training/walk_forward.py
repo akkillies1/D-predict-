@@ -43,7 +43,10 @@ def evaluate(symbol: str, horizon: str, folds: int) -> dict:
         instrument=symbol,
         frequency="1d",
         start=frame.index.min(),
-        end=frame.index.max() + pd.Timedelta(nanoseconds=1),
+        # Same convention as build_dataset: the spec must cover the test
+        # segment, which make_segments extends one full bar step past the
+        # last observation.
+        end=frame.index[-1] + (frame.index[-1] - frame.index[-2]),
         feature_set_version=str(frame["feature_set_version"].iloc[0]) if "feature_set_version" in frame else "market-v1",
         label_horizon=horizon,
     )
