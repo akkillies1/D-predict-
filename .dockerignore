@@ -9,3 +9,10 @@ __pycache__
 db/data
 db/postgres.log
 *.zip
+# Test/lint caches. On a locked-down Windows install these can be unreadable by
+# the build context walker, which fails the whole image build with "Access is denied".
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
