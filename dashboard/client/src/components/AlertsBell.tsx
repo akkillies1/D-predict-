@@ -7,6 +7,9 @@ const RULE_META: Record<string, { label: string; color: string }> = {
   momentum_turn: { label: "20-day momentum crossed the net-of-cost gate", color: "#e5b55f" },
   sma20_cross_up: { label: "Close crossed above its 20-session mean", color: "#c8f169" },
   volume_z20_spike: { label: "Volume ≥2σ spike inside a rising 5-day drift", color: "#7cc7e8" },
+  pcr_band_cross: { label: "Chain PCR exited the 0.70–1.30 band (ATM ±5%, OI-weighted)", color: "#b48ef5" },
+  atm_iv_spike: { label: "ATM option IV jumped ≥1.5 vol points intraday", color: "#f5a3c0" },
+  atm_oi_buildup: { label: "ATM-band option OI built ≥15% intraday", color: "#7fd6c2" },
 };
 
 function ruleMeta(rule: string) {

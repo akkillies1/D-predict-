@@ -130,6 +130,11 @@ function duration(seconds?: number) {
   if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${s}s`;
 }
+function oiCount(value?: number | null) {
+  return value == null || !Number.isFinite(value)
+    ? "—"
+    : Math.round(value).toLocaleString("en-IN");
+}
 function tone(direction?: string) {
   return direction === "BULLISH" || direction === "LONG"
     ? "text-[#c8f169]"
@@ -509,6 +514,52 @@ export default function DecisionDashboard() {
     }
     return [...grouped.values()].sort((a, b) => a.strike - b.strike);
   }, [options]);
+  const chainSummary = useMemo(() => {
+    if (!options.length) return null;
+    const spot = market?.close ?? null;
+    const expiry = [...new Set(options.map(row => row.expiry_date))].sort()[0] ?? null;
+    const expiryRows = options.filter(row => row.expiry_date === expiry);
+    const rowsAt = (type: "CE" | "PE") => expiryRows.filter(row => row.option_type === type);
+    // OI resistance/support: heaviest CE OI strike caps upside, heaviest PE
+    // OI strike props up downside — computed from the stored chain only.
+    const oiMax = (rows: OptionRow[]) =>
+      rows.reduce<OptionRow | null>(
+        (best, row) => ((row.oi ?? 0) > (best?.oi ?? -1) ? row : best),
+        null
+      );
+    const resistance = oiMax(rowsAt("CE"));
+    const support = oiMax(rowsAt("PE"));
+    const atmStrike = expiryRows.length && spot != null && spot > 0
+      ? expiryRows.reduce((closest, row) =>
+          Math.abs(row.strike - spot) < Math.abs(closest - spot) ? row.strike : closest
+        , expiryRows[0].strike)
+      : null;
+    // Same ATM ±5% band, PCR and IV definition as collector/options_radar.py.
+    const band = spot != null && spot > 0
+      ? expiryRows.filter(row => Math.abs(row.strike - spot) / spot <= 0.05)
+      : expiryRows;
+    const sumOi = (type: "CE" | "PE") =>
+      band.reduce((total, row) => (row.option_type === type ? total + (row.oi ?? 0) : total), 0);
+    const ceOi = sumOi("CE");
+    const peOi = sumOi("PE");
+    const atmIvs = atmStrike == null
+      ? []
+      : band.filter(row => row.strike === atmStrike && row.iv != null).map(row => row.iv as number);
+    const timestamp = options.map(row => row.timestamp).filter(Boolean).sort().at(-1) ?? null;
+    return {
+      expiry,
+      spot,
+      atmStrike,
+      pcr: ceOi > 0 ? peOi / ceOi : null,
+      atmIv: atmIvs.length ? atmIvs.reduce((a, b) => a + b, 0) / atmIvs.length : null,
+      ceOi,
+      peOi,
+      bandOi: ceOi + peOi,
+      resistance,
+      support,
+      timestamp,
+    };
+  }, [options, market?.close]);
   const decision = thesis?.decision ?? signal?.direction;
   const dataStatus = market?.status ?? "OFFLINE";
   const tradeReady = thesis?.decision === "EXECUTABLE";
@@ -1447,6 +1498,45 @@ export default function DecisionDashboard() {
               </div>
               <BarChart3 size={18} className="text-[#789087]" />
             </div>
+            {chainSummary && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 font-mono-ui text-[9px]">
+                {(() => {
+                  const ageSeconds = chainSummary.timestamp
+                    ? (Date.now() - new Date(chainSummary.timestamp).getTime()) / 1000
+                    : null;
+                  const freshness =
+                    ageSeconds == null || !Number.isFinite(ageSeconds)
+                      ? { label: "NO STAMP", color: "#70887d" }
+                      : ageSeconds <= 120
+                        ? { label: "LIVE", color: "#c8f169" }
+                        : ageSeconds <= 3600
+                          ? { label: "RECENT", color: "#e5b55f" }
+                          : { label: `STALE · ${duration(ageSeconds)} OLD`, color: "#f0776b" };
+                  return (
+                    <>
+                      <span
+                        className="rounded-full border px-2 py-0.5"
+                        style={{ color: freshness.color, borderColor: freshness.color }}
+                      >
+                        {freshness.label}
+                      </span>
+                      <span className="rounded-full border border-[#29463b] px-2 py-0.5 text-[#9fb4a8]">
+                        exp {chainSummary.expiry ?? "—"}
+                      </span>
+                      <span className="rounded-full border border-[#29463b] px-2 py-0.5 text-[#9fb4a8]">
+                        PCR {chainSummary.pcr == null ? "—" : chainSummary.pcr.toFixed(2)}
+                      </span>
+                      <span className="rounded-full border border-[#29463b] px-2 py-0.5 text-[#9fb4a8]">
+                        ATM IV {chainSummary.atmIv == null ? "—" : `${chainSummary.atmIv.toFixed(1)}%`}
+                      </span>
+                      <span className="rounded-full border border-[#29463b] px-2 py-0.5 text-[#9fb4a8]">
+                        band OI {chainSummary.bandOi > 0 ? oiCount(chainSummary.bandOi) : "—"}
+                      </span>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             {optionSummary.length ? (
               <div className="mt-4 h-[280px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1472,6 +1562,15 @@ export default function DecisionDashboard() {
                         x={market.close}
                         stroke="#e5b55f"
                         strokeDasharray="4 4"
+                        label={{ value: "spot", fill: "#e5b55f", fontSize: 9, position: "insideTopRight" }}
+                      />
+                    )}
+                    {chainSummary?.atmStrike != null && (
+                      <ReferenceLine
+                        x={chainSummary.atmStrike}
+                        stroke="#b48ef5"
+                        strokeDasharray="2 3"
+                        label={{ value: "ATM band", fill: "#b48ef5", fontSize: 8, position: "insideTop" }}
                       />
                     )}
                     <Bar dataKey="ceOi" fill="#c8f169" name="CE OI" />
@@ -1482,27 +1581,74 @@ export default function DecisionDashboard() {
             ) : (
               <Empty text="No option-chain snapshot available for this instrument." />
             )}
+            <div className="mt-3 rounded-xl border border-[#293f35] bg-[#09130f] p-3 text-[9px] leading-relaxed text-[#71877d]">
+              Chain legs come from stored NSE snapshots (nearest expiry; ATM band
+              = strikes within ±5% of spot, same definition as the collector's
+              option rules). OI bars are position buildup, not direction; no ML
+              reads this panel.
+            </div>
           </Card>
           <Card className="p-5">
-            <Label>Derivative decision</Label>
+            <Label>Derivative evidence</Label>
             <div className="mt-3 space-y-3">
-              {options.slice(0, 8).map(row => (
-                <div
-                  key={`${row.expiry_date}-${row.strike}-${row.option_type}`}
-                  className="flex items-center justify-between rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2"
-                >
-                  <span className="font-mono-ui text-[9px] text-[#789087]">
-                    {row.strike} {row.option_type}
-                  </span>
-                  <span className="font-mono-ui text-[10px]">
-                    LTP {row.ltp ?? "—"}
-                  </span>
-                  <span className="font-mono-ui text-[10px] text-[#9fb4a8]">
-                    OI {row.oi ?? "—"}
-                  </span>
+              {chainSummary && (chainSummary.resistance || chainSummary.support) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2">
+                    <div className="font-mono-ui text-[8px] text-[#789087]">HEAVIEST CE OI</div>
+                    <div className="mt-1 font-display text-sm text-[#f0776b]">
+                      {chainSummary.resistance ? chainSummary.resistance.strike : "—"}
+                    </div>
+                    <div className="font-mono-ui text-[8px] text-[#789087]">
+                      oi {oiCount(chainSummary.resistance?.oi)} · Δ{" "}
+                      {oiCount(chainSummary.resistance?.oiChange)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2">
+                    <div className="font-mono-ui text-[8px] text-[#789087]">HEAVIEST PE OI</div>
+                    <div className="mt-1 font-display text-sm text-[#c8f169]">
+                      {chainSummary.support ? chainSummary.support.strike : "—"}
+                    </div>
+                    <div className="font-mono-ui text-[8px] text-[#789087]">
+                      oi {oiCount(chainSummary.support?.oi)} · Δ{" "}
+                      {oiCount(chainSummary.support?.oiChange)}
+                    </div>
+                  </div>
                 </div>
-              ))}
+              )}
+              {optionSummary
+                .slice()
+                .sort((a, b) => (b.ceOi + b.peOi) - (a.ceOi + a.peOi))
+                .slice(0, 8)
+                .map(row => (
+                  <div
+                    key={`${row.strike}`}
+                    className="flex items-center justify-between rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2"
+                  >
+                    <span
+                      className="font-mono-ui text-[9px]"
+                      style={{
+                        color:
+                          chainSummary?.atmStrike === row.strike ? "#b48ef5" : "#789087",
+                      }}
+                    >
+                      {row.strike} {chainSummary?.atmStrike === row.strike ? "· ATM" : ""}
+                    </span>
+                    <span className="font-mono-ui text-[10px] text-[#c8f169]">
+                      CE {row.ceOi ? row.ceOi.toLocaleString("en-IN") : "—"}
+                    </span>
+                    <span className="font-mono-ui text-[10px]">
+                      LTP {row.ceLtp ?? row.peLtp ?? "—"}
+                    </span>
+                    <span className="font-mono-ui text-[10px] text-[#f0776b]">
+                      PE {row.peOi ? row.peOi.toLocaleString("en-IN") : "—"}
+                    </span>
+                  </div>
+                ))}
               {!options.length && <Empty text="No live derivative snapshot." />}
+            </div>
+            <div className="mt-3 text-[9px] leading-relaxed text-[#71877d]">
+              Rule-evidence view of the stored chain — position concentration,
+              not a forecast or trading advice.
             </div>
           </Card>
         </section>

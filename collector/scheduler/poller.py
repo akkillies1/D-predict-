@@ -6,16 +6,30 @@ logic and no business decisions (see collector-level rule in adapters/nse.py).
 
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from collector.adapters.nse import NSEAdapter
 from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
+from collector.options_radar import evaluate_option_rules
 from collector.persistence.postgres import PostgresPersistence
 from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, drop_partial_last_bar, evaluate_rules
 from collector.validation.market_data import validate_option_snapshot, validate_price_bar
 
 logger = get_logger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def nse_session_active(now_utc: datetime | None = None) -> bool:
+    """NSE regular session 09:15-15:30 IST Mon-Fri, with small edge buffers.
+    Polling the chain outside these hours just earns rate-limit blocks."""
+    ist = (now_utc or datetime.now(timezone.utc)).astimezone(IST)
+    if ist.weekday() >= 5:
+        return False
+    minutes = ist.hour * 60 + ist.minute
+    return 9 * 60 + 10 <= minutes <= 15 * 60 + 40
 
 
 class Poller:
@@ -24,16 +38,45 @@ class Poller:
         self._yahoo = YahooAdapter()
         self._db = PostgresPersistence()
         self._radar_cursor = 0
+        # NSE answers empty/403 for non-F&O symbols and outside session; after
+        # a few silent empties a symbol is muted until the next IST open
+        # instead of burning rate-limit budget on every poll.
+        self._chain_empties: dict[str, int] = {}
+        self._chain_muted_until: dict[str, datetime] = {}
+
+    def _note_chain_result(self, symbol: str, got_rows: bool, now_utc: datetime) -> None:
+        if got_rows:
+            self._chain_empties[symbol] = 0
+            return
+        streak = self._chain_empties.get(symbol, 0) + 1
+        self._chain_empties[symbol] = streak
+        if streak >= 3:
+            ist_now = now_utc.astimezone(IST)
+            next_open = (ist_now + timedelta(days=1)).replace(
+                hour=9, minute=15, second=0, microsecond=0
+            ).astimezone(timezone.utc)
+            self._chain_muted_until[symbol] = next_open
+            self._chain_empties[symbol] = 0
+            logger.info("nse chain muted for %s until %s (empty responses)", symbol, next_open.isoformat())
 
     def run_option_chain_poll(self) -> None:
+        now_utc = datetime.now(timezone.utc)
+        if not nse_session_active(now_utc):
+            logger.debug("option_chain_poll skipped: NSE session closed")
+            return
         run_id = uuid.uuid4()
         for symbol in self._db.active_symbols():
+            until = self._chain_muted_until.get(symbol)
+            if until is not None and now_utc < until:
+                continue
             try:
                 snapshots = self._nse.fetch_option_chain(symbol)
             except Exception:
                 logger.exception("nse fetch failed for %s (run=%s)", symbol, run_id)
+                self._note_chain_result(symbol, False, now_utc)
                 continue
 
+            self._note_chain_result(symbol, bool(snapshots), now_utc)
             valid, dropped = [], 0
             for snap in snapshots:
                 problems = validate_option_snapshot(snap)
@@ -171,7 +214,37 @@ class Poller:
                     self._db.save_price_bars(valid, run_id)
                 raised += self._raise_alerts(symbol, fired, closes, valid[-1].market_timestamp, "radar_fetch", len(closes), run_id, new_to_radar)
 
+        raised += self._run_option_alerts(run_id)
+
         logger.info("alert_sweep run=%s tracked=%d radar_slice=%d alerts=%d", run_id, len(tracked), chunk, raised)
+
+    def _run_option_alerts(self, run_id) -> int:
+        """Option-evidence rules compare the two most recent SAME-SESSION
+        chain snapshots (>=25 min apart) for symbols whose chains we actually
+        store; nothing is inferred without two real observations."""
+        raised = 0
+        ist_today_open = datetime.now(IST).replace(
+            hour=9, minute=15, second=0, microsecond=0
+        ).astimezone(timezone.utc)
+        for symbol in self._db.active_symbols():
+            stamps = self._db.option_chain_timestamps(symbol, ist_today_open)
+            if len(stamps) < 2:
+                continue
+            now_ts, then_ts = stamps[0], stamps[-1]
+            gap_minutes = (now_ts - then_ts).total_seconds() / 60
+            if gap_minutes < 25:
+                continue
+            now_legs = self._db.option_chain_legs(symbol, now_ts)
+            then_legs = self._db.option_chain_legs(symbol, then_ts)
+            spot = self._db.latest_daily_close(symbol)
+            if not now_legs or not then_legs or spot is None:
+                continue
+            fired = evaluate_option_rules(now_legs, then_legs, spot, gap_minutes)
+            if fired:
+                raised += self._raise_alerts(
+                    symbol, fired, [spot], now_ts, "option_chain", len(now_legs), run_id, False
+                )
+        return raised
 
     def _symbols(self) -> list[str]:
         return self._db.active_symbols()

@@ -69,6 +69,34 @@ do update set collected_at = excluded.collected_at,
 """
 
 
+_CHAIN_TIMESTAMPS = """
+select distinct os.market_timestamp
+from option_snapshots os
+join option_contracts oc on oc.contract_id = os.contract_id
+join instruments i on i.instrument_id = oc.instrument_id
+where i.symbol = %(symbol)s and os.market_timestamp >= %(since)s
+order by os.market_timestamp desc
+limit 2;
+"""
+
+_CHAIN_LEGS = """
+select oc.expiry_date, oc.strike, oc.option_type, os.oi, os.iv
+from option_snapshots os
+join option_contracts oc on oc.contract_id = os.contract_id
+join instruments i on i.instrument_id = oc.instrument_id
+where i.symbol = %(symbol)s and os.market_timestamp = %(ts)s;
+"""
+
+_LATEST_DAILY_CLOSE = """
+select pb.close
+from price_bars pb
+join instruments i on i.instrument_id = pb.instrument_id
+where i.symbol = %(symbol)s and pb.timeframe = '1d'
+order by pb.market_timestamp desc
+limit 1;
+"""
+
+
 class PostgresPersistence:
     def __init__(self, dsn: str | None = None):
         self._dsn = dsn or config.database_url
@@ -82,6 +110,22 @@ class PostgresPersistence:
         with self._conn.cursor() as cur:
             cur.execute("select symbol from instruments where is_active = true order by symbol")
             return [row[0] for row in cur.fetchall()]
+
+    def option_chain_timestamps(self, symbol: str, since) -> list:
+        with self._conn.cursor() as cur:
+            cur.execute(_CHAIN_TIMESTAMPS, {"symbol": symbol, "since": since})
+            return [row[0] for row in cur.fetchall()]
+
+    def option_chain_legs(self, symbol: str, ts) -> list[dict]:
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(_CHAIN_LEGS, {"symbol": symbol, "ts": ts})
+            return cur.fetchall()
+
+    def latest_daily_close(self, symbol: str) -> float | None:
+        with self._conn.cursor() as cur:
+            cur.execute(_LATEST_DAILY_CLOSE, {"symbol": symbol})
+            row = cur.fetchone()
+            return float(row[0]) if row else None
 
     def save_price_bars(self, bars: list[CanonicalPriceBar], ingestion_run_id: uuid.UUID) -> None:
         with self._conn.cursor() as cur:
