@@ -42,6 +42,18 @@ function Ensure-DatabaseConfig {
   if ($env:DATABASE_MODE -eq 'local_postgres' -and -not $env:D_PREDICT_DATA_DIR) { Die 'D_PREDICT_DATA_DIR is missing. Run .\database-setup.ps1.' }
 }
 function Ensure-ComposeFile { if (-not (Test-Path $ComposeFile)) { Die 'docker-compose.yml is missing.' } }
+function Ensure-ProjectEnvFile {
+  # docker-compose.yml feeds service config from a project-level .env, but a
+  # fresh install keeps the user's real settings in $StateRoot instead. Seed
+  # (never overwrite) the project copy so containers receive the configuration
+  # the user chose at setup time.
+  $ProjectEnv = Join-Path $Root '.env'
+  if (Test-Path $ProjectEnv) { return }
+  $seed = @($EnvFile, (Join-Path $Root '.env.example')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if (-not $seed) { return }
+  Copy-Item $seed $ProjectEnv
+  Info "Created .env for Docker Compose from $(Split-Path -Leaf $seed)"
+}
 function Ensure-DockerReady {
   Refresh-Path
   Need docker
@@ -180,6 +192,7 @@ function Invoke-Train {
 $Command = if ($args.Count) { $args[0].ToLowerInvariant() } else { 'help' }
 if ($Command -eq 'setup-db' -or $Command -eq 'database') { Invoke-Setup; exit $LASTEXITCODE }
 Ensure-DatabaseConfig
+Ensure-ProjectEnvFile
 switch ($Command) {
   'start' { Invoke-Start }
   'stop' { Invoke-Stop }
