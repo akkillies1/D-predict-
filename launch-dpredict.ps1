@@ -13,6 +13,47 @@ function Log([string]$Message) {
   $line | Tee-Object -FilePath $LogFile -Append
 }
 
+function Resolve-BrowserExe {
+  # Prefer the executable behind the user's http association, then the common
+  # Chromium/Gecko installs. Resolved paths are returned in that order.
+  $found = @()
+  $progId = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice' -ErrorAction SilentlyContinue).ProgId
+  if ($progId) {
+    foreach ($hive in @('HKCU:\Software\Classes', 'HKLM:\SOFTWARE\Classes')) {
+      $command = (Get-ItemProperty "$hive\$progId\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+      if ($command -and $command -match '"([^"]+\.exe)"') { $found += $Matches[1] }
+    }
+  }
+  foreach ($path in @("$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "$env:ProgramFiles\Mozilla Firefox\firefox.exe")) {
+    $found += $path
+  }
+  $found | Where-Object { $_ } | Select-Object -Unique
+}
+
+function Open-DashboardBrowser([string]$Url) {
+  # Handing a URL to an already-running Edge/Chrome opens a tab in whichever
+  # window that instance owns and the launched process exits at once, so a bare
+  # Start-Process reports success while nothing becomes visible. --new-window
+  # forces a window the user can actually see.
+  foreach ($exe in (Resolve-BrowserExe)) {
+    if (-not (Test-Path $exe)) { continue }
+    try {
+      Start-Process -FilePath $exe -ArgumentList @('--new-window', "`"$Url`"") -ErrorAction Stop
+      Log "Opened $Url in a new $([IO.Path]::GetFileName($exe)) window."
+      return
+    } catch {
+      Log "Launch attempt failed for ${exe}: $($_.Exception.Message)"
+    }
+  }
+  try {
+    Start-Process $Url
+    Log "Opened $Url with the Windows default handler."
+  } catch {
+    Log "Default handler failed: $($_.Exception.Message)"
+  }
+  Log "If no window appeared, open $Url manually."
+}
+
 try {
   Log 'D-Predict launcher starting.'
 
@@ -57,7 +98,7 @@ try {
   } catch {
     Log 'Market readiness endpoint is not available yet; dashboard will still open.'
   }
-  Start-Process $dashboardUrl
+  Open-DashboardBrowser $dashboardUrl
   Log 'D-Predict launched successfully.'
 } catch {
   Log "ERROR: $($_.Exception.Message)"
