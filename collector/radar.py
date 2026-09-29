@@ -7,13 +7,38 @@ numbers that fired it so an alert can always be audited. No ML: every current
 artifact fails the OOS promotion gate, so a model trigger would be noise.
 """
 
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from math import sqrt
+from zoneinfo import ZoneInfo
 
 MIN_BARS_PRICE = 22          # momentum_turn (needs two overlapping 20-bar windows) + SMA cross prev window
 MIN_BARS_VOLUME = 21         # volume_z20_spike
 MOM_NET_GATE = 0.003         # 20-session return must clear ~0.30% — above a CNC round trip's costs
 VOL_Z_THRESHOLD = 2.0        # spikes at least 2 std above the prior 20-session mean
 VOL_Z_REQUIRE_UPDAY = 0.0    # 5-session drift must be strictly above this when the spike lands
+SUSPECT_JUMP = 0.25          # |1-day move| this large reads as a split/corporate-action artifact, not momentum
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def drop_partial_last_bar(items, timestamp_of, now: datetime | None = None):
+    """Yahoo timestamps each NSE daily bar at that session's midnight IST, so
+    an intraday sweep sees TODAY's bar still being written — a cross measured
+    on it can vanish at the close. Today's bar is therefore only usable after
+    the 15:30 IST close (plus a 10-minute settling buffer); earlier sessions
+    are always complete. Bars are oldest-first; only the tail can be live."""
+    if not items:
+        return items
+    ts = timestamp_of(items[-1])
+    if ts is None:
+        return items
+    now_ist = (now or datetime.now(timezone.utc)).astimezone(IST)
+    ts_ist = ts.astimezone(IST) if ts.tzinfo else datetime.fromtimestamp(ts.timestamp(), IST)
+    if ts_ist.date() != now_ist.date():
+        return items
+    session_closed = (now_ist.hour, now_ist.minute) >= (15, 40)
+    return items if session_closed else items[:-1]
 
 RADAR_SYMBOLS: tuple[str, ...] = (
     "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "HINDUNILVR", "SBIN",
@@ -109,6 +134,10 @@ def evaluate_rules(closes: list[float], volumes: list[float | None]) -> list[tup
     """Every rule is evaluated independently; one bar window can raise more
     than one alert (each is separately deduped and auditable)."""
     fired: list[tuple[str, dict]] = []
+    if len(closes) >= 2 and closes[-2] > 0 and abs(closes[-1] / closes[-2] - 1) > SUSPECT_JUMP:
+        # A one-day re-pricing this large is almost always a split/data
+        # artifact in an unadjusted series; every rule below would misfire.
+        return fired
     for name, evidence in (
         ("momentum_turn", momentum_turn(closes)),
         ("sma20_cross_up", sma20_cross_up(closes)),

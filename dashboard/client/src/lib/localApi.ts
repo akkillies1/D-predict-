@@ -74,6 +74,7 @@ export async function getAlerts(limit = 20, symbol?: string, signal?: AbortSigna
   return payload.ok ? payload : { ...payload, alerts: payload.alerts ?? [], unreadCount: payload.unreadCount ?? 0 };
 }
 export async function ackAlert(id: number): Promise<{ ok: boolean; id: number }> { return json(`${API_BASE}/api/alerts/${id}/ack`, { method: "POST" }); }
+export async function ackAllAlerts(): Promise<{ ok: boolean; acknowledged: number }> { return json(`${API_BASE}/api/alerts/ack-all`, { method: "POST" }); }
 export async function getMarketScan(limit = 5, signal?: AbortSignal): Promise<{ picks: MarketPick[]; excluded: Array<{ symbol: string; reason: string }>; asOf: string; methodology: string; disclaimer: string }> { return json(`${API_BASE}/api/market/scan?limit=${Math.max(1, Math.min(5, Math.round(limit)))}`, { signal }); }
 export async function getPredictionPerformance(days = 30, signal?: AbortSignal): Promise<PredictionPerformance> { return json<PredictionPerformance>(`${API_BASE}/api/predictions/performance?days=${Math.max(1, Math.min(365, Math.round(days)))}`, { signal }); }
 export async function getLivePrediction(symbol: string, horizon: 1 | 3 | 5 = 1, signal?: AbortSignal): Promise<LivePrediction | null> { try { const payload = await json<LivePrediction & { ok?: boolean }>(`${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`, { signal }); return payload.ok === false ? null : payload; } catch { return null; } }

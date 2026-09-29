@@ -583,7 +583,7 @@ export default function DecisionDashboard() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <AlertsBell symbol={symbol} />
+            <AlertsBell symbol={symbol} onSelectSymbol={selectSymbol} />
             <MarketSessionClock className="hidden md:inline-flex" />
             <span
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] ${connected ? "border-[#3d5b38] bg-[#142419] text-[#c8f169]" : "border-[#5a4328] bg-[#21180e] text-[#e5b55f]"}`}

@@ -12,7 +12,7 @@ from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
 from collector.persistence.postgres import PostgresPersistence
-from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, evaluate_rules
+from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, drop_partial_last_bar, evaluate_rules
 from collector.validation.market_data import validate_option_snapshot, validate_price_bar
 
 logger = get_logger(__name__)
@@ -132,7 +132,7 @@ class Poller:
 
         tracked = self._db.active_symbols()
         for symbol in tracked:
-            rows = self._db.daily_bars(symbol)
+            rows = drop_partial_last_bar(self._db.daily_bars(symbol), lambda row: row["market_timestamp"])
             if len(rows) < MIN_BARS_PRICE:
                 continue
             closes = [float(row["close"]) for row in rows]
@@ -156,6 +156,7 @@ class Poller:
                     logger.exception("radar fetch failed for %s (run=%s)", symbol, run_id)
                     continue
                 valid = [bar for bar in bars if not validate_price_bar(bar)]
+                valid = drop_partial_last_bar(valid, lambda bar: bar.market_timestamp)
                 if len(valid) < MIN_BARS_PRICE:
                     logger.debug("radar %s: only %d valid bars, below evaluation minimum", symbol, len(valid))
                     continue

@@ -470,6 +470,14 @@ app.get("/api/alerts", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: "ALERTS_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
+app.post("/api/alerts/ack-all", async (_req, res) => {
+  if (!pool) return noDb(res);
+  try {
+    const result = await pool.query("update buy_alerts set acknowledged = true where acknowledged = false returning id");
+    return res.json({ ok: true, acknowledged: result.rowCount ?? 0 });
+  } catch (error) { return res.status(500).json({ ok: false, error: "ALERT_ACK_FAILED", message: error instanceof Error ? error.message : "update_failed" }); }
+});
+
 app.post("/api/alerts/:id/ack", async (req, res) => {
   if (!pool) return noDb(res);
   const id = Number(req.params.id);
