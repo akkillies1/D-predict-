@@ -66,11 +66,10 @@ $common = @{
   FEATURE_SET_VERSION = 'v1'
   STRATEGY_VERSION = 'v1'
   MODEL_VERSION = 'validated-python-ml-v1'
-  AI_MODE = 'disabled'
-  AI_PROVIDER = ''
-  AI_BASE_URL = ''
-  AI_API_KEY = ''
-  AI_MODEL = ''
+  NVIDIA_API_KEY = ''
+  NVIDIA_API_BASE_URL = 'https://integrate.api.nvidia.com/v1'
+  NVIDIA_MODEL = ''
+  AI_TIMEOUT_MS = '90000'
 }
 
 if ($mode -eq 'local_postgres') {

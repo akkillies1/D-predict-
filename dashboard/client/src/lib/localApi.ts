@@ -93,3 +93,74 @@ export async function getTrainingCoverage(signal?: AbortSignal): Promise<Trainin
 export async function runTraining(body: { forceSymbols?: string[]; trigger?: string } = {}): Promise<TrainingRunReport> { return json<TrainingRunReport>(`${API_BASE}/api/training/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trigger: body.trigger ?? "MANUAL", forceSymbols: body.forceSymbols ?? null }) }); }
 export async function retrainStale(): Promise<TrainingRunReport> { return json<TrainingRunReport>(`${API_BASE}/api/training/retrain-stale`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); }
 export async function retrainSymbol(symbol: string): Promise<TrainingRunReport> { return json<TrainingRunReport>(`${API_BASE}/api/training/${encodeURIComponent(symbol)}/retrain`, { method: "POST" }); }
+
+// --- Optional bring-your-own-key AI assistant (NVIDIA NIM or any
+// OpenAI-compatible endpoint). The key lives in the user's local database; the
+// browser only ever sees the masked form the backend returns.
+export type AiStatus = { ok: boolean; configured: boolean; enabled: boolean; source: "saved" | "env" | null; maskedKey: string | null; looksLikeNvidiaKey: boolean | null; baseUrl: string; model: string | null; disclaimer: string; removed?: boolean; note?: string | null };
+export type AiConfigInput = { apiKey?: string; baseUrl?: string; model?: string | null; enabled?: boolean };
+export type AiModelsResult = { ok: boolean; models: string[]; nemotron: string[]; count?: number; error?: string; message?: string };
+export type AiEvidenceBlock = { label: string; data: unknown; asOf?: string | null };
+export type AiMessage = { role: "user" | "assistant"; content: string };
+export type AiChatResult = { ok: boolean; text: string; model: string | null; error?: string; message?: string };
+
+export async function getAiStatus(signal?: AbortSignal): Promise<AiStatus> { return json<AiStatus>(`${API_BASE}/api/ai/status`, { signal }); }
+export async function saveAiConfig(input: AiConfigInput): Promise<AiStatus> { return json<AiStatus>(`${API_BASE}/api/ai/config`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); }
+export async function clearAiConfig(): Promise<AiStatus> { return json<AiStatus>(`${API_BASE}/api/ai/config`, { method: "DELETE" }); }
+export async function getAiModels(signal?: AbortSignal): Promise<AiModelsResult> {
+  const payload = await json<AiModelsResult & { models?: string[] }>(`${API_BASE}/api/ai/models`, { signal });
+  return { ...payload, models: payload.models ?? [], nemotron: payload.nemotron ?? [] };
+}
+
+/** Streams one answer, forwarding tokens as they arrive. Provider-side failures
+ * come back as an ok:false result rather than a thrown error so the caller can
+ * show the exact reason (bad key, no credits, rate limit) instead of "it hung". */
+export async function streamAiChat(input: { question: string; evidence?: AiEvidenceBlock[]; messages?: AiMessage[]; marketContext?: string | null; onToken: (token: string) => void; signal?: AbortSignal }): Promise<AiChatResult> {
+  const response = await fetch(`${API_BASE}/api/ai/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify({ question: input.question, evidence: input.evidence ?? [], messages: input.messages ?? [], marketContext: input.marketContext ?? null, stream: true }),
+    signal: input.signal,
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.includes("text/event-stream")) {
+    const body = await response.json().catch(() => null) as { error?: string; message?: string; model?: string } | null;
+    return { ok: false, text: "", model: body?.model ?? null, error: body?.error ?? `AI_REQUEST_FAILED`, message: body?.message ?? `Assistant request failed (HTTP ${response.status}).` };
+  }
+  if (!response.body) return { ok: false, text: "", model: null, error: "AI_NO_STREAM", message: "The assistant returned no stream to read." };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let model: string | null = null;
+  let failure: { error?: string; message?: string } | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+      if (line.startsWith("event:")) {
+        if (line.slice(6).trim() === "aierror") failure = { error: "AI_STREAM_INTERRUPTED" };
+        continue;
+      }
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { continue; }
+      if (parsed.ok === true && typeof parsed.model === "string") { model = parsed.model; continue; }
+      if (parsed.ok === false) { failure = { error: typeof parsed.error === "string" ? parsed.error : "AI_STREAM_ERROR", message: typeof parsed.message === "string" ? parsed.message : undefined }; continue; }
+      const choices = Array.isArray(parsed.choices) ? parsed.choices as Array<Record<string, unknown>> : [];
+      const delta = choices[0]?.delta as Record<string, unknown> | undefined;
+      const piece = typeof delta?.content === "string" ? delta.content : typeof choices[0]?.text === "string" ? choices[0].text as string : "";
+      if (piece) { text += piece; input.onToken(piece); }
+    }
+  }
+  if (failure) return { ok: false, text, model, error: failure.error ?? "AI_STREAM_ERROR", message: failure.message ?? "The assistant could not complete this answer." };
+  if (!text.trim()) return { ok: false, text: "", model, error: "AI_EMPTY_RESPONSE", message: "The model returned an empty answer. Try rephrasing, or pick a smaller model in assistant settings." };
+  return { ok: true, text, model };
+}

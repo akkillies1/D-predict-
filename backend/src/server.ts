@@ -10,6 +10,7 @@ import { attachLiveHub } from "./liveHub.js";
 import { rankMarketCandidates } from "./marketScanner.js";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
 import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
+import { createAiRouter } from "./aiRoutes.js";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
@@ -385,6 +386,8 @@ app.get("/api/options/chain", async (req, res) => {
 
 app.use("/api/shadow", createShadowRouter(pool));
 app.use("/api/paper", createPaperRouter(pool));
+// Optional bring-your-own-key assistant; loopback-only, key never leaves as-is.
+app.use("/api/ai", createAiRouter(pool));
 
 function normalCdf(value: number): number {
   const sign = value < 0 ? -1 : 1;

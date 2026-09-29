@@ -27,6 +27,7 @@ services:
       - ./db/migrations/013_training_registry.sql:/docker-entrypoint-initdb.d/013-training-registry.sql:ro
       - ./db/migrations/014_buy_alerts.sql:/docker-entrypoint-initdb.d/014-buy-alerts.sql:ro
       - ./db/migrations/015_alert_rules_options.sql:/docker-entrypoint-initdb.d/015-alert-rules-options.sql:ro
+      - ./db/migrations/016_ai_settings.sql:/docker-entrypoint-initdb.d/016-ai-settings.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
       interval: 5s

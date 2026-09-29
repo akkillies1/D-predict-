@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ErrorBoundary from "./components/ErrorBoundary";
+import AiAssistant from "./components/AiAssistant";
+import AiSettings from "./components/AiSettings";
 import DatabaseSettings from "./components/DatabaseSettings";
 import DecisionDashboard from "./components/DecisionDashboard";
 import IPOAnalyzer from "./components/IPOAnalyzer";
@@ -42,9 +44,11 @@ function App() {
               <OptionChainTradingPanel />
               <ShadowTradingPanel />
               <ModelCoveragePanel />
+              <AiAssistant />
               <ResearchPanel />
               <IPOAnalyzer />
               <DatabaseSettings />
+              <AiSettings />
             </>
           )}
         </TooltipProvider>
