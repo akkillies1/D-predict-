@@ -8,6 +8,7 @@ import { createShadowRouter } from "./shadowRoutes.js";
 import { createPaperRouter } from "./paperRoutes.js";
 import { attachLiveHub } from "./liveHub.js";
 import { rankMarketCandidates } from "./marketScanner.js";
+import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
@@ -315,6 +316,22 @@ app.get("/api/market/:symbol/history", async (req, res) => {
     if (!result.rows.length) return res.json({ ok: true, symbol, timeframe, rows: [], status: "NO_DATA" });
     return res.json({ ok: true, symbol, timeframe, rows: result.rows.reverse().map((row) => ({ timestamp: iso(row.market_timestamp), open: finite(row.open), high: finite(row.high), low: finite(row.low), close: finite(row.close), volume: finite(row.volume) })) });
   } catch (error) { return res.status(500).json({ ok: false, error: "HISTORY_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
+});
+
+app.get("/api/backtest/:symbol", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = symbolParam(req.params.symbol);
+  if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  const strategy = String(req.query.strategy ?? "sma_trend").trim().toLowerCase();
+  if (!BACKTEST_STRATEGIES.includes(strategy as BacktestStrategy)) return res.status(400).json({ ok: false, error: "INVALID_STRATEGY", allowed: BACKTEST_STRATEGIES });
+  const days = Math.min(1825, Math.max(60, Number(req.query.days ?? 365)));
+  try {
+    const result = await pool.query(`select pb.market_timestamp, pb.close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where upper(i.symbol)=$1 and pb.timeframe='1d' order by pb.market_timestamp desc limit $2`, [symbol, days]);
+    const bars = result.rows.reverse().map((row) => ({ timestamp: iso(row.market_timestamp) ?? "", close: Number(row.close) })).filter((bar) => bar.timestamp && Number.isFinite(bar.close) && bar.close > 0);
+    const outcome = runBacktest(bars, strategy as BacktestStrategy);
+    if (!outcome.ok) return unavailable(res, outcome.error ?? "BACKTEST_FAILED", { symbol, strategy, bars: outcome.bars, requiredBars: outcome.requiredBars });
+    return res.json({ ...outcome, symbol });
+  } catch (error) { return res.status(500).json({ ok: false, error: "BACKTEST_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
 const PERIOD_DAYS: Record<string, number> = { "1D": 1, "5D": 5, "1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365, "2Y": 730, "3Y": 1095, "5Y": 1825 };

@@ -61,6 +61,7 @@ import LiveTickerSearch from "@/components/LiveTickerSearch";
 import MarketSessionClock from "@/components/MarketSessionClock";
 import TradingDesk from "@/components/TradingDesk";
 import PriceChart, { type ChartOverlays, type ChartBand } from "@/components/PriceChart";
+import BacktestCard from "@/components/BacktestCard";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 const TIMEFRAME_KEY = "dpredict:chart-timeframe";
@@ -567,6 +568,7 @@ export default function DecisionDashboard() {
               "Forecast",
               "Derivatives",
               "Evidence",
+              "Backtest",
               "Risk",
               "Paper Lab",
             ].map((item, i) => (
@@ -1026,6 +1028,8 @@ export default function DecisionDashboard() {
             </div>
           </Card>
         </section>
+
+        <BacktestCard symbol={symbol} />
 
         <section
           id="picks"
