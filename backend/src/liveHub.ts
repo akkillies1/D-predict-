@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import type { Pool } from "pg";
 import { WebSocketServer, WebSocket } from "ws";
 import { buildPaperState, matchRestingOrders, symbolQuote } from "./paperRoutes.js";
+import { fetchAlertsSince, mapAlertRow } from "./alertFeed.js";
 
 const PUSH_INTERVAL_MS = 4000;
 
@@ -39,7 +40,18 @@ export function attachLiveHub(server: Server, pool: Pool | null): void {
 
   // Runs whether or not a client is connected: this is what makes an after-hours order fill
   // at the next session's open with the dashboard closed. buildPaperState is now read-only.
+  // The alert cursor advances even with no clients, so a later connection gets history via
+  // GET /api/alerts instead of a burst of stale pushes.
+  let lastAlertId = 0;
   const timer = setInterval(async () => {
+    let newAlerts: ReturnType<typeof mapAlertRow>[] = [];
+    try {
+      const rows = await fetchAlertsSince(pool, lastAlertId);
+      for (const row of rows) {
+        lastAlertId = Number(row.id);
+        newAlerts.push(mapAlertRow(row));
+      }
+    } catch { /* buy_alerts may not exist yet; polls continue */ }
     try {
       await matchRestingOrders(pool);
       if (wss.clients.size === 0) return;
@@ -47,6 +59,7 @@ export function attachLiveHub(server: Server, pool: Pool | null): void {
       const quoteCache = new Map<string, unknown>();
       for (const [socket, symbols] of watched) {
         send(socket, { type: "state", state });
+        for (const alert of newAlerts) send(socket, { type: "alert", alert });
         for (const symbol of symbols) {
           if (!quoteCache.has(symbol)) quoteCache.set(symbol, await symbolQuote(pool, symbol));
           send(socket, { type: "quote", symbol, quote: quoteCache.get(symbol) });

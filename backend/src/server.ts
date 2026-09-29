@@ -9,6 +9,7 @@ import { createPaperRouter } from "./paperRoutes.js";
 import { attachLiveHub } from "./liveHub.js";
 import { rankMarketCandidates } from "./marketScanner.js";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
+import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
@@ -448,6 +449,36 @@ app.get("/api/market/scan", async (req, res) => {
     const scan = rankMarketCandidates(inputs, { maxPicks: limit, roundTripCost, maxDataAgeDays: 10, marketOpen }, now);
     return res.json({ ok: true, ...scan, marketOpen, requestedPicks: limit, roundTripCost, disclaimer: "Research ranking only. It is not investment advice and does not guarantee performance. Signal-grade picks require a calibrated model that cleared the OOS promotion gate; when none exists, qualifying instruments may still appear as momentum-evidence picks derived purely from realized closes (explicitly not a forward return forecast). Instruments are excluded for insufficient or stale history, or when realized momentum is not positive net of assumed cost. When the market is closed, prices are labeled as the last verified session." });
   } catch (error) { return res.status(500).json({ ok: false, error: "MARKET_SCAN_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
+});
+
+app.get("/api/alerts", async (req, res) => {
+  if (!pool) return noDb(res);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const symbol = req.query.symbol == null ? null : symbolParam(req.query.symbol);
+  if (symbol && invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  try {
+    const [rows, unread] = await Promise.all([
+      fetchRecentAlerts(pool, limit, symbol),
+      pool.query("select count(*)::int as count from buy_alerts where acknowledged = false"),
+    ]);
+    return res.json({
+      ok: true,
+      alerts: rows.map(mapAlertRow),
+      unreadCount: Number(unread.rows[0]?.count ?? 0),
+      disclaimer: "Rule-evidence flags from closed-form screens over real daily bars (collector radar), not investment advice. No ML model participates: every artifact currently fails the OOS promotion gate.",
+    });
+  } catch (error) { return res.status(500).json({ ok: false, error: "ALERTS_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
+});
+
+app.post("/api/alerts/:id/ack", async (req, res) => {
+  if (!pool) return noDb(res);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: "INVALID_ALERT_ID" });
+  try {
+    const result = await pool.query("update buy_alerts set acknowledged = true where id = $1 returning id", [id]);
+    if (result.rowCount === 0) return res.status(404).json({ ok: false, error: "ALERT_NOT_FOUND", id });
+    return res.json({ ok: true, id });
+  } catch (error) { return res.status(500).json({ ok: false, error: "ALERT_ACK_FAILED", message: error instanceof Error ? error.message : "update_failed" }); }
 });
 function numberOrNull(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }
 function clampScore(value: number): number { return Math.max(0, Math.min(100, Math.round(value))); }

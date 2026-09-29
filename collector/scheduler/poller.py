@@ -8,10 +8,11 @@ import time
 import uuid
 
 from collector.adapters.nse import NSEAdapter
-from collector.adapters.yahoo import YahooAdapter
+from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
 from collector.persistence.postgres import PostgresPersistence
+from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, evaluate_rules
 from collector.validation.market_data import validate_option_snapshot, validate_price_bar
 
 logger = get_logger(__name__)
@@ -22,6 +23,7 @@ class Poller:
         self._nse = NSEAdapter()
         self._yahoo = YahooAdapter()
         self._db = PostgresPersistence()
+        self._radar_cursor = 0
 
     def run_option_chain_poll(self) -> None:
         run_id = uuid.uuid4()
@@ -103,6 +105,73 @@ class Poller:
                 symbol, run_id, len(valid), dropped,
             )
 
+    def _raise_alerts(self, symbol: str, fired, closes, last_ts, basis: str, bars: int, run_id, new_to_radar: bool) -> int:
+        """Persist rule triggers with the exact numbers that fired them;
+        24h per-(symbol, rule) cooldown keeps one regime change from spam."""
+        raised = 0
+        for rule, evidence in fired:
+            evidence = {**evidence, "basis": basis, "bars_evaluated": bars, "as_of": last_ts.isoformat()}
+            if self._db.alert_is_recent(symbol, rule, config.alert_cooldown_hours):
+                continue
+            alert_id = self._db.insert_alert(symbol, rule, evidence, closes[-1], last_ts, new_to_radar)
+            if alert_id is not None:
+                raised += 1
+                logger.info(
+                    "buy_alert id=%s symbol=%s rule=%s new_to_radar=%s run=%s",
+                    alert_id, symbol, rule, new_to_radar, run_id,
+                )
+        return raised
+
+    def run_alert_sweep(self) -> None:
+        """Radar sweep: rules run on persisted daily bars for tracked
+        instruments; untracked radar candidates are fetched live in small
+        rotation slices and only onboarded (activated + bars persisted) when
+        a rule actually fires — never speculatively."""
+        run_id = uuid.uuid4()
+        raised = 0
+
+        tracked = self._db.active_symbols()
+        for symbol in tracked:
+            rows = self._db.daily_bars(symbol)
+            if len(rows) < MIN_BARS_PRICE:
+                continue
+            closes = [float(row["close"]) for row in rows]
+            volumes = [None if row["volume"] is None else float(row["volume"]) for row in rows]
+            fired = evaluate_rules(closes, volumes)
+            if fired:
+                raised += self._raise_alerts(symbol, fired, closes, rows[-1]["market_timestamp"], "stored_bars", len(closes), run_id, False)
+
+        candidates = [symbol for symbol in RADAR_SYMBOLS if symbol not in set(tracked)]
+        chunk = config.radar_sweep_chunk
+        if candidates and chunk > 0:
+            start = self._radar_cursor % len(candidates)
+            slice_symbols = candidates[start:start + chunk]
+            if len(slice_symbols) < chunk:
+                slice_symbols += candidates[:chunk - len(slice_symbols)]
+            self._radar_cursor = (start + chunk) % len(candidates)
+            for symbol in slice_symbols:
+                try:
+                    bars = self._yahoo.fetch_price_bars(symbol, period="6mo", interval="1d")
+                except Exception:
+                    logger.exception("radar fetch failed for %s (run=%s)", symbol, run_id)
+                    continue
+                valid = [bar for bar in bars if not validate_price_bar(bar)]
+                if len(valid) < MIN_BARS_PRICE:
+                    logger.debug("radar %s: only %d valid bars, below evaluation minimum", symbol, len(valid))
+                    continue
+                closes = [bar.close for bar in valid]
+                volumes = [None if bar.volume is None else float(bar.volume) for bar in valid]
+                fired = evaluate_rules(closes, volumes)
+                if not fired:
+                    continue
+                new_to_radar = self._db.radar_active_count() < config.radar_max_onboarded
+                if new_to_radar:
+                    self._db.activate_radar_instrument(symbol, provider_symbol(symbol))
+                    self._db.save_price_bars(valid, run_id)
+                raised += self._raise_alerts(symbol, fired, closes, valid[-1].market_timestamp, "radar_fetch", len(closes), run_id, new_to_radar)
+
+        logger.info("alert_sweep run=%s tracked=%d radar_slice=%d alerts=%d", run_id, len(tracked), chunk, raised)
+
     def _symbols(self) -> list[str]:
         return self._db.active_symbols()
 
@@ -111,6 +180,7 @@ class Poller:
         scheduler (APScheduler / cron-triggered invocation) once this is stable."""
         last_option_poll = 0.0
         last_price_poll = 0.0
+        last_alert_sweep = 0.0
 
         logger.info("starting collector with 1m price backfill")
         try:
@@ -126,4 +196,10 @@ class Poller:
             if now - last_price_poll >= config.price_bar_poll_seconds:
                 self.run_price_bar_poll()
                 last_price_poll = now
+            if now - last_alert_sweep >= config.alert_sweep_seconds:
+                try:
+                    self.run_alert_sweep()
+                except Exception:
+                    logger.exception("alert sweep failed; continuing polls")
+                last_alert_sweep = now
             time.sleep(1)

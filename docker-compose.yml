@@ -25,6 +25,7 @@ services:
       - ./db/migrations/011_underlying_paper_trading.sql:/docker-entrypoint-initdb.d/011-underlying-paper-trading.sql:ro
       - ./db/migrations/012_ledger_costs.sql:/docker-entrypoint-initdb.d/012-ledger-costs.sql:ro
       - ./db/migrations/013_training_registry.sql:/docker-entrypoint-initdb.d/013-training-registry.sql:ro
+      - ./db/migrations/014_buy_alerts.sql:/docker-entrypoint-initdb.d/014-buy-alerts.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d nifty"]
       interval: 5s

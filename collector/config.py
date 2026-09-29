@@ -17,6 +17,12 @@ class Config:
     option_chain_poll_seconds: int = int(os.environ.get("OPTION_CHAIN_POLL_SECONDS", "60"))
     price_bar_poll_seconds: int = int(os.environ.get("PRICE_BAR_POLL_SECONDS", "60"))
 
+    # Radar alert sweep
+    alert_sweep_seconds: int = int(os.environ.get("ALERT_SWEEP_SECONDS", "300"))
+    radar_sweep_chunk: int = int(os.environ.get("RADAR_SWEEP_CHUNK", "8"))
+    radar_max_onboarded: int = int(os.environ.get("RADAR_MAX_ONBOARDED", "20"))
+    alert_cooldown_hours: int = int(os.environ.get("ALERT_COOLDOWN_HOURS", "24"))
+
     # Instruments to collect
     instruments: tuple[str, ...] = tuple(
         os.environ.get("COLLECTOR_INSTRUMENTS", "NIFTY").split(",")

@@ -64,7 +64,16 @@ export async function resetPaperAccount(mode: "trades" | "all" = "trades"): Prom
 export async function getPaperAnalytics(days = 90, signal?: AbortSignal): Promise<PaperAnalytics> { return json<PaperAnalytics>(`${API_BASE}/api/paper/analytics?days=${Math.max(1, Math.min(3650, Math.round(days)))}`, { signal }); }
 export function paperExportUrl(days = 3650): string { return `${API_BASE}/api/paper/export.csv?days=${Math.max(1, Math.min(3650, Math.round(days)))}`; }
 export function paperLiveUrl(): string { return `${API_BASE.replace(/^http/, "ws").replace(/\/+$/, "")}/live`; }
-export type LiveMessage = { type: "state"; state: PaperState } | { type: "quote"; symbol: string; quote: MarketOverview } | { type: string };
+export type LiveMessage = { type: "state"; state: PaperState } | { type: "quote"; symbol: string; quote: MarketOverview } | { type: "alert"; alert: BuyAlert } | { type: string };
+export type BuyAlert = { id: number; symbol: string; rule: string; evidence: Record<string, unknown>; price: number | null; marketTimestamp: string | null; newToRadar: boolean; acknowledged: boolean; createdAt: string | null };
+export type AlertsResult = { ok: boolean; alerts: BuyAlert[]; unreadCount: number; error?: string; disclaimer?: string };
+export async function getAlerts(limit = 20, symbol?: string, signal?: AbortSignal): Promise<AlertsResult> {
+  const params = new URLSearchParams({ limit: String(Math.max(1, Math.min(100, Math.round(limit)))) });
+  if (symbol) params.set("symbol", symbol);
+  const payload = await json<AlertsResult>(`${API_BASE}/api/alerts?${params.toString()}`, { signal });
+  return payload.ok ? payload : { ...payload, alerts: payload.alerts ?? [], unreadCount: payload.unreadCount ?? 0 };
+}
+export async function ackAlert(id: number): Promise<{ ok: boolean; id: number }> { return json(`${API_BASE}/api/alerts/${id}/ack`, { method: "POST" }); }
 export async function getMarketScan(limit = 5, signal?: AbortSignal): Promise<{ picks: MarketPick[]; excluded: Array<{ symbol: string; reason: string }>; asOf: string; methodology: string; disclaimer: string }> { return json(`${API_BASE}/api/market/scan?limit=${Math.max(1, Math.min(5, Math.round(limit)))}`, { signal }); }
 export async function getPredictionPerformance(days = 30, signal?: AbortSignal): Promise<PredictionPerformance> { return json<PredictionPerformance>(`${API_BASE}/api/predictions/performance?days=${Math.max(1, Math.min(365, Math.round(days)))}`, { signal }); }
 export async function getLivePrediction(symbol: string, horizon: 1 | 3 | 5 = 1, signal?: AbortSignal): Promise<LivePrediction | null> { try { const payload = await json<LivePrediction & { ok?: boolean }>(`${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`, { signal }); return payload.ok === false ? null : payload; } catch { return null; } }

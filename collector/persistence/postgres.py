@@ -104,6 +104,89 @@ class PostgresPersistence:
                 )
         logger.info("persisted %d price bars", len(bars))
 
+    def daily_bars(self, symbol: str, limit: int = 60) -> list[dict]:
+        """Most recent daily closes/volumes, oldest first — the sweep's view
+        of what the collector has already persisted for this instrument."""
+        with self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                select pb.market_timestamp, pb.close, pb.volume
+                from price_bars pb
+                join instruments i on i.instrument_id = pb.instrument_id
+                where i.symbol = %s and pb.timeframe = '1d'
+                order by pb.market_timestamp desc
+                limit %s
+                """,
+                (symbol, limit),
+            )
+            rows = cur.fetchall()
+        return list(reversed(rows))
+
+    def alert_is_recent(self, symbol: str, rule: str, cooldown_hours: int) -> bool:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                select exists(
+                    select 1 from buy_alerts
+                    where symbol = %s and rule = %s
+                      and created_at > now() - (%s || ' hours')::interval
+                )
+                """,
+                (symbol, rule, str(cooldown_hours)),
+            )
+            return bool(cur.fetchone()[0])
+
+    def insert_alert(
+        self,
+        symbol: str,
+        rule: str,
+        evidence: dict,
+        price: float,
+        market_timestamp,
+        new_to_radar: bool,
+    ) -> int | None:
+        """Idempotent on (symbol, rule, market_timestamp): returns the alert
+        id, or None when that exact bar/rule already alerted."""
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into buy_alerts (symbol, rule, evidence, price, market_timestamp, new_to_radar)
+                    values (%s, %s, %s, %s, %s, %s)
+                    returning id
+                    """,
+                    (
+                        symbol,
+                        rule,
+                        psycopg2.extras.Json(evidence),
+                        price,
+                        market_timestamp,
+                        new_to_radar,
+                    ),
+                )
+                return int(cur.fetchone()[0])
+        except psycopg2.errors.UniqueViolation:
+            self._conn.rollback()
+            return None
+
+    def radar_active_count(self) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute("select count(*) from instruments where canonical_source = 'radar' and is_active = true")
+            return int(cur.fetchone()[0])
+
+    def activate_radar_instrument(self, symbol: str, provider_symbol: str) -> None:
+        """First-touch onboarding: a radar trigger activates the instrument
+        so the normal poll cycles start persisting its bars."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into instruments (symbol, exchange, lot_size, is_active, provider_symbol, instrument_type, canonical_source)
+                values (%s, 'NSE', 1, true, %s, 'EQUITY', 'radar')
+                on conflict (symbol) do update set is_active = true
+                """,
+                (symbol, provider_symbol),
+            )
+
     def _get_or_create_contract_id(self, symbol: str, expiry: date, strike: float, opt_type: str):
         params = {
             "instrument_symbol": symbol,

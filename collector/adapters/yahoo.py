@@ -31,6 +31,12 @@ def _provider_symbol(symbol: str) -> str:
     return f"{canonical}.NS"
 
 
+def provider_symbol(symbol: str) -> str:
+    """Public accessor used by the radar sweep to record provider identity on
+    first-touch onboarding."""
+    return _provider_symbol(symbol)
+
+
 def _number(row, column: str) -> float | None:
     value = row[column]
     # yfinance can return a one-element Series when a DataFrame has a
