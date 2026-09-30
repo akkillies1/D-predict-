@@ -74,11 +74,7 @@ jobs:
           rsync -a --exclude='.git' --exclude='node_modules' --exclude='dashboard/node_modules' --exclude='dist' ./ dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/
           chmod +x dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/d-predict.sh
           chmod +x dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/install-dpredict.sh
-          cat > dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/VERSION <<EOF
-D-Predict ${{ steps.release.outputs.version }}
-Platform: Ubuntu/Linux x86_64
-Bundle: source + Docker runtime + local installer + dashboard launcher
-EOF
+          printf 'D-Predict %s\nPlatform: Ubuntu/Linux x86_64\nBundle: source + Docker runtime + local installer + dashboard launcher\n' '${{ steps.release.outputs.version }}' > "dist/D-Predict-Ubuntu-v${{ steps.release.outputs.version }}/VERSION"
           tar -C dist -czf "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}"
           sha256sum "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz" > "D-Predict-Ubuntu-v${{ steps.release.outputs.version }}.tar.gz.sha256"
 
