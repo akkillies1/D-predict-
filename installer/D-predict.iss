@@ -1,6 +1,6 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "2.0.2"
+#define MyAppVersion "2.1.0"
 #endif
 #ifndef MyAppSourceRef
 #define MyAppSourceRef "main"
@@ -28,9 +28,13 @@ OutputBaseFilename=D-Predict-Setup-v{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+DisableWelcomePage=no
+SetupIconFile=assets\dpredict-icon.ico
+WizardImageFile=assets\wizard-image.png
+WizardSmallImageFile=assets\wizard-small.png
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={sys}\WindowsPowerShell\v1.0\powershell.exe
+UninstallDisplayIcon={uninstallexe}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=D-Predict — Decision Intelligence Terminal for Indian Markets
@@ -60,26 +64,29 @@ Source: "..\docker-compose.yml";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md";              DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LOCAL_INSTALL_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\WINDOWS.md";             DestDir: "{app}"; Flags: ignoreversion
+; The setup icon doubles as the shortcut icon, so the app is recognisable on the
+; desktop and in Add/Remove Programs.
+Source: "assets\dpredict-icon.ico";  DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait; Check: IsDpredictInstalled
 
 [Icons]
-Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"
-Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"
-Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"
-Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; Tasks: desktopicon
+Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"; IconFilename: "{app}\assets\dpredict-icon.ico"
+Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; IconFilename: "{app}\assets\dpredict-icon.ico"
+Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"; IconFilename: "{app}\assets\dpredict-icon.ico"
+Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; Tasks: desktopicon; IconFilename: "{app}\assets\dpredict-icon.ico"
 
 [Messages]
-WelcomeLabel1=Welcome to D-Predict v2.0
-WelcomeLabel2=D-Predict is a local-first Decision Intelligence Terminal for Indian equities and NIFTY/BANKNIFTY derivatives.%n%nThis installer will:%n  - Check for required prerequisites (Docker Desktop, WSL 2, Git)%n  - Download and configure the D-Predict runtime%n  - Set up your local database and services%n%nNo cloud account or paid subscription is required.
-SelectDirLabel3=Choose where to install D-Predict. Application data (database, models, logs) will be stored separately in %LOCALAPPDATA%\D-Predict\.
+WelcomeLabel1=Welcome to {#MyAppName} v{#MyAppVersion}
+WelcomeLabel2={#MyAppName} is a local-first Decision Intelligence Terminal for Indian equities and NIFTY/BANKNIFTY derivatives.%n%nThis installer will:%n  - Check for required prerequisites (Docker Desktop, WSL 2, Git)%n  - Download and configure the {#MyAppName} runtime%n  - Set up your local database and services%n%nNo cloud account or paid subscription is required, and your data stays on this machine.
+SelectDirLabel3=Choose where to install {#MyAppName}. Application data (database, models, logs) will be stored separately in %LOCALAPPDATA%\D-Predict\.
 SelectTasksLabel2=Select additional shortcuts to create:
 PreparingDesc=Verifying prerequisites and extracting application files...
-FinishedHeadingLabel=D-Predict v2.0 installed
-FinishedLabel=D-Predict has been installed successfully.%n%nUse the D-Predict shortcut in the Start Menu to launch the application. The dashboard opens automatically at http://127.0.0.1:3000
-FinishedLabelNoIcons=D-Predict v2.0 installed. Run launch-dpredict.ps1 from the installation folder to start.
+FinishedHeadingLabel={#MyAppName} v{#MyAppVersion} installed
+FinishedLabel={#MyAppName} has been installed successfully.%n%nUse the {#MyAppName} shortcut in the Start Menu to launch the application. The dashboard opens automatically at http://127.0.0.1:3000
+FinishedLabelNoIcons={#MyAppName} v{#MyAppVersion} installed. Run launch-dpredict.ps1 from the installation folder to start.
 
 [Code]
 function IsDpredictInstalled(): Boolean;
@@ -94,7 +101,7 @@ function InitializeSetup(): Boolean;
 begin
   Result := True;
   if not IsWin64 then begin
-    MsgBox('D-Predict v2.0 requires a 64-bit version of Windows 10 or Windows 11.' + #13#10 +
+    MsgBox('{#MyAppName} v{#MyAppVersion} requires a 64-bit version of Windows 10 or Windows 11.' + #13#10 +
            'This machine is running a 32-bit OS. Installation cannot continue.',
            mbError, MB_OK);
     Result := False;

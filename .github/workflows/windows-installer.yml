@@ -19,6 +19,8 @@ permissions:
 jobs:
   build-installer:
     runs-on: windows-latest
+    env:
+      INSTALLER_VERSION: '2.1.0'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,7 +57,7 @@ jobs:
       - name: Compile installer
         shell: powershell
         run: |
-          $version = '2.0.2'
+          $version = $env:INSTALLER_VERSION
           & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' "/DMyAppVersion=$version" 'installer/D-predict.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installer = "installer/dist/D-Predict-Setup-v$version.exe"
@@ -65,7 +67,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: D-Predict Installer v2.0.2
-          path: 'installer/dist/D-Predict-Setup-v2.0.2.exe'
+          name: D-Predict Installer v${{ env.INSTALLER_VERSION }}
+          path: 'installer/dist/D-Predict-Setup-v${{ env.INSTALLER_VERSION }}.exe'
           if-no-files-found: error
           retention-days: 30
