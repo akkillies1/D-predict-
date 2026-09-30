@@ -7,8 +7,11 @@ import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
 import { createPaperRouter } from "./paperRoutes.js";
 import { attachLiveHub } from "./liveHub.js";
-import { rankMarketCandidates } from "./marketScanner.js";
+import { runMarketScan } from "./marketScan.js";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
+import { computePredictionPerformance } from "./predictionStats.js";
+import { mlFetch } from "./mlProxy.js";
+import { TRAIN_TIMEOUT_MS, acknowledgeAllAlerts, addWatchlistItem, retrainSymbol, removeWatchlistItem } from "./appActions.js";
 import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
 import { createAiRouter } from "./aiRoutes.js";
 
@@ -72,73 +75,7 @@ app.get("/api/predictions/performance", async (req, res) => {
   const requestedDays = Number(req.query.days ?? 30);
   const days = Number.isFinite(requestedDays) ? Math.min(365, Math.max(1, Math.floor(requestedDays))) : 30;
   try {
-    const result = await pool.query(`
-      select symbol, horizon, timestamp, evaluated_at, expected_return, outcome_return, outcome_class, evidence
-      from prediction_ledger
-      where timestamp >= now() - ($1::int * interval '1 day')
-      order by timestamp desc
-    `, [days]);
-    const pending = result.rows.filter((row) => row.evaluated_at == null);
-    const scored = result.rows.filter((row) => row.evaluated_at != null && ["DOWN", "FLAT", "UP"].includes(String(row.outcome_class)));
-    const safeNumber = (value: unknown) => { const number = Number(value); return Number.isFinite(number) ? number : null; };
-    const predictionOf = (row: any) => String(row.evidence?.prediction ?? "");
-    const probabilityOf = (row: any, label: string) => safeNumber(row.evidence?.probabilities?.[label]);
-    const actual = scored.map((row) => String(row.outcome_class));
-    const predicted = scored.map(predictionOf);
-    const correct = scored.map((_, index) => predicted[index] === actual[index]);
-    const accuracy = correct.length ? correct.filter(Boolean).length / correct.length : null;
-    const classes = ["DOWN", "FLAT", "UP"];
-    const recalls = classes.map((label) => {
-      const indexes = actual.map((value, index) => value === label ? index : -1).filter((index) => index >= 0);
-      return indexes.length ? indexes.filter((index) => predicted[index] === label).length / indexes.length : null;
-    }).filter((value): value is number => value != null);
-    const balancedAccuracy = recalls.length ? recalls.reduce((sum, value) => sum + value, 0) / recalls.length : null;
-    const directionalIndexes = actual.map((value, index) => ["UP", "DOWN"].includes(value) && ["UP", "DOWN"].includes(predicted[index]) ? index : -1).filter((index) => index >= 0);
-    const directionalAccuracy = directionalIndexes.length ? directionalIndexes.filter((index) => predicted[index] === actual[index]).length / directionalIndexes.length : null;
-    const probabilityRows: Array<{ row: any; probabilities: number[] }> = scored.flatMap((row) => {
-      const probabilities = classes.map((label) => probabilityOf(row, label));
-      return probabilities.every((value): value is number => value != null) ? [{ row, probabilities }] : [];
-    });
-    const logLoss = probabilityRows.length ? -probabilityRows.reduce((sum, item) => sum + Math.log(Math.max(1e-9, item.probabilities[classes.indexOf(String(item.row.outcome_class))])), 0) / probabilityRows.length : null;
-    const brier = probabilityRows.length ? probabilityRows.reduce((sum, item) => sum + item.probabilities.reduce((rowSum, probability, index) => rowSum + (probability - (classes[index] === String(item.row.outcome_class) ? 1 : 0)) ** 2, 0), 0) / probabilityRows.length : null;
-    const expectedReturns = scored.map((row) => safeNumber(row.expected_return)).filter((value): value is number => value != null);
-    const realizedReturns = scored.map((row) => safeNumber(row.outcome_return)).filter((value): value is number => value != null);
-    const pairedReturns = scored.map((row) => [safeNumber(row.expected_return), safeNumber(row.outcome_return)] as const).filter((pair): pair is readonly [number, number] => pair[0] != null && pair[1] != null);
-    const confidenceError = scored.map((row, index) => { const confidence = safeNumber(row.evidence?.confidence ?? row.confidence); return confidence == null ? null : Math.abs(confidence - (correct[index] ? 1 : 0)); }).filter((value): value is number => value != null);
-    const metrics = {
-      scoredPredictions: scored.length,
-      pendingPredictions: pending.length,
-      accuracy,
-      balancedAccuracy,
-      directionalAccuracy,
-      logLoss,
-      brier,
-      calibrationError: confidenceError.length ? confidenceError.reduce((sum, value) => sum + value, 0) / confidenceError.length : null,
-      meanExpectedReturn: expectedReturns.length ? expectedReturns.reduce((sum, value) => sum + value, 0) / expectedReturns.length : null,
-      meanRealizedReturn: realizedReturns.length ? realizedReturns.reduce((sum, value) => sum + value, 0) / realizedReturns.length : null,
-      returnMae: pairedReturns.length ? pairedReturns.reduce((sum, pair) => sum + Math.abs(pair[0] - pair[1]), 0) / pairedReturns.length : null,
-    };
-    const byHorizon = [...new Set(result.rows.map((row) => String(row.horizon)))].map((horizon) => {
-      const rows = scored.filter((row) => String(row.horizon) === horizon);
-      const wins = rows.filter((row) => predictionOf(row) === String(row.outcome_class)).length;
-      const directionalRows = rows.filter((row) => ["UP", "DOWN"].includes(predictionOf(row)) && ["UP", "DOWN"].includes(String(row.outcome_class)));
-      const horizonProbabilityRows: Array<{ row: any; probabilities: number[] }> = rows.flatMap((row) => {
-        const probabilities = classes.map((label) => probabilityOf(row, label));
-        return probabilities.every((value): value is number => value != null) ? [{ row, probabilities }] : [];
-      });
-      const horizonLogLoss = horizonProbabilityRows.length
-        ? -horizonProbabilityRows.reduce((sum, item) => sum + Math.log(Math.max(1e-9, item.probabilities[classes.indexOf(String(item.row.outcome_class))])), 0) / horizonProbabilityRows.length
-        : null;
-      return {
-        horizon,
-        scoredPredictions: rows.length,
-        accuracy: rows.length ? wins / rows.length : null,
-        directionalAccuracy: directionalRows.length ? directionalRows.filter((row) => predictionOf(row) === String(row.outcome_class)).length / directionalRows.length : null,
-        logLoss: horizonLogLoss,
-        pendingPredictions: pending.filter((row) => String(row.horizon) === horizon).length,
-      };
-    });
-    return res.json({ ok: true, periodDays: days, generatedAt: new Date().toISOString(), metrics, byHorizon });
+    return res.json(await computePredictionPerformance(pool, days));
   } catch (error) {
     return res.status(500).json({ ok: false, error: "PREDICTION_PERFORMANCE_FAILED", message: error instanceof Error ? error.message : "query_failed" });
   }
@@ -176,19 +113,6 @@ app.get("/api/predictions/live", async (req, res) => {
   }
 });
 
-async function mlFetch(path: string, init: RequestInit = {}, timeoutMs = 15000) {
-  const base = (process.env.ML_INFERENCE_URL ?? "http://ml:4300").replace(/\/$/, "");
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
-  try {
-    const response = await fetch(`${base}${path}`, { ...init, signal: controller.signal });
-    const body = await response.json().catch(() => ({ ok: false, error: "ML_INVALID_RESPONSE" }));
-    return { status: response.status, body };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 app.get("/api/training/coverage", async (req, res) => {
   const horizons = String(req.query.horizons ?? "").trim();
   const query = horizons ? `?horizons=${encodeURIComponent(horizons)}` : "";
@@ -201,7 +125,6 @@ app.get("/api/training/coverage", async (req, res) => {
 });
 
 // Training runs are long (fitting the whole active universe); allow several minutes.
-const TRAIN_TIMEOUT_MS = Math.max(60000, Number(process.env.ML_TRAIN_TIMEOUT_MS ?? 600000));
 
 app.post("/api/training/run", async (req, res) => {
   const trigger = ["AUTO_NEW_DATA", "SCHEDULED", "MANUAL"].includes(String(req.body?.trigger)) ? req.body.trigger : "MANUAL";
@@ -228,7 +151,7 @@ app.post("/api/training/:symbol/retrain", async (req, res) => {
   const horizon = String(req.query.horizon ?? req.body?.horizon ?? "1d").trim().toLowerCase();
   if (!symbol || symbol.length > 32) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
   try {
-    const { body } = await mlFetch(`/train/${encodeURIComponent(symbol)}?horizon=${encodeURIComponent(horizon)}`, { method: "POST" }, TRAIN_TIMEOUT_MS);
+    const { body } = await retrainSymbol(mlFetch, symbol, horizon, TRAIN_TIMEOUT_MS);
     return res.status(200).json(body);
   } catch (error) {
     return res.status(200).json({ ok: false, error: "ML_TRAINING_UNAVAILABLE", message: error instanceof Error ? error.message : "training_unavailable" });
@@ -358,8 +281,8 @@ app.get("/api/market/:symbol/performance", async (req, res) => {
   catch (error) { return res.status(500).json({ ok: false, error: "PERFORMANCE_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 app.get("/api/watchlist", async (_req, res) => { if (!pool) return noDb(res); try { const result = await pool.query(`select w.symbol, w.position, w.note, w.created_at, q.close, q.market_timestamp from watchlist_items w left join lateral (select pb.close, pb.market_timestamp from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=w.symbol order by pb.market_timestamp desc limit 1) q on true order by w.position, w.created_at`); return res.json({ ok: true, items: result.rows.map((row) => ({ symbol: row.symbol, position: row.position, note: row.note, price: finite(row.close), timestamp: iso(row.market_timestamp), status: row.close == null ? "NO_DATA" : "AVAILABLE" })) }); } catch (error) { return res.status(500).json({ ok: false, error: "WATCHLIST_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); } });
-app.post("/api/watchlist", async (req, res) => { if (!pool) return noDb(res); const symbol = symbolParam(req.body?.symbol); if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" }); try { const result = await pool.query(`with instrument as (insert into instruments (symbol, exchange, lot_size, is_active) values ($1, case when $1 like '%.BO' then 'BSE' else 'NSE' end, 1, true) on conflict (symbol) do update set is_active=true returning symbol), next_position as (select coalesce(max(position),-1)+1 as value from watchlist_items) insert into watchlist_items(symbol,position,note) select instrument.symbol,next_position.value,$2 from instrument,next_position on conflict(symbol) do update set note=coalesce(excluded.note,watchlist_items.note),updated_at=now() returning symbol,position,note`, [symbol, req.body?.note == null ? null : String(req.body.note)]); return res.status(201).json({ ok: true, item: result.rows[0] }); } catch (error) { return res.status(500).json({ ok: false, error: "WATCHLIST_ADD_FAILED", message: error instanceof Error ? error.message : "query_failed" }); } });
-app.delete("/api/watchlist/:symbol", async (req, res) => { if (!pool) return noDb(res); try { const result = await pool.query("delete from watchlist_items where symbol=$1", [symbolParam(req.params.symbol)]); return res.json({ ok: true, removed: result.rowCount === 1 }); } catch (error) { return res.status(500).json({ ok: false, error: "WATCHLIST_REMOVE_FAILED", message: error instanceof Error ? error.message : "query_failed" }); } });
+app.post("/api/watchlist", async (req, res) => { if (!pool) return noDb(res); const symbol = symbolParam(req.body?.symbol); if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" }); try { const item = await addWatchlistItem(pool, symbol, req.body?.note == null ? null : String(req.body.note)); return res.status(201).json({ ok: true, item }); } catch (error) { return res.status(500).json({ ok: false, error: "WATCHLIST_ADD_FAILED", message: error instanceof Error ? error.message : "query_failed" }); } });
+app.delete("/api/watchlist/:symbol", async (req, res) => { if (!pool) return noDb(res); try { const removed = await removeWatchlistItem(pool, symbolParam(req.params.symbol)); return res.json({ ok: true, removed }); } catch (error) { return res.status(500).json({ ok: false, error: "WATCHLIST_REMOVE_FAILED", message: error instanceof Error ? error.message : "query_failed" }); } });
 
 let thesisCache = new Map<string, { expiresAt: number; value: any }>();
 app.get("/api/signals/latest", async (req, res) => {
@@ -434,23 +357,7 @@ app.get("/api/market/scan", async (req, res) => {
   const limit = Math.min(5, Math.max(1, Number(req.query.limit ?? 5)));
   const roundTripCost = Number(process.env.SCANNER_ROUND_TRIP_COST ?? 0.002);
   try {
-    const result = await pool.query(`
-      select i.symbol, i.name,
-        coalesce((select json_agg(json_build_object('timestamp', b.market_timestamp, 'close', b.close) order by b.market_timestamp asc)
-          from price_bars b where b.instrument_id=i.instrument_id and b.timeframe='1d' and b.market_timestamp >= now() - interval '120 days'), '[]'::json) as bars,
-        (select json_build_object('expectedReturn', p.expected_return, 'confidence', p.confidence, 'timestamp', p.timestamp, 'horizon', p.horizon, 'calibrationStatus', p.evidence->>'calibrationStatus', 'predictionStatus', p.evidence->>'predictionStatus', 'actionStatus', p.evidence->>'actionStatus', 'modelVersion', p.model_version)
-          from prediction_ledger p where upper(p.symbol)=upper(i.symbol) and p.expected_return is not null order by p.timestamp desc limit 1) as prediction
-      from instruments i
-      where i.is_active=true and i.instrument_type in ('EQUITY','INDEX','ETF')
-      order by i.symbol`, []);
-    const inputs = result.rows.map((row) => ({ symbol: row.symbol, name: row.name, bars: Array.isArray(row.bars) ? row.bars : [], prediction: row.prediction ?? null }));
-    const now = new Date();
-    const istHour = Number(new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }).format(now));
-    const istMinute = Number(new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", minute: "2-digit" }).format(now));
-    const istWeekday = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short" }).format(now);
-    const marketOpen = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(istWeekday) && (istHour > 9 || (istHour === 9 && istMinute >= 15)) && (istHour < 15 || (istHour === 15 && istMinute <= 30));
-    const scan = rankMarketCandidates(inputs, { maxPicks: limit, roundTripCost, maxDataAgeDays: 10, marketOpen }, now);
-    return res.json({ ok: true, ...scan, marketOpen, requestedPicks: limit, roundTripCost, disclaimer: "Research ranking only. It is not investment advice and does not guarantee performance. Signal-grade picks require a calibrated model that cleared the OOS promotion gate; when none exists, qualifying instruments may still appear as momentum-evidence picks derived purely from realized closes (explicitly not a forward return forecast). Instruments are excluded for insufficient or stale history, or when realized momentum is not positive net of assumed cost. When the market is closed, prices are labeled as the last verified session." });
+    return res.json(await runMarketScan(pool, { limit, roundTripCost }));
   } catch (error) { return res.status(500).json({ ok: false, error: "MARKET_SCAN_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
@@ -476,8 +383,8 @@ app.get("/api/alerts", async (req, res) => {
 app.post("/api/alerts/ack-all", async (_req, res) => {
   if (!pool) return noDb(res);
   try {
-    const result = await pool.query("update buy_alerts set acknowledged = true where acknowledged = false returning id");
-    return res.json({ ok: true, acknowledged: result.rowCount ?? 0 });
+    const acknowledged = await acknowledgeAllAlerts(pool);
+    return res.json({ ok: true, acknowledged });
   } catch (error) { return res.status(500).json({ ok: false, error: "ALERT_ACK_FAILED", message: error instanceof Error ? error.message : "update_failed" }); }
 });
 

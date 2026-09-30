@@ -164,3 +164,132 @@ export async function streamAiChat(input: { question: string; evidence?: AiEvide
   if (!text.trim()) return { ok: false, text: "", model, error: "AI_EMPTY_RESPONSE", message: "The model returned an empty answer. Try rephrasing, or pick a smaller model in assistant settings." };
   return { ok: true, text, model };
 }
+
+export type AgentTraceEntry = {
+  callId: string;
+  step: number;
+  tool: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  summary: string;
+  durationMs: number;
+  truncated: boolean;
+  /** True when the tool changes app state rather than only reading it. */
+  write: boolean;
+  /** How the gate cleared it: your approval, or the reason the tool never ran. */
+  approval: "APPROVED" | "REFUSED" | "TIMED_OUT" | "NO_GATE" | null;
+  /** The raw JSON the local tool measured, for the user to audit. */
+  result?: unknown;
+};
+
+/** A change the agent wants to make and cannot make without your click. */
+export type AgentApprovalRequest = {
+  runId: string;
+  callId: string;
+  step: number;
+  tool: string;
+  arguments: Record<string, unknown>;
+  description: string;
+  timeoutMs: number;
+};
+
+/** The user's click coming back as an event, so the card can settle. */
+export type AgentApprovalOutcome = { callId: string; approved: boolean; source: string };
+
+export type AgentResult = AiChatResult & { trace: AgentTraceEntry[]; steps: number; toolCalls: number; runId: string | null };
+
+/** Runs one bounded investigation: the model calls local tools (real stored
+ * bars, the real backtest engine, a fresh forecast from the user's own
+ * artifacts) and the trace arrives as it happens. A tool that would change app
+ * state parks until onApproval resolves; if nobody decides, it does not run.
+ * A failed tool is reported as failed, never replaced with a plausible number. */
+export async function runAiAgent(input: {
+  question: string;
+  evidence?: AiEvidenceBlock[];
+  marketContext?: string | null;
+  onTool?: (entry: AgentTraceEntry) => void;
+  onApproval?: (request: AgentApprovalRequest) => void;
+  onApprovalResolved?: (outcome: AgentApprovalOutcome) => void;
+  onToken: (token: string) => void;
+  signal?: AbortSignal;
+}): Promise<AgentResult> {
+  const empty: AgentResult = { ok: false, text: "", model: null, trace: [], steps: 0, toolCalls: 0, runId: null };
+  const response = await fetch(`${API_BASE}/api/ai/agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify({ question: input.question, evidence: input.evidence ?? [], marketContext: input.marketContext ?? null }),
+    signal: input.signal,
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !contentType.includes("text/event-stream")) {
+    const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+    return { ...empty, error: body?.error ?? "AGENT_REQUEST_FAILED", message: body?.message ?? `Agent request failed (HTTP ${response.status}).` };
+  }
+  if (!response.body) return { ...empty, error: "AGENT_NO_STREAM", message: "The agent returned no stream to read." };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const trace: AgentTraceEntry[] = [];
+  let buffer = "";
+  let eventName = "";
+  let text = "";
+  let model: string | null = null;
+  let steps = 0;
+  let toolCalls = 0;
+  let runId: string | null = null;
+  let failure: { error?: string; message?: string } | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).replace(/\r$/, "");
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+      if (line.startsWith("event:")) { eventName = line.slice(6).trim(); continue; }
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let parsed: Record<string, unknown> | null = null;
+      try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { continue; }
+      if (eventName === "meta") {
+        if (typeof parsed.model === "string") model = parsed.model;
+        if (typeof parsed.runId === "string") runId = parsed.runId;
+      } else if (eventName === "tool") {
+        const entry = parsed as unknown as AgentTraceEntry;
+        trace.push(entry);
+        input.onTool?.(entry);
+      } else if (eventName === "approval") {
+        const request = parsed as unknown as AgentApprovalRequest;
+        if (request.callId) input.onApproval?.({ ...request, runId: request.runId || runId || "" });
+      } else if (eventName === "approval_resolved") {
+        input.onApprovalResolved?.({ callId: String(parsed.callId ?? ""), approved: parsed.approved === true, source: String(parsed.source ?? "user") });
+      } else if (eventName === "answer") {
+        const piece = typeof parsed.delta === "string" ? parsed.delta : "";
+        if (piece) { text += piece; input.onToken(piece); }
+      } else if (eventName === "done") {
+        steps = Number(parsed.steps ?? 0);
+        toolCalls = Number(parsed.toolCalls ?? 0);
+        if (Array.isArray(parsed.trace) && !trace.length) trace.push(...(parsed.trace as AgentTraceEntry[]));
+      } else if (eventName === "aierror") {
+        failure = { error: typeof parsed.error === "string" ? parsed.error : "AGENT_FAILED", message: typeof parsed.message === "string" ? parsed.message : undefined };
+        if (Array.isArray(parsed.trace)) trace.push(...(parsed.trace as AgentTraceEntry[]));
+      }
+      eventName = "";
+    }
+  }
+  if (failure) return { ok: false, text, model, runId, error: failure.error ?? "AGENT_FAILED", message: failure.message ?? "The investigation could not complete.", trace, steps, toolCalls };
+  if (!text.trim()) return { ok: false, text: "", model, runId, error: "AGENT_EMPTY_RESPONSE", message: "The agent finished without an answer.", trace, steps, toolCalls };
+  return { ok: true, text, model, runId, trace, steps, toolCalls };
+}
+
+/** Applies or refuses one parked change. The backend treats no decision as a refusal. */
+export async function resolveAgentApproval(runId: string, callId: string, approved: boolean): Promise<boolean> {
+  const response = await fetch(`${API_BASE}/api/ai/agent/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId, callId, approved }),
+  });
+  const body = (await response.json().catch(() => null)) as { resolved?: boolean } | null;
+  return body?.resolved === true;
+}

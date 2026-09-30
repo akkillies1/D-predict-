@@ -1,6 +1,10 @@
 import { Router } from "express";
 import type { Pool } from "pg";
+import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { runAgent } from "./aiAgent.js";
+import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agentApprovals.js";
+import { mlFetch } from "./mlProxy.js";
 import {
   DEFAULT_AI_BASE_URL,
   buildSystemPrompt,
@@ -275,6 +279,72 @@ export function createAiRouter(pool: Pool | null): Router {
       if (!res.writableEnded) res.write(`event: aierror\ndata: ${JSON.stringify({ ok: false, error: "AI_STREAM_INTERRUPTED", message: error instanceof Error ? error.message : "stream_failed" })}\n\n`);
       if (!res.writableEnded) res.end();
     }
+  });
+
+  // Agentic investigation. The model may call the local tools (real stored
+  // bars, the real backtest engine, a fresh forecast from the user's own
+  // trained artifacts) inside a bounded loop, then must answer only from what
+  // those tools measured. No tool writes anything: the agent can investigate
+  // and measure, it cannot train, trade or alter the stored signal.
+  router.post("/agent", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const question = String(body.question ?? "").trim().slice(0, 4000);
+    if (!question) return res.status(400).json({ ok: false, error: "AI_QUESTION_REQUIRED" });
+    const config = await effectiveConfig(pool);
+    if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "The investigation agent needs an NVIDIA API key. Open AI Assistant settings and paste your own key." });
+    if (!config.enabled) return res.status(400).json({ ok: false, error: "AI_DISABLED", message: "The assistant is switched off in AI Assistant settings." });
+    const model = String(body.model ?? "").trim().slice(0, 160) || config.model;
+    if (!model) return res.status(400).json({ ok: false, error: "AI_MODEL_REQUIRED", message: "Choose a model in AI Assistant settings first (the picker lists what your own key can access)." });
+
+    res.setHeader("content-type", "text/event-stream; charset=utf-8");
+    res.setHeader("cache-control", "no-cache, no-transform");
+    res.setHeader("connection", "keep-alive");
+    res.setHeader("x-accel-buffering", "no");
+    res.flushHeaders?.();
+    const controller = new AbortController();
+    const runId = randomUUID();
+    res.on("close", () => {
+      controller.abort();
+      // A dead socket must not leave a write parked on an approval nobody can click.
+      abandonRun(runId);
+    });
+    const write = (event: string, data: unknown) => {
+      if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      await runAgent({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model,
+        question,
+        marketContext: body.marketContext == null ? null : String(body.marketContext).slice(0, 400),
+        evidence: evidenceFrom(body),
+        env: { pool, mlFetch },
+        maxSteps: body.maxSteps == null ? undefined : Number(body.maxSteps),
+        runId,
+        requestApproval: async (pending) => {
+          const decision = await waitForApproval(runId, pending.callId);
+          write("approval_resolved", { callId: pending.callId, approved: decision.approved, source: decision.source });
+          return decision;
+        },
+        onEvent: (event) => write(event.event, event.data),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      write("aierror", { ok: false, error: "AGENT_FAILED", message: error instanceof Error ? error.message : "agent_failed", trace: [] });
+    }
+    if (!res.writableEnded) res.end();
+  });
+
+  // The user's Apply / Refuse click lands here. Loopback only, like the run itself.
+  router.post("/agent/approval", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const runId = String(req.body?.runId ?? "");
+    const callId = String(req.body?.callId ?? "");
+    if (!runId || !callId) return res.status(400).json({ ok: false, error: "APPROVAL_REQUEST_INVALID" });
+    const resolved = settle(runId, callId, { approved: req.body?.approved === true, source: "user" });
+    return res.json({ ok: resolved, resolved, note: resolved ? null : "That request was never waiting, or it had already expired or been refused." });
   });
 
   return router;
