@@ -58,7 +58,7 @@ jobs:
           pnpm --dir dashboard install --frozen-lockfile
           pnpm --dir dashboard run check
           pnpm --dir dashboard test --run
-          python3 -m pip install -r training/requirements.txt
+          python3 -m pip install -r training/requirements.txt pytest
           python3 -m pytest -q training/tests
           test -f db/migrations/006_seed_instruments.sql
           test -f db/migrations/009_option_paper_trading.sql
