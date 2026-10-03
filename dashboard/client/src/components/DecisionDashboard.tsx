@@ -43,6 +43,8 @@ import {
   getMarketScan,
   getPredictionPerformance,
   getOptionChain,
+  getOptionIntelligence,
+  placeOptionPaperOrder,
   getResearch,
   paperLiveUrl,
   type Forecast,
@@ -50,6 +52,7 @@ import {
   type MarketOverview,
   type MarketPick,
   type OptionRow,
+  type OptionIntelligence,
   type LivePrediction,
   type PredictionPerformance,
   type PriceBar,
@@ -237,6 +240,7 @@ export default function DecisionDashboard() {
   symbolRef.current = symbol;
   const [signal, setSignal] = useState<Signal | null>(null);
   const [options, setOptions] = useState<OptionRow[]>([]);
+  const [optionIntelligence, setOptionIntelligence] = useState<OptionIntelligence | null>(null);
   const [research, setResearch] = useState<ResearchResult | null>(null);
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
@@ -246,6 +250,7 @@ export default function DecisionDashboard() {
     Array<{ symbol: string; reason: string }>
   >([]);
   const [scanLoading, setScanLoading] = useState(false);
+  const [optionOrderMessage, setOptionOrderMessage] = useState<string | null>(null);
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -268,6 +273,7 @@ export default function DecisionDashboard() {
       setResearch(null);
       setForecast(null);
       setOptions([]);
+      setOptionIntelligence(null);
       setLivePrediction(null);
       setWatchlistSaved(false);
       localStorage.setItem(STORAGE_KEY, value);
@@ -305,13 +311,14 @@ export default function DecisionDashboard() {
       const gate = predictionGate.current;
       const skipPrediction = gate.key === predictionKey && Date.now() < gate.until;
 
-      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult] =
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, intelligenceResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
           getPredictionPerformance(30),
           skipPrediction ? Promise.resolve(null) : getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
+          getOptionIntelligence(symbol),
         ]);
       if (requestId !== refreshSequence.current) return;
       if (!skipPrediction) {
@@ -333,6 +340,7 @@ export default function DecisionDashboard() {
         performanceResult.status === "fulfilled" ? performanceResult.value : null
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
+      setOptionIntelligence(intelligenceResult.status === "fulfilled" ? intelligenceResult.value : null);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
@@ -571,6 +579,17 @@ export default function DecisionDashboard() {
       setWatchlistSaved(false);
     }
   }, [symbol]);
+  const paperValidateOption = useCallback(async () => {
+    const contract = optionIntelligence?.recommendation.contract;
+    const action = optionIntelligence?.recommendation.action;
+    if (!contract || (action !== "BUY_CALL" && action !== "BUY_PUT")) return;
+    try {
+      const order = await placeOptionPaperOrder({ symbol, expiry: contract.expiry, strike: contract.strike, optionType: contract.optionType, side: "BUY", lots: 1 });
+      setOptionOrderMessage(`Paper order recorded at ${price(order.entryPrice)}. Virtual funds only.`);
+    } catch (error) {
+      setOptionOrderMessage(error instanceof Error ? error.message : "Paper order was rejected.");
+    }
+  }, [optionIntelligence, symbol]);
   const refreshScan = useCallback(async () => {
     setScanLoading(true);
     try {
@@ -1535,6 +1554,41 @@ export default function DecisionDashboard() {
                     </>
                   );
                 })()}
+              </div>
+            )}
+            {optionIntelligence && (
+              <div className="mt-4 rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <Label>Chain decision gate</Label>
+                    <div className={`mt-1 font-display text-2xl font-semibold ${optionIntelligence.recommendation.direction === "BULLISH" ? "text-[#c8f169]" : optionIntelligence.recommendation.direction === "BEARISH" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>
+                      {optionIntelligence.recommendation.action.replaceAll("_", " ")}
+                    </div>
+                    <div className="mt-1 text-[10px] text-[#9fb4a8]">{optionIntelligence.recommendation.rationale}</div>
+                  </div>
+                  <span className="rounded-full border border-[#5b4b2b] px-2 py-1 font-mono-ui text-[9px] uppercase tracking-[.1em] text-[#c8b582]">
+                    {optionIntelligence.status.replaceAll("_", " ")}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-[#9fb4a8] md:grid-cols-4">
+                  <div>PCR <strong className="text-[#d7e8d9]">{optionIntelligence.metrics.pcr == null ? "—" : optionIntelligence.metrics.pcr.toFixed(2)}</strong></div>
+                  <div>Max pain <strong className="text-[#d7e8d9]">{optionIntelligence.metrics.maxPain ?? "—"}</strong></div>
+                  <div>Spread <strong className="text-[#d7e8d9]">{optionIntelligence.metrics.averageSpreadPct == null ? "—" : `${(optionIntelligence.metrics.averageSpreadPct * 100).toFixed(1)}%`}</strong></div>
+                  <div>Confidence <strong className="text-[#d7e8d9]">{pct(optionIntelligence.recommendation.confidence)}</strong></div>
+                </div>
+                <div className="mt-3 space-y-1 text-[10px] leading-relaxed text-[#aebeb3]">
+                  {optionIntelligence.recommendation.evidence.slice(0, 3).map(item => <div key={item}>• {item}</div>)}
+                </div>
+                <div className="mt-3 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-[10px] leading-relaxed text-[#c8b582]">
+                  Risk: {optionIntelligence.recommendation.risks[0]}
+                </div>
+                {optionIntelligence.recommendation.contract && (optionIntelligence.recommendation.action === "BUY_CALL" || optionIntelligence.recommendation.action === "BUY_PUT") ? (
+                  <button onClick={() => void paperValidateOption()} className="mt-3 rounded-lg border border-[#476238] bg-[#142a25] px-3 py-2 font-mono-ui text-[10px] uppercase tracking-[.08em] text-[#c8f169] hover:bg-[#1b3b31]">
+                    Paper validate {optionIntelligence.recommendation.contract.optionType} {optionIntelligence.recommendation.contract.strike}
+                  </button>
+                ) : null}
+                {optionOrderMessage ? <div className="mt-2 text-[10px] text-[#a9bbb0]">{optionOrderMessage}</div> : null}
+                <div className="mt-3 text-[9px] leading-relaxed text-[#71877d]">{optionIntelligence.disclaimer}</div>
               </div>
             )}
             {optionSummary.length ? (
