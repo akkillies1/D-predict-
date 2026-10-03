@@ -75,27 +75,13 @@ function Ensure-Tooling {
   if (-not (Test-Path $python)) { Die 'Collector Python environment is missing. Run Repair & Check.' }
 }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
-function Invoke-DockerCapture([string[]]$DockerArgs) {
-  Refresh-Path
-  $dockerPath = (Get-Command docker -ErrorAction Stop).Source
-  $token = [Guid]::NewGuid().ToString('N')
-  $stdoutPath = Join-Path $env:TEMP "dpredict-docker-$token.out"
-  $stderrPath = Join-Path $env:TEMP "dpredict-docker-$token.err"
-  try {
-    $process = Start-Process -FilePath $dockerPath -ArgumentList $DockerArgs -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -NoNewWindow -Wait -PassThru
-    $output = @()
-    if (Test-Path $stdoutPath) { $output += Get-Content $stdoutPath }
-    if (Test-Path $stderrPath) { $output += Get-Content $stderrPath }
-    [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
-  } finally {
-    Remove-Item $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
-  }
-}
 function Invoke-Compose([string[]]$ComposeArgs) {
   Ensure-ComposeFile
-  $result = Invoke-DockerCapture (@('compose','-f', "`"$ComposeFile`"") + $ComposeArgs)
-  $result.Output | Out-Host
-  if ($result.ExitCode -ne 0) { Die "Docker Compose failed (exit code $($result.ExitCode))." }
+  Refresh-Path
+  $output = @(& docker compose -f $ComposeFile @ComposeArgs 2>&1)
+  $code = $LASTEXITCODE
+  $output | Out-Host
+  if ($code -ne 0) { Die "Docker Compose failed (exit code $code)." }
 }
 function Compose([string[]]$ComposeArgs) { Invoke-Compose $ComposeArgs }
 function Start-Detached($name,$command) {
@@ -130,8 +116,8 @@ function Invoke-Start {
     Compose @('--profile','local','up','-d','postgres')
     $postgresReady = $false
     for ($i = 0; $i -lt 60; $i++) {
-      $result = Invoke-DockerCapture @('compose','-f',"`"$ComposeFile`"",'exec','-T','postgres','pg_isready','-U','postgres','-d','nifty')
-      if ($result.ExitCode -eq 0) { $postgresReady = $true; break }
+      & docker compose -f $ComposeFile exec -T postgres pg_isready -U postgres -d nifty *> $null
+      if ($LASTEXITCODE -eq 0) { $postgresReady = $true; break }
       Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
@@ -160,11 +146,11 @@ function Invoke-Stop {
     $pidFile = Join-Path $Run "$name.pid"
     if (Test-Path $pidFile) { try { Stop-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -Force -ErrorAction Stop } catch {}; Remove-Item $pidFile -Force -ErrorAction SilentlyContinue }
   }
-  if (Get-Command docker -ErrorAction SilentlyContinue) { Ensure-ComposeFile; docker compose -f $ComposeFile --profile local --profile remote stop | Out-Host }
+  if (Get-Command docker -ErrorAction SilentlyContinue) { Invoke-Compose @('--profile','local','--profile','remote','stop') }
 }
 function Invoke-Status {
   Ensure-DatabaseConfig
-  if (Get-Command docker -ErrorAction SilentlyContinue) { Ensure-ComposeFile; docker compose -f $ComposeFile --profile local --profile remote ps | Out-Host }
+  if (Get-Command docker -ErrorAction SilentlyContinue) { Invoke-Compose @('--profile','local','--profile','remote','ps') }
   Info "Database mode: $env:DATABASE_MODE"
   if ($env:D_PREDICT_DATA_DIR) { Info "Data root: $env:D_PREDICT_DATA_DIR" }
 }

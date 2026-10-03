@@ -38,6 +38,17 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+    $completeMarker = Join-Path $stateRoot '.install-complete'
+    if (-not (Test-Path $completeMarker)) {
+        # UAC can run the child under a different environment even when the
+        # interactive user is unchanged. The child exit code is authoritative;
+        # mirror the marker into this user's state directory for the launcher.
+        Log "Bootstrap succeeded but the marker was not visible in this user context; writing $completeMarker."
+        Set-Content -Path $completeMarker -Value (Get-Date -Format o) -Encoding UTF8
+    }
+    if (-not (Test-Path $completeMarker)) {
+        throw "D-Predict bootstrap returned success but the completion marker could not be written: $completeMarker. See $logFile"
+    }
     Set-Content -Path (Join-Path $stateRoot 'install-root.txt') -Value $InstallDir -Encoding UTF8
     if ($SourceRef) {
         Set-Content -Path (Join-Path $stateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8
