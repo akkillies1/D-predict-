@@ -23,6 +23,13 @@
     <p class="small">Source commit: <a href="https://github.com/akkillies1/D-predict-/commit/acf9a2f7a5567ca833156f01d02a2e7743ddc74e">acf9a2f</a> · Windows build workflow: <a href="https://github.com/akkillies1/D-predict-/actions/runs/37334355634">37334355634</a></p>
   </section>
   <section class="panel">
+    <h2>Alternative: script-based installation</h2>
+    <p class="muted">If the unsigned Inno Setup executable is blocked, download the source-backed Windows ZIP and run the reviewed PowerShell installer from an extracted folder.</p>
+    <a class="btn" href="https://github.com/akkillies1/D-predict-/releases/download/v2.1.0/D-Predict-Windows-v2.1.0.zip">Download Windows script bundle</a>
+    <p class="small">This avoids launching the unsigned setup EXE. It does not disable or bypass Smart App Control; Windows may still enforce script policy or block child executables.</p>
+    <code class="hash">powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-dpredict.ps1</code>
+  </section>
+  <section class="panel">
     <h2>Verify the download</h2>
     <p class="muted">After downloading in PowerShell, run:</p>
     <code class="hash">Get-FileHash .\D-Predict-Setup-v2.1.0.exe -Algorithm SHA256</code>

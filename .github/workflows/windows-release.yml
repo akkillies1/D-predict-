@@ -60,6 +60,48 @@ jobs:
           if (-not (Test-Path $versioned)) { throw "Versioned installer was not produced: $versioned" }
           Copy-Item $versioned 'installer/dist/D-Predict-Setup.exe' -Force
 
+      - name: Package script-based Windows install bundle
+        shell: powershell
+        run: |
+          $version = '${{ steps.release.outputs.version }}'
+          $stage = Join-Path $env:RUNNER_TEMP "D-Predict-Windows-v$version"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $files = @(
+            'install-dpredict.ps1',
+            'bootstrap-windows.ps1',
+            'database-setup.ps1',
+            'dp.ps1',
+            'run.ps1',
+            'launch-dpredict.ps1',
+            'd-predict.ps1',
+            'stop-d-predict.ps1',
+            'docker-compose.yml',
+            '.env.example',
+            'README.md',
+            'LOCAL_INSTALL_GUIDE.md',
+            'WINDOWS.md'
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing script bundle input: $file" }
+            Copy-Item $file (Join-Path $stage (Split-Path $file -Leaf)) -Force
+          }
+          @'
+D-Predict Windows script-based installation
+
+1. Extract this ZIP to a folder you control.
+2. Open PowerShell in that folder and inspect install-dpredict.ps1.
+3. Run:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-dpredict.ps1
+4. Complete the database setup prompt.
+5. Start with .\launch-dpredict.ps1 or the Start Menu shortcut created by setup.
+
+This path avoids launching the unsigned Inno Setup EXE. It does not disable or bypass Smart App Control; Windows may still enforce script policy or block child executables.
+'@ | Set-Content (Join-Path $stage 'README-Windows-Script-Install.txt') -Encoding UTF8
+          $bundle = "installer/dist/D-Predict-Windows-v$version.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $bundle -CompressionLevel Optimal -Force
+          if (-not (Test-Path $bundle)) { throw "Script bundle was not produced: $bundle" }
+
       - name: Create GitHub release and upload installers
         shell: powershell
         env:
@@ -68,6 +110,7 @@ jobs:
           $tag = '${{ steps.release.outputs.tag }}'
           $versioned = 'installer/dist/D-Predict-Setup-v${{ steps.release.outputs.version }}.exe'
           $stable = 'installer/dist/D-Predict-Setup.exe'
+          $scriptBundle = 'installer/dist/D-Predict-Windows-v${{ steps.release.outputs.version }}.zip'
           $releaseExists = $false
           try {
             gh release view $tag *> $null
@@ -77,7 +120,7 @@ jobs:
           }
 
           if ($releaseExists) {
-            gh release upload $tag $versioned $stable --clobber
+            gh release upload $tag $versioned $stable $scriptBundle --clobber
           } else {
-            gh release create $tag $versioned $stable --title "D-Predict $tag" --generate-notes
+            gh release create $tag $versioned $stable $scriptBundle --title "D-Predict $tag" --generate-notes
           }
