@@ -75,12 +75,23 @@ function Ensure-Tooling {
   if (-not (Test-Path $python)) { Die 'Collector Python environment is missing. Run Repair & Check.' }
 }
 function Ensure-RunDir { New-Item -ItemType Directory -Force $Run | Out-Null }
-function Invoke-Compose([string[]]$ComposeArgs) {
+function Invoke-ComposeNative([string[]]$ComposeArgs) {
   Ensure-ComposeFile
   Refresh-Path
-  $output = @(& docker compose -f $ComposeFile @ComposeArgs 2>&1)
-  $code = $LASTEXITCODE
-  $output | Out-Host
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    # Windows PowerShell 5.1 promotes native stderr to ErrorRecord objects.
+    # Docker Compose writes normal progress/status messages to stderr, so keep
+    # those messages visible without letting them abort a successful command.
+    $ErrorActionPreference = 'Continue'
+    & docker compose -f $ComposeFile @ComposeArgs 2>&1 | ForEach-Object { $_ | Out-Host }
+    return $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+function Invoke-Compose([string[]]$ComposeArgs) {
+  $code = Invoke-ComposeNative $ComposeArgs
   if ($code -ne 0) { Die "Docker Compose failed (exit code $code)." }
 }
 function Compose([string[]]$ComposeArgs) { Invoke-Compose $ComposeArgs }
@@ -116,8 +127,8 @@ function Invoke-Start {
     Compose @('--profile','local','up','-d','postgres')
     $postgresReady = $false
     for ($i = 0; $i -lt 60; $i++) {
-      & docker compose -f $ComposeFile exec -T postgres pg_isready -U postgres -d nifty *> $null
-      if ($LASTEXITCODE -eq 0) { $postgresReady = $true; break }
+      $code = Invoke-ComposeNative @('exec','-T','postgres','pg_isready','-U','postgres','-d','nifty')
+      if ($code -eq 0) { $postgresReady = $true; break }
       Start-Sleep -Seconds 1
     }
     if (-not $postgresReady) { Die 'PostgreSQL did not become ready. Check docker compose logs postgres --tail=100.' }
