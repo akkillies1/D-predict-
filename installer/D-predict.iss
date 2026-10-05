@@ -70,7 +70,7 @@ Source: "assets\dpredict-icon.ico";  DestDir: "{app}\assets"; Flags: ignoreversi
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; StatusMsg: "Installing D-Predict prerequisites and runtime..."; Flags: waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait; Check: IsDpredictInstalled
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait; Check: IsDpredictReady
 
 [Icons]
 Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"; IconFilename: "{app}\assets\dpredict-icon.ico"
@@ -95,6 +95,16 @@ var
 begin
   Marker := ExpandConstant('{localappdata}\D-Predict\.install-complete');
   Result := FileExists(Marker);
+end;
+
+function IsDpredictReady(): Boolean;
+var
+  Marker: String;
+  EnvFile: String;
+begin
+  Marker := ExpandConstant('{localappdata}\D-Predict\.install-complete');
+  EnvFile := ExpandConstant('{localappdata}\D-Predict\.env');
+  Result := FileExists(Marker) and FileExists(EnvFile);
 end;
 
 function InitializeSetup(): Boolean;

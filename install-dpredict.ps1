@@ -53,6 +53,23 @@ try {
     if ($SourceRef) {
         Set-Content -Path (Join-Path $stateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8
     }
+
+    $databaseSetup = Join-Path $InstallDir 'database-setup.ps1'
+    $envFile = Join-Path $stateRoot '.env'
+    if (-not (Test-Path $envFile)) {
+        if (-not (Test-Path $databaseSetup)) {
+            throw "Database setup script is missing: $databaseSetup"
+        }
+        Log 'Database configuration is missing; starting the first-run database setup wizard.'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $databaseSetup
+        $databaseExitCode = $LASTEXITCODE
+        if ($databaseExitCode -ne 0) {
+            throw "Database configuration was not completed (exit code $databaseExitCode). See $logFile"
+        }
+        if (-not (Test-Path $envFile)) {
+            throw "Database setup returned success without creating $envFile."
+        }
+    }
     Log 'D-Predict setup completed successfully.'
     exit 0
 }
