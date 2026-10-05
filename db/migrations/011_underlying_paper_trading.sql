@@ -15,7 +15,7 @@ create table if not exists paper_positions (
     average_price numeric(14,4) not null check (average_price > 0),
     realized_pnl numeric(16,2) not null default 0,
     current_price numeric(14,4),
-    current_timestamp timestamptz,
+    mark_timestamp timestamptz,
     updated_at timestamptz not null default now(),
     primary key (account_id, symbol)
 );

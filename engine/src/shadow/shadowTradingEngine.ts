@@ -1,15 +1,14 @@
 import { pool } from "../db.js";
 
-function requiredPositiveNumber(name: string): number {
-  const raw = process.env[name];
+// Read lazily: this module is imported by the worker before its loop starts, so
+// throwing here used to take down features, signals, forecast and construction
+// too — not just the shadow ledger. An unconfigured capital only disables the
+// equity curve, which is the one figure that would otherwise be invented.
+function shadowStartingCapital(): number | null {
+  const raw = process.env.SHADOW_STARTING_CAPITAL;
   const value = Number(raw);
-  if (!raw || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`Missing or invalid ${name}; configure a real shadow-trading value before starting D-Predict.`);
-  }
-  return value;
+  return raw && Number.isFinite(value) && value > 0 ? value : null;
 }
-
-const STARTING_CAPITAL = requiredPositiveNumber("SHADOW_STARTING_CAPITAL");
 const MAX_QUOTE_AGE_MS = Math.max(15_000, Number(process.env.SHADOW_MAX_QUOTE_AGE_SECONDS ?? 120) * 1000);
 const LOTS = Math.max(1, Math.floor(Number(process.env.SHADOW_LOTS ?? 1)));
 const NEW_DECISION_WINDOW_MS = Math.max(30_000, Number(process.env.SHADOW_DECISION_WINDOW_SECONDS ?? 180) * 1000);
@@ -173,11 +172,16 @@ async function updateOpenTrades(now: Date): Promise<void> {
 }
 
 async function snapshotEquity(now: Date): Promise<void> {
+  const startingCapital = shadowStartingCapital();
+  if (startingCapital === null) {
+    console.log("[shadow] SHADOW_STARTING_CAPITAL is not configured; skipping the equity curve instead of assuming a starting balance");
+    return;
+  }
   const result = await pool.query(`select coalesce(sum(case when status='CLOSED' then realized_pnl - coalesce(entry_fees,0) - coalesce(exit_fees,0) else 0 end),0) as realized, coalesce(sum(case when status='OPEN' then unrealized_pnl - coalesce(entry_fees,0) else 0 end),0) as unrealized, count(*) filter (where status='OPEN')::int as open_trades, count(*) filter (where status='CLOSED')::int as closed_trades from shadow_trades`);
-  const row = result.rows[0]; const realized = Number(row.realized); const unrealized = Number(row.unrealized); const equity = STARTING_CAPITAL + realized + unrealized;
-  const peakResult = await pool.query(`select coalesce(max(peak_equity), $1) as peak from shadow_equity_snapshots`, [STARTING_CAPITAL]);
-  const peak = Math.max(STARTING_CAPITAL, Number(peakResult.rows[0].peak), equity); const drawdown = equity - peak;
-  await pool.query(`insert into shadow_equity_snapshots (timestamp, starting_capital, realized_pnl, unrealized_pnl, equity, peak_equity, drawdown, open_trades, closed_trades) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (timestamp) do update set realized_pnl=excluded.realized_pnl, unrealized_pnl=excluded.unrealized_pnl, equity=excluded.equity, peak_equity=excluded.peak_equity, drawdown=excluded.drawdown, open_trades=excluded.open_trades, closed_trades=excluded.closed_trades`, [now, STARTING_CAPITAL, realized, unrealized, equity, peak, drawdown, Number(row.open_trades), Number(row.closed_trades)]);
+  const row = result.rows[0]; const realized = Number(row.realized); const unrealized = Number(row.unrealized); const equity = startingCapital + realized + unrealized;
+  const peakResult = await pool.query(`select coalesce(max(peak_equity), $1) as peak from shadow_equity_snapshots`, [startingCapital]);
+  const peak = Math.max(startingCapital, Number(peakResult.rows[0].peak), equity); const drawdown = equity - peak;
+  await pool.query(`insert into shadow_equity_snapshots (timestamp, starting_capital, realized_pnl, unrealized_pnl, equity, peak_equity, drawdown, open_trades, closed_trades) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (timestamp) do update set realized_pnl=excluded.realized_pnl, unrealized_pnl=excluded.unrealized_pnl, equity=excluded.equity, peak_equity=excluded.peak_equity, drawdown=excluded.drawdown, open_trades=excluded.open_trades, closed_trades=excluded.closed_trades`, [now, startingCapital, realized, unrealized, equity, peak, drawdown, Number(row.open_trades), Number(row.closed_trades)]);
 }
 
 export async function runShadowTradingEngine(): Promise<void> {
