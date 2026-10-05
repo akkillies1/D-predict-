@@ -20,7 +20,7 @@ jobs:
   build-installer:
     runs-on: windows-latest
     env:
-      INSTALLER_VERSION: '2.1.0'
+      INSTALLER_VERSION: '2.1.1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
