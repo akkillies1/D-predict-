@@ -181,9 +181,11 @@ app.get("/api/instruments/discover", async (req, res) => {
   }
   // The provider lookup is best-effort: a transient network/parse failure must
   // never turn a valid request into a 500 or discard the local matches we found.
+  // It is also time-boxed — a stalled name resolution would otherwise keep the
+  // awaited fetch pending forever and withhold the local matches the user can act on.
   let online: Array<Record<string, unknown>> = [];
   try {
-    const response = await fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`, { headers: { "User-Agent": "D-Predict/2.0" } });
+    const response = await fetch(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`, { headers: { "User-Agent": "D-Predict/2.0" }, signal: AbortSignal.timeout(2500) });
     if (response.ok) {
       const payload = await response.json() as { quotes?: Array<{ symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string; exchDisp?: string }> };
       online = (payload.quotes ?? []).filter((quote) => quote.symbol && ["EQUITY", "ETF", "INDEX", "MUTUALFUND"].includes(quote.quoteType ?? "")).sort((left, right) => { const rank = (quote: typeof left) => /\.(NS|BO)$/i.test(quote.symbol ?? "") || /\b(NSE|BSE|India)\b/i.test(`${quote.exchange} ${quote.exchDisp}`) ? 0 : 1; return rank(left) - rank(right); }).map((quote) => ({ symbol: quote.symbol!.toUpperCase(), exchange: quote.exchDisp ?? quote.exchange ?? "", lotSize: 1, isActive: local.some((item) => item.symbol === quote.symbol!.toUpperCase() && item.isActive), name: quote.longname ?? quote.shortname ?? quote.symbol, providerSymbol: quote.symbol, instrumentType: quote.quoteType, source: "yahoo" }));
