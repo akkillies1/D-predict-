@@ -9,6 +9,17 @@ __pycache__
 db/data
 db/postgres.log
 *.zip
+
+# Docker patterns are anchored at the context root and have no recursion, so a
+# bare `node_modules` above only excludes the top-level one. Without these the
+# build uploads backend/, dashboard/ and collector/ dependency trees plus the
+# local market data (a whole Postgres cluster) into every image build - the
+# "transferring context: 280MB" stall. No Dockerfile copies any of these paths.
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+data/
 # Test/lint caches. On a locked-down Windows install these can be unreadable by
 # the build context walker, which fails the whole image build with "Access is denied".
 .pytest_cache

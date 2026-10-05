@@ -12,10 +12,35 @@ $BootstrapLog = Join-Path $LogDir 'bootstrap.log'
 $CompleteMarker = Join-Path $StateRoot '.install-complete'
 $ConfigFile = Join-Path $StateRoot '.env'
 $DashboardUrlFile = Join-Path $Root '.run\dashboard.url'
-$PortRange = 3000..3019
 $script:StartedAt = Get-Date
 Set-Location $Root
 New-Item -ItemType Directory -Force $LogDir | Out-Null
+
+function Read-DotEnv([string]$Path) {
+  $values = @{}
+  if (-not (Test-Path $Path)) { return $values }
+  foreach ($line in (Get-Content $Path)) {
+    $text = "$line".Trim()
+    if (-not $text -or $text.StartsWith('#') -or -not $text.Contains('=')) { continue }
+    $parts = $text.Split('=', 2)
+    $values[$parts[0].Trim()] = $parts[1].Trim()
+  }
+  return $values
+}
+$script:ProjectEnvValues = Read-DotEnv (Join-Path $Root '.env')
+$script:StateEnvValues = Read-DotEnv $ConfigFile
+function ConfigValue([string]$Key, [string]$Fallback) {
+  # A source checkout pins its own host ports in the Git-ignored project .env so
+  # it can run beside the installed app; those values must win here or the splash
+  # window polls a port the dev stack never binds. An install keeps identical
+  # values in both files, so precedence changes nothing for it.
+  if ($script:ProjectEnvValues.ContainsKey($Key)) { return $script:ProjectEnvValues[$Key] }
+  if ($script:StateEnvValues.ContainsKey($Key)) { return $script:StateEnvValues[$Key] }
+  return $Fallback
+}
+$ApiPort = ConfigValue 'API_PORT' '4100'
+$PreferredDashboardPort = ConfigValue 'PORT' '3000'
+$PortRange = @([int]$PreferredDashboardPort) + (3000..3019)
 
 function Test-SplashSupported {
   if ($Headless) { return $false }
@@ -102,7 +127,7 @@ function Resolve-DashboardUrl([string[]]$CapturedLines) {
 
 function Get-MarketReadiness {
   try {
-    $runtime = Invoke-RestMethod -Uri 'http://127.0.0.1:4100/ready' -TimeoutSec 3
+    $runtime = Invoke-RestMethod -Uri "http://127.0.0.1:$ApiPort/ready" -TimeoutSec 3
     if ($runtime.ok -eq $true) { return "Market data ready: $($runtime.dailyBars) daily bars; latest $($runtime.latestMarketTimestamp)." }
     return "Services are running; market data is still being acquired ($($runtime.marketData))."
   } catch {
