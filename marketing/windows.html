@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Verified D-Predict Windows installer download, SHA-256, and Smart App Control guidance.">
+  <title>D-Predict Windows download and verification</title>
+  <style>
+    :root{--bg:#06101d;--panel:#0b1727;--line:#1b2b40;--text:#eef5fb;--muted:#9cafc3;--accent:#64d7ff;--good:#68e0a0;--warn:#ffd166;--max:920px}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% 0%,#182544 0,transparent 34%),var(--bg);color:var(--text);font:16px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{width:min(calc(100% - 40px),var(--max));margin:auto}header{padding:24px 0;border-bottom:1px solid rgba(255,255,255,.08)}a{color:inherit}.brand{font-weight:800;text-decoration:none}.brand span{color:var(--accent)}main{padding:72px 0}.eyebrow{color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{font-size:clamp(38px,6vw,64px);line-height:1.02;letter-spacing:-.05em;margin:18px 0}.lead{font-size:20px;color:var(--muted);max-width:730px}.panel{background:rgba(11,23,39,.86);border:1px solid var(--line);border-radius:18px;padding:28px;margin-top:30px}.warning{border-color:#6b5520;background:rgba(55,42,12,.36)}.ok{color:var(--good)}.warn{color:var(--warn)}.muted{color:var(--muted)}.hash{display:block;overflow-wrap:anywhere;background:#050b13;border:1px solid var(--line);border-radius:10px;padding:14px;font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#d9e8f5;margin-top:10px}.btn{display:inline-block;margin:18px 12px 4px 0;padding:13px 20px;border-radius:10px;border:1px solid var(--line);text-decoration:none;font-weight:750}.primary{background:var(--text);color:#06101d;border-color:var(--text)}li{margin:8px 0}.small{font-size:13px;color:var(--muted)}footer{padding:30px 0 60px;color:var(--muted);font-size:13px}@media(max-width:600px){.wrap{width:min(calc(100% - 28px),var(--max))}main{padding:50px 0}}
+  </style>
+</head>
+<body>
+<header><div class="wrap"><a class="brand" href="/">D<span>-Predict</span></a></div></header>
+<main><div class="wrap">
+  <div class="eyebrow">Windows 10/11 · x64 · D-Predict v2.1.0</div>
+  <h1>Download D-Predict for Windows.</h1>
+  <p class="lead">This page is the verified download entry point for the local D-Predict terminal. The installer provisions Docker Desktop, Python, Node.js, the local runtime, and the first-run database configuration.</p>
+  <section class="panel">
+    <h2>Installer</h2>
+    <p class="muted">Release asset: <strong>D-Predict-Setup-v2.1.0.exe</strong></p>
+    <a class="btn primary" href="https://github.com/akkillies1/D-predict-/releases/download/v2.1.0/D-Predict-Setup-v2.1.0.exe">Download the installer</a>
+    <a class="btn" href="https://github.com/akkillies1/D-predict-/releases/tag/v2.1.0">View release notes</a>
+    <p class="small">Source commit: <a href="https://github.com/akkillies1/D-predict-/commit/acf9a2f7a5567ca833156f01d02a2e7743ddc74e">acf9a2f</a> · Windows build workflow: <a href="https://github.com/akkillies1/D-predict-/actions/runs/37334355634">37334355634</a></p>
+  </section>
+  <section class="panel">
+    <h2>Verify the download</h2>
+    <p class="muted">After downloading in PowerShell, run:</p>
+    <code class="hash">Get-FileHash .\D-Predict-Setup-v2.1.0.exe -Algorithm SHA256</code>
+    <p class="muted">Expected SHA-256:</p>
+    <code class="hash">2f3f6ac0bcab6016ac24f36dc0e88353d0f5feb5e69998c61ee9716eec3bcc2a</code>
+  </section>
+  <section class="panel warning">
+    <h2>Smart App Control</h2>
+    <p class="warn"><strong>Important:</strong> the current installer is not Authenticode-signed. Windows Smart App Control may therefore block it even though the file is the verified GitHub release asset.</p>
+    <p class="muted">Do not disable Smart App Control and do not bypass a Windows security warning. A signed release requires a trusted Authenticode certificate issued to the publisher; that certificate is not currently configured for this project.</p>
+    <p class="muted">If Smart App Control blocks the installer, keep the hash above and contact the publisher for a signed build. The website cannot override Windows trust policy.</p>
+  </section>
+  <section class="panel">
+    <h2>First run</h2>
+    <ol>
+      <li>Run the installer as a normal Windows user.</li>
+      <li>Allow the prerequisite setup to complete.</li>
+      <li>When prompted for database storage, choose <strong>Local PostgreSQL</strong> and select a data folder.</li>
+      <li>Wait for “Database configuration saved” before D-Predict starts.</li>
+    </ol>
+  </section>
+</div></main>
+<footer><div class="wrap">© 2026 D-Predict · <a href="/">Back to the product page</a> · <a href="https://github.com/akkillies1/D-predict-">GitHub</a></div></footer>
+</body>
+</html>
