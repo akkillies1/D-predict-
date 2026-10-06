@@ -62,7 +62,7 @@ jobs:
       - name: Validate PowerShell installer scripts
         shell: powershell
         run: |
-          $scripts = @('install-dpredict.ps1','database-setup.ps1','bootstrap-windows.ps1')
+          $scripts = @('install-dpredict.ps1','database-setup.ps1','bootstrap-windows.ps1','bootstrap-ui.ps1')
           foreach ($script in $scripts) {
             $tokens = $null
             $errors = $null
