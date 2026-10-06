@@ -20,6 +20,31 @@ try {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     }
 
+    # Configure the database BEFORE the heavyweight bootstrap. Inno Setup does not
+    # provide a reliable interactive PowerShell console, so the database wizard
+    # must own all first-run interaction through Windows dialogs.
+    $databaseSetup = Join-Path $InstallDir 'database-setup.ps1'
+    $envFile = Join-Path $stateRoot '.env'
+    if (-not (Test-Path $databaseSetup)) {
+        throw "Database setup script is missing: $databaseSetup"
+    }
+    if (-not (Test-Path $envFile)) {
+        Log 'Database configuration is missing; starting the first-run database setup wizard.'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $databaseSetup
+        $databaseExitCode = $LASTEXITCODE
+        if ($databaseExitCode -ne 0) {
+            if ($databaseExitCode -eq 2) { throw 'Database configuration was cancelled by the user.' }
+            throw "Database configuration was not completed (exit code $databaseExitCode). See $logFile"
+        }
+    }
+    if (-not (Test-Path $envFile)) {
+        throw "Database setup returned success without creating $envFile."
+    }
+    $projectEnvFile = Join-Path $InstallDir '.env'
+    if (-not (Test-Path $projectEnvFile)) {
+        throw "Database setup returned success without creating $projectEnvFile."
+    }
+
     # The Inno Setup package contains the bootstrap entrypoint and the small
     # installer helpers. Do not download/unpack the repository here: doing so
     # can overwrite the script that is currently executing and can leave a
@@ -30,7 +55,7 @@ try {
         throw "Installer bootstrap is missing: $bootstrap"
     }
 
-    Log 'Starting the D-Predict bootstrap.'
+    Log 'Starting the D-Predict bootstrap after database configuration.'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
@@ -40,9 +65,6 @@ try {
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
     $completeMarker = Join-Path $stateRoot '.install-complete'
     if (-not (Test-Path $completeMarker)) {
-        # UAC can run the child under a different environment even when the
-        # interactive user is unchanged. The child exit code is authoritative;
-        # mirror the marker into this user's state directory for the launcher.
         Log "Bootstrap succeeded but the marker was not visible in this user context; writing $completeMarker."
         Set-Content -Path $completeMarker -Value (Get-Date -Format o) -Encoding UTF8
     }
@@ -52,23 +74,6 @@ try {
     Set-Content -Path (Join-Path $stateRoot 'install-root.txt') -Value $InstallDir -Encoding UTF8
     if ($SourceRef) {
         Set-Content -Path (Join-Path $stateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8
-    }
-
-    $databaseSetup = Join-Path $InstallDir 'database-setup.ps1'
-    $envFile = Join-Path $stateRoot '.env'
-    if (-not (Test-Path $envFile)) {
-        if (-not (Test-Path $databaseSetup)) {
-            throw "Database setup script is missing: $databaseSetup"
-        }
-        Log 'Database configuration is missing; starting the first-run database setup wizard.'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $databaseSetup
-        $databaseExitCode = $LASTEXITCODE
-        if ($databaseExitCode -ne 0) {
-            throw "Database configuration was not completed (exit code $databaseExitCode). See $logFile"
-        }
-        if (-not (Test-Path $envFile)) {
-            throw "Database setup returned success without creating $envFile."
-        }
     }
     Log 'D-Predict setup completed successfully.'
     exit 0
