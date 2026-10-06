@@ -8,6 +8,7 @@ on:
       - 'install-dpredict.ps1'
       - 'database-setup.ps1'
       - 'bootstrap-windows.ps1'
+      - 'bootstrap-ui.ps1'
       - 'dp.ps1'
       - 'run.ps1'
       - 'launch-dpredict.ps1'
@@ -46,6 +47,7 @@ jobs:
             'installer/D-predict.iss',
             'install-dpredict.ps1',
             'bootstrap-windows.ps1',
+            'bootstrap-ui.ps1',
             'dp.ps1',
             'run.ps1',
             'launch-dpredict.ps1',
