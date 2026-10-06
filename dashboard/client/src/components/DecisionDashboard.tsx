@@ -45,6 +45,7 @@ import {
   getMarketScan,
   getPredictionPerformance,
   getDecisionCandidate,
+  getDecisionCandidateScan,
   getOptionChain,
   getOptionIntelligence,
   placeOptionPaperOrder,
@@ -253,6 +254,8 @@ export default function DecisionDashboard() {
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
   const [decisionCandidate, setDecisionCandidate] = useState<DecisionCandidate | null>(null);
+  const [rankedCandidates, setRankedCandidates] = useState<DecisionCandidate[]>([]);
+  const [candidateScanLoading, setCandidateScanLoading] = useState(false);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -628,10 +631,19 @@ export default function DecisionDashboard() {
       const result = await getMarketScan(5);
       setMarketPicks(result.picks);
       setScanExcluded(result.excluded);
+      setCandidateScanLoading(true);
+      try {
+        const candidates = await getDecisionCandidateScan(result.picks.map(p => p.symbol), `${forecastHorizon}d` as "1d" | "3d" | "5d");
+        setRankedCandidates(candidates.candidates);
+      } catch {
+        setRankedCandidates([]);
+      } finally {
+        setCandidateScanLoading(false);
+      }
     } finally {
       setScanLoading(false);
     }
-  }, []);
+  }, [forecastHorizon]);
   const blockers = [
     !signal ? "No stored model signal" : null,
     signal && !thesis ? "Trade thesis unavailable" : null,
@@ -1545,6 +1557,39 @@ export default function DecisionDashboard() {
             <div className="mt-6 rounded-xl border border-[#293f35] bg-[#09130f] p-4 text-[10px] leading-relaxed text-[#71877d]">
               Confidence is displayed as evidence, not certainty. Promotion and
               live execution remain separate gates.
+            </div>
+          </Card>
+        </section>
+
+        <section id="today-candidates" className="grid gap-5 lg:grid-cols-[1.45fr_.55fr]">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><Label>Ranked opportunity set</Label><h2 className="mt-1 font-display text-xl font-semibold">Today’s Candidates</h2><p className="mt-1 text-[10px] text-[#789087]">The backend scans the current market shortlist and ranks only evidence-backed paper candidates.</p></div>
+              <button onClick={() => void refreshScan()} disabled={scanLoading || candidateScanLoading} className="inline-flex items-center gap-2 rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8f169] hover:bg-[#10231e] disabled:opacity-50"><RefreshCw size={12} className={candidateScanLoading ? "animate-spin" : ""}/> Re-rank</button>
+            </div>
+            <div className="mt-4 space-y-2">
+              {rankedCandidates.map((candidate, index) => (
+                <button key={candidate.symbol} onClick={() => void selectSymbol(candidate.symbol)} className="w-full rounded-xl border border-[#1d332f] bg-[#09130f] p-3 text-left transition hover:border-[#476238] hover:bg-[#0d1b16]">
+                  <div className="flex items-center gap-3">
+                    <span className="w-5 font-mono-ui text-[10px] text-[#557067]">#{index + 1}</span>
+                    <span className="min-w-20 font-display text-sm font-bold text-[#eff7ea]">{candidate.symbol}</span>
+                    <span className={`rounded-full border px-2 py-1 font-mono-ui text-[8px] ${candidate.status === "PAPER_CANDIDATE" ? "border-[#476238] text-[#c8f169]" : "border-[#633d38] text-[#ff9d91]"}`}>{candidate.status.replaceAll("_"," ")}</span>
+                    <span className={`ml-auto font-mono-ui text-xs font-bold ${candidate.direction === "LONG" ? "text-[#c8f169]" : candidate.direction === "SHORT" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>{candidate.direction}</span>
+                    <span className="font-mono-ui text-xs text-[#d7e8d9]">{candidate.score}/100</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[9px] text-[#789087]"><span>{candidate.provenance.replaceAll("_"," ")}</span><span>{candidate.gateSummary}</span><span>{candidate.dataQuality.observations} bars</span></div>
+                </button>
+              ))}
+              {!rankedCandidates.length && <Empty text={candidateScanLoading ? "Ranking current candidates…" : "No ranked candidates available. No data is fabricated."} />}
+            </div>
+          </Card>
+          <Card className="p-5">
+            <Label>Ranking rules</Label>
+            <div className="mt-4 space-y-3 text-[10px] leading-relaxed text-[#8fa69a]">
+              <div><strong className="text-[#d7e8d9]">1 · Evidence first</strong><br/>Real persisted market history and model/fallback evidence are required.</div>
+              <div><strong className="text-[#d7e8d9]">2 · Gates decide</strong><br/>Failed backend gates keep a candidate in ABSTAIN.</div>
+              <div><strong className="text-[#d7e8d9]">3 · Score ranks</strong><br/>Score orders candidates only after their gate state is preserved.</div>
+              <div><strong className="text-[#d7e8d9]">4 · Paper only</strong><br/>The ranked list never sends a broker order.</div>
             </div>
           </Card>
         </section>
