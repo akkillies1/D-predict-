@@ -242,6 +242,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
     const content = typeof message?.content === "string" ? message.content.trim() : "";
 
     if (!rawCalls.length) {
+      if (step === 1) return fail("AGENT_TOOL_REQUIRED", "The investigation agent must call a D-Predict tool before answering.");
       // The model chose to answer instead of investigating further. That answer
       // is still only trustworthy if it came from tool results already shown.
       if (!content) return fail("AGENT_EMPTY_RESPONSE", "The model returned neither a tool request nor an answer.");
