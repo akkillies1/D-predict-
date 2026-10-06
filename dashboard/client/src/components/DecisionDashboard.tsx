@@ -74,6 +74,7 @@ import TradingDesk from "@/components/TradingDesk";
 import PriceChart, { type ChartOverlays, type ChartBand } from "@/components/PriceChart";
 import BacktestCard from "@/components/BacktestCard";
 import AlertsBell from "@/components/AlertsBell";
+import DecisionCopilot from "@/components/DecisionCopilot";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 const TIMEFRAME_KEY = "dpredict:chart-timeframe";
@@ -1633,6 +1634,8 @@ export default function DecisionDashboard() {
             </div>
           </Card>
         </section>
+
+        <DecisionCopilot model={aiStatus?.model ?? null} symbol={symbol} />
 
         <section id="candidate-intelligence" className="grid gap-5 lg:grid-cols-[1.25fr_.75fr]">
           <Card className="p-5">
