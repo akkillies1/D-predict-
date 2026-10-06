@@ -192,7 +192,9 @@ function toolOutcomeMessage(outcome: ToolOutcome, budgetLeft: number): { content
 
 export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
   const question = String(request.question ?? "").trim();
-  // Agent mode must actually investigate before it is allowed to answer. A single-step\n  // run is therefore promoted to one tool turn plus the final synthesis turn.\n  const maxSteps = Math.max(2, Math.min(MAX_STEPS_CEILING, Math.round(Number(request.maxSteps ?? DEFAULT_MAX_STEPS))));
+  // Agent mode must actually investigate before it is allowed to answer. A single-step
+  // run is therefore promoted to one tool turn plus the final synthesis turn.
+  const maxSteps = Math.max(2, Math.min(MAX_STEPS_CEILING, Math.round(Number(request.maxSteps ?? DEFAULT_MAX_STEPS))));
   const evidence = Array.isArray(request.evidence) ? request.evidence : [];
   const url = request.baseUrl.replace(/\/$/, "");
   const trace: AgentTraceEntry[] = [];
@@ -221,7 +223,10 @@ export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
         model: request.model,
         messages,
         tools: agentToolSpecs(),
-        // The first turn is an investigation turn, not a chat turn. Force a real\n        // D-Predict tool call so Nemotron has to drive the machinery before deciding.\n        // Later turns remain autonomous: the model can choose another tool or finish.\n        tool_choice: step === 1 ? "required" : "auto",
+        // The first turn is an investigation turn, not a chat turn. Force a real
+        // D-Predict tool call so Nemotron has to drive the machinery before deciding.
+        // Later turns remain autonomous: the model can choose another tool or finish.
+        tool_choice: step === 1 ? "required" : "auto",
         temperature: 0.1,
         top_p: 0.95,
         max_tokens: Math.min(1200, Math.max(128, Number(process.env.AGENT_STEP_MAX_TOKENS ?? 700))),

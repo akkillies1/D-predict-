@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { request } from "node:http";
+import { DEFAULT_AI_MODEL } from "../dist/aiAdvisor.js";
 
 // A stand-in for the provider: records what D-Predict actually sent upstream so
 // the tests can prove the honesty guardrails reach the model, without a key.
@@ -111,7 +112,7 @@ try {
   })).json();
   assert.equal(chat.ok, true);
   assert.equal(chat.text, "The evidence shows one rule fired.");
-  assert.equal(chat.model, "nvidia/llama-3.1-nemotron-70b-instruct");
+  assert.equal(chat.model, DEFAULT_AI_MODEL);
   assert.equal(chat.usage.total_tokens, 42);
   const chatCall = received[received.length - 1];
   const system = chatCall.body.messages[0];

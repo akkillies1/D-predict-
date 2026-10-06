@@ -125,7 +125,8 @@ export function describeUpstreamError(status: number, bodyText: string): { code:
       return bodyText ? bodyText.slice(0, 200) : null;
     }
   })();
-  if (status === 401 || status === 403) return { code: "AI_KEY_REJECTED", message: detail ? `NVIDIA rejected this API key. ${detail}` : "NVIDIA rejected this API key (401). Check the key in AI Assistant settings." };
+  if (status === 401) return { code: "AI_KEY_REJECTED", message: detail ? `NVIDIA rejected this API key. ${detail}` : "NVIDIA rejected this API key (401). Check the key in AI Assistant settings." };
+  if (status === 403) return { code: "AI_INFERENCE_FORBIDDEN", message: detail ? `This NVIDIA key cannot run inference. ${detail}` : "This NVIDIA key was accepted but is not allowed to run inference (403). Pick another model in AI Assistant settings." };
   if (status === 404) return { code: "AI_MODEL_UNAVAILABLE", message: detail ? `NVIDIA has no endpoint for this model. ${detail}` : "This model id is not available for your key. Pick another in AI Assistant settings." };
   if (status === 429) return { code: "AI_RATE_LIMITED", message: detail ? `Rate limit or credit quota reached. ${detail}` : "NVIDIA rate-limited this request (429). Free-tier credits are limited — wait a minute and ask again." };
   if (status === 400 || status === 422) return { code: "AI_REQUEST_REJECTED", message: detail ? `NVIDIA rejected the request. ${detail}` : "NVIDIA rejected the request (bad model id or parameters)." };

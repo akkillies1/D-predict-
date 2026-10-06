@@ -379,7 +379,9 @@ async function testApprovalRegistryOnlyMarksRealWrites() {
   assert.equal(describeAgentWrite("run_backtest", { symbol: "NIFTY" }), null, "a read tool has nothing to approve");
   assert.match(describeAgentWrite("train_model", { symbol: "nifty", horizon: "3d" }), /Retrain the 3d model artifact for NIFTY/);
   assert.match(describeAgentWrite("acknowledge_alerts", { ids: [4, 4, 5] }), /Mark 2 radar row\(s\) as acknowledged: 4, 5/);
-  assert.match(describeAgentWrite("watchlist_remove", { symbol: "TATASTEEL" }), /not deleted/i);\n  assert.match(describeAgentWrite("option_paper_order", { symbol: "NIFTY", expiry: "2026-10-08", strike: 25000, optionType: "CE", side: "BUY", lots: 1 }), /PAPER BUY.*NIFTY.*CE.*25000/i);\n  assert.equal(isWriteTool("option_chain"), false);
+  assert.match(describeAgentWrite("watchlist_remove", { symbol: "TATASTEEL" }), /not deleted/i);
+  assert.match(describeAgentWrite("option_paper_order", { symbol: "NIFTY", expiry: "2026-10-08", strike: 25000, optionType: "CE", side: "BUY", lots: 1 }), /PAPER BUY.*NIFTY.*CE.*25000/i);
+  assert.equal(isWriteTool("option_chain"), false);
 
   const empty = await executeAgentTool({ pool: null, mlFetch: async () => ({ status: 200, body: {} }) }, "acknowledge_alerts", { ids: ["x"] });
   assert.equal(empty.ok, false);

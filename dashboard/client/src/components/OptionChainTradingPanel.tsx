@@ -11,11 +11,13 @@ import {
 } from "lucide-react";
 import {
   getOptionChain,
-  getOptionPaperTrades,\n  getOptionIntelligence,
+  getOptionPaperTrades,
+  getOptionIntelligence,
   placeOptionPaperOrder,
   closeOptionPaperTrade,
   type OptionRow,
-  type PaperOptionTrade,\n  type OptionIntelligence,
+  type PaperOptionTrade,
+  type OptionIntelligence,
 } from "@/lib/localApi";
 import { toast } from "sonner";
 
@@ -79,7 +81,8 @@ export default function OptionChainTradingPanel() {
     () => localStorage.getItem("dpredict:selected-symbol") || "NIFTY"
   );
   const [options, setOptions] = useState<OptionRow[]>([]);
-  const [trades, setTrades] = useState<PaperOptionTrade[]>([]);\n  const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
+  const [trades, setTrades] = useState<PaperOptionTrade[]>([]);
+  const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -296,7 +299,8 @@ export default function OptionChainTradingPanel() {
                 <button
                   disabled={intelligence.status !== "ACTIONABLE"}
                   onClick={() => {
-                    const candidate = intelligence.recommendation.contract;
+                    const candidate = intelligence.recommendation?.contract;
+                    if (!candidate) return;
                     const row = options.find(r => r.expiry_date === candidate.expiry && r.strike === candidate.strike && r.option_type === candidate.optionType);
                     if (row) void trade(row, "BUY");
                     else toast.error("The recommended contract is not in the current chain snapshot.");
