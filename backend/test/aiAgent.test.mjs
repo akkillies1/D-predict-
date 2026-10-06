@@ -222,6 +222,14 @@ async function testToolArgumentValidation() {
   assert.match((await executeAgentTool(toolEnv, "market_scan", {})).summary, /DATABASE_UNAVAILABLE/);
 }
 
+async function testStatisticalBaselineIsExplicitlyNonMl() {
+  const env = { pool: null, mlFetch: async () => ({ status: 503, body: { detail: "no trained artifact" } }) };
+  const outcome = await executeAgentTool(env, "statistical_baseline", { symbol: "NIFTY", horizonDays: 5 });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.data.error, "DATABASE_UNAVAILABLE");
+  assert.match(outcome.summary, /DATABASE_UNAVAILABLE/);
+}
+
 async function testMlServiceFailureIsNotRewrittenAsZero() {
   const env = { pool: null, mlFetch: async () => ({ status: 503, body: { detail: "no trained artifact for TATASTEEL" } }) };
   const outcome = await executeAgentTool(env, "fresh_forecast", { symbol: "TATASTEEL", horizon: "1d" });
@@ -258,9 +266,9 @@ async function testPromptNamesOnlyRealToolsAndKeepsHonestyRules() {
   for (const name of AGENT_TOOL_NAMES) assert.ok(prompt.includes(name), `${name} must be listed for the model`);
   assert.match(prompt, /Facts come from two places only/);
   assert.match(prompt, /ABSTAIN/);
-  assert.match(prompt, /act inside this app in three ways/);
+  assert.match(prompt, /act inside this app through gated tools/);
   assert.match(prompt, /the user sees the exact change and clicks Apply or Refuse/);
-  assert.match(prompt, /You cannot place orders/);
+  assert.match(prompt, /never send a live broker order/);
   assert.match(prompt, /never override or reinterpret/);
   assert.match(prompt, /Attached ledger row/);
   assert.ok(!prompt.includes("undefined"));
@@ -399,6 +407,7 @@ const tests = [
   testStoppedInvestigationReportsAbort,
   testToolArgumentValidation,
   testMlServiceFailureIsNotRewrittenAsZero,
+  testStatisticalBaselineIsExplicitlyNonMl,
   testCoverageStaysSmallAndDeclared,
   testArgumentParsingIsInert,
   testPromptNamesOnlyRealToolsAndKeepsHonestyRules,
