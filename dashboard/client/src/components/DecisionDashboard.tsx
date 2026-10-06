@@ -42,6 +42,7 @@ import {
   getMarketHistory,
   getMarketScan,
   getPredictionPerformance,
+  getDecisionCandidate,
   getOptionChain,
   getOptionIntelligence,
   placeOptionPaperOrder,
@@ -55,6 +56,7 @@ import {
   type OptionIntelligence,
   type LivePrediction,
   type PredictionPerformance,
+  type DecisionCandidate,
   type PriceBar,
   type ResearchResult,
   type Signal,
@@ -246,6 +248,7 @@ export default function DecisionDashboard() {
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
+  const [decisionCandidate, setDecisionCandidate] = useState<DecisionCandidate | null>(null);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -275,6 +278,7 @@ export default function DecisionDashboard() {
       setOptions([]);
       setOptionIntelligence(null);
       setLivePrediction(null);
+      setDecisionCandidate(null);
       setWatchlistSaved(false);
       localStorage.setItem(STORAGE_KEY, value);
       window.dispatchEvent(new Event("dpredict:symbol"));
@@ -311,7 +315,7 @@ export default function DecisionDashboard() {
       const gate = predictionGate.current;
       const skipPrediction = gate.key === predictionKey && Date.now() < gate.until;
 
-      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, intelligenceResult] =
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, intelligenceResult, candidateResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
@@ -319,6 +323,7 @@ export default function DecisionDashboard() {
           skipPrediction ? Promise.resolve(null) : getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
           getOptionIntelligence(symbol),
+          getDecisionCandidate(symbol, (String(forecastHorizon) + "d") as "1d" | "3d" | "5d"),
         ]);
       if (requestId !== refreshSequence.current) return;
       if (!skipPrediction) {
@@ -341,6 +346,7 @@ export default function DecisionDashboard() {
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setOptionIntelligence(intelligenceResult.status === "fulfilled" ? intelligenceResult.value : null);
+      setDecisionCandidate(candidateResult.status === "fulfilled" ? candidateResult.value : null);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
@@ -1499,6 +1505,81 @@ export default function DecisionDashboard() {
             <div className="mt-6 rounded-xl border border-[#293f35] bg-[#09130f] p-4 text-[10px] leading-relaxed text-[#71877d]">
               Confidence is displayed as evidence, not certainty. Promotion and
               live execution remain separate gates.
+            </div>
+          </Card>
+        </section>
+
+        <section id="candidate-intelligence" className="grid gap-5 lg:grid-cols-[1.25fr_.75fr]">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <Label>Deterministic candidate engine</Label>
+                <h2 className="mt-1 font-display text-xl font-semibold">Candidate intelligence</h2>
+                <p className="mt-1 text-[10px] text-[#789087]">Backend decision engine · no frontend scoring · paper-only</p>
+              </div>
+              {decisionCandidate && (
+                <span className={decisionCandidate.status === "PAPER_CANDIDATE" ? "rounded-full border border-[#476238] bg-[#10231e] px-3 py-1.5 font-mono-ui text-[10px] font-bold tracking-[.08em] text-[#c8f169]" : "rounded-full border border-[#633d38] bg-[#1a100f] px-3 py-1.5 font-mono-ui text-[10px] font-bold tracking-[.08em] text-[#ff9d91]"}>
+                  {decisionCandidate.status.replaceAll("_", " ")}
+                </span>
+              )}
+            </div>
+            {decisionCandidate ? (
+              <>
+                <div className="mt-5 grid gap-3 sm:grid-cols-4">
+                  <Metric label="Direction" value={decisionCandidate.direction} sub={decisionCandidate.provenance.replaceAll("_", " ")} icon={decisionCandidate.direction === "LONG" ? ArrowUpRight : decisionCandidate.direction === "SHORT" ? ArrowDownRight : ShieldAlert} />
+                  <Metric label="Decision score" value={String(decisionCandidate.score) + "/100"} sub={decisionCandidate.gateSummary} icon={Gauge} />
+                  <Metric label="Expected return" value={decisionCandidate.expectedReturn == null ? "—" : pct(decisionCandidate.expectedReturn)} sub={decisionCandidate.horizon + " horizon · measured"} icon={Target} />
+                  <Metric label="Invalidation" value={price(decisionCandidate.invalidation)} sub={String(decisionCandidate.dataQuality.observations) + " daily bars · " + (decisionCandidate.dataQuality.fresh ? "fresh" : "stale")} icon={ShieldAlert} />
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                    <Label>Decision gates</Label>
+                    <div className="mt-3 space-y-2">
+                      {decisionCandidate.gates.map(gate => (
+                        <div key={gate.name} className="flex items-start gap-2 text-[10px]">
+                          <span className={gate.passed ? "text-[#c8f169]" : "text-[#ff9d91]"}>{gate.passed ? "✓" : "×"}</span>
+                          <div><div className="font-mono-ui text-[#d7e8d9]">{gate.name}</div><div className="mt-0.5 text-[#789087]">{gate.reason}</div></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                    <Label>Evidence / blockers</Label>
+                    <div className="mt-3 space-y-2 text-[10px] leading-relaxed">
+                      {decisionCandidate.reasons.slice(0, 5).map((reason, i) => <div key={i} className="text-[#aebeb3]">• {reason}</div>)}
+                      {decisionCandidate.blockers.length ? decisionCandidate.blockers.map(blocker => <div key={blocker.name} className="text-[#ffb0a7]">! {blocker.name}: {blocker.reason}</div>) : <div className="text-[#c8f169]">No blocking gate recorded.</div>}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-[10px] leading-relaxed text-[#c8b582]">
+                  {decisionCandidate.paperSuggestion
+                    ? "Paper candidate only: " + decisionCandidate.paperSuggestion.direction + " from " + price(decisionCandidate.paperSuggestion.entryReference) + " with invalidation " + price(decisionCandidate.paperSuggestion.invalidation) + ". No broker order is sent."
+                    : "ABSTAIN: D-Predict did not produce an executable paper candidate."}
+                </div>
+              </>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed border-[#315045] p-6 text-center text-xs text-[#789087]">
+                Candidate engine unavailable for this symbol/horizon. No candidate is fabricated.
+              </div>
+            )}
+          </Card>
+          <Card className="p-5">
+            <Label>Decision provenance</Label>
+            <div className="mt-4 space-y-3">
+              {[
+                ["Market data", market?.status ?? "UNAVAILABLE"],
+                ["ML prediction", livePrediction?.prediction_status ?? "UNAVAILABLE"],
+                ["Model action", livePrediction?.action_status ?? "UNAVAILABLE"],
+                ["Candidate source", decisionCandidate?.provenance ?? "UNAVAILABLE"],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2">
+                  <span className="text-[10px] text-[#789087]">{label}</span>
+                  <span className="font-mono-ui text-[9px] text-[#d7e8d9]">{value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 text-[9px] leading-relaxed text-[#71877d]">
+              The displayed candidate is returned by the backend deterministic decision engine. Nemotron may explain it, but cannot override its gates or convert ABSTAIN into a trade.
             </div>
           </Card>
         </section>
