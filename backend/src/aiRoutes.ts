@@ -143,6 +143,27 @@ export function createAiRouter(pool: Pool | null): Router {
     }
   });
 
+  router.get("/candidate-scan", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const raw = String(req.query.symbols ?? "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
+    const horizon = String(req.query.horizon ?? "1d").trim();
+    if (!raw.length) return res.status(400).json({ ok: false, error: "CANDIDATE_SYMBOLS_REQUIRED" });
+    try {
+      const results = [];
+      for (const symbol of raw) {
+        const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
+        if (outcome.ok && outcome.data) results.push(outcome.data);
+      }
+      results.sort((a: any, b: any) => {
+        if (a.status !== b.status) return a.status === "PAPER_CANDIDATE" ? -1 : 1;
+        return (b.score ?? 0) - (a.score ?? 0);
+      });
+      return res.json({ ok: true, horizon, count: results.length, candidates: results, disclaimer: "Ranked deterministic research/paper candidates only. No broker orders are sent." });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: "CANDIDATE_SCAN_FAILED", message: error instanceof Error ? error.message : "candidate_scan_failed" });
+    }
+  });
+
   router.get("/status", async (req, res) => {
     if (!isLoopbackRequest(req)) return refuseRemote(req, res);
     res.json(statusPayload(await effectiveConfig(pool)));
