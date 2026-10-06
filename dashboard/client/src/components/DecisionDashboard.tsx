@@ -62,6 +62,7 @@ import {
   type DecisionCandidate,
   type TrainingCoverage,
   type AiStatus,
+  type PaperState,
   type PriceBar,
   type ResearchResult,
   type Signal,
@@ -266,6 +267,7 @@ export default function DecisionDashboard() {
   const [wsConnected, setWsConnected] = useState(false);
   const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [paperState, setPaperState] = useState<PaperState | null>(null);
   const [loading, setLoading] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -427,7 +429,9 @@ export default function DecisionDashboard() {
       };
       socket.onmessage = event => {
         let message: LiveMessage; try { message = JSON.parse(String(event.data)) as LiveMessage; } catch { return; }
-        if (message.type === "quote") {
+        if (message.type === "state") {
+          setPaperState((message as Extract<LiveMessage, { type: "state" }>).state);
+        } else if (message.type === "quote") {
           const envelope = message as Extract<LiveMessage, { type: "quote" }>;
           if (envelope.symbol === symbolRef.current && envelope.quote?.ok) setLiveQuote(envelope.quote as MarketOverview);
         }
@@ -1396,6 +1400,26 @@ export default function DecisionDashboard() {
             </div>
             <span className="rounded-full border border-[#5b4b2b] px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8b582]">RESEARCH ONLY</span>
           </div>
+          {paperState?.account ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Paper equity</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#eff7ea]">{price(paperState.account.equity)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Cash</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#d7e8d9]">{price(paperState.account.cash)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Unrealized P/L</Label>
+                <div className={`mt-1 font-display text-lg font-semibold ${paperState.account.unrealizedPnl >= 0 ? "text-[#c8f169]" : "text-[#ff9d91]"}`}>{price(paperState.account.unrealizedPnl)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Open positions</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#d7e8d9]">{paperState.account.openPositions}</div>
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4">
             <TradingDesk embedded />
           </div>
