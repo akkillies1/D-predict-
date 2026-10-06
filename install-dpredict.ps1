@@ -42,8 +42,8 @@ try {
             throw "Database configuration was not completed (exit code $databaseExitCode). See $logFile"
         }
     }
-    if (-not (Test-Path $envFile)) {
-        throw "Database setup returned success without creating $envFile."
+    if (-not (Test-Path $stateEnvFile)) {
+        throw "Database setup returned success without creating $stateEnvFile."
     }
     if (-not (Test-Path $projectEnvFile)) {
         throw "Database setup returned success without creating $projectEnvFile."
