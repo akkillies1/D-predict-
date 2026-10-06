@@ -775,6 +775,28 @@ const TOOLS: ToolDefinition[] = [
     run: marketScanTool,
   },
   {
+    spec: { type: "function", function: { name: "option_chain", description: "Read the latest persisted option chain for an underlying. Never invents a quote.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionChainTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_intelligence", description: "Run D-Predict deterministic option-chain intelligence over the latest persisted chain and spot. Read-only.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionIntelligenceTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_candidate", description: "Return the best option candidate and alternatives from D-Predict option intelligence. Read-only.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionCandidateTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_payoff", description: "Compute deterministic expiry payoff and breakeven for a CE or PE.", parameters: objectSchema({ optionType: { type: "string", enum: ["CE","PE"] }, strike: { type: "number" }, premium: { type: "number" }, expirySpot: { type: "number" }, quantity: { type: "integer" } }, ["optionType","strike","premium","expirySpot"]) } },
+    run: optionPayoffTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_paper_order", description: "Create a quote-backed paper-only option BUY or SELL. Never reaches a broker. Requires user approval.", parameters: objectSchema({ symbol: { type: "string" }, expiry: { type: "string" }, strike: { type: "number" }, optionType: { type: "string", enum: ["CE","PE"] }, side: { type: "string", enum: ["BUY","SELL"] }, lots: { type: "integer", minimum: 1, maximum: 100 } }, ["symbol","expiry","strike","optionType","side","lots"]) } },
+    write: true,
+    describeWrite: (args) => `PAPER ${String(args.side ?? "?").toUpperCase()} ${symbolOf(args.symbol) ?? String(args.symbol ?? "?").slice(0, 32).toUpperCase()} ${String(args.optionType ?? "?").toUpperCase()} ${Number(args.strike) || "?"} ${String(args.expiry ?? "?")} · ${Number(args.lots) || "?"} lot(s). No broker order will be sent.`,
+    run: optionPaperOrderTool,
+  },
+  {
     spec: {
       type: "function",
       function: {
