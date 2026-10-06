@@ -35,7 +35,7 @@ try {
     # an incomplete configuration.
     if (-not (Test-Path $stateEnvFile) -or -not (Test-Path $projectEnvFile)) {
         Log 'Database configuration is missing; starting the first-run database setup wizard.'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $databaseSetup
+        & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $databaseSetup
         $databaseExitCode = $LASTEXITCODE
         if ($databaseExitCode -ne 0) {
             if ($databaseExitCode -eq 2) { throw 'Database configuration was cancelled by the user.' }
@@ -60,7 +60,7 @@ try {
     }
 
     Log 'Starting the D-Predict bootstrap after database configuration.'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
+    & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         throw "D-Predict prerequisite setup failed (exit code $exitCode). See $logFile"
