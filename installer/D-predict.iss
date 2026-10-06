@@ -53,6 +53,7 @@ Name: "startmenu";  Description: "Create a &Start Menu group";  GroupDescription
 [Files]
 Source: "..\install-dpredict.ps1";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\bootstrap-windows.ps1";  DestDir: "{app}"; Flags: ignoreversion
+Source: "..\bootstrap-ui.ps1";       DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dp.ps1";                 DestDir: "{app}"; Flags: ignoreversion
 Source: "..\run.ps1";                DestDir: "{app}"; Flags: ignoreversion
 Source: "..\launch-dpredict.ps1";    DestDir: "{app}"; Flags: ignoreversion

@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $stateRoot = Join-Path $env:LOCALAPPDATA 'D-Predict'
 $logDir = Join-Path $stateRoot 'logs'
 $logFile = Join-Path $logDir 'installer.log'
+$bootstrapLog = Join-Path $logDir 'bootstrap.log'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 function Log([string]$Message) {
@@ -50,16 +51,20 @@ try {
     # can overwrite the script that is currently executing and can leave a
     # partially installed tree. bootstrap-windows.ps1 owns source sync,
     # prerequisite installation, and verification.
+    $bootstrapUi = Join-Path $InstallDir 'bootstrap-ui.ps1'
     $bootstrap = Join-Path $InstallDir 'bootstrap-windows.ps1'
+    if (-not (Test-Path $bootstrapUi)) {
+        throw "Bootstrap UI is missing: $bootstrapUi"
+    }
     if (-not (Test-Path $bootstrap)) {
         throw "Installer bootstrap is missing: $bootstrap"
     }
 
-    Log 'Starting the D-Predict bootstrap after database configuration.'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
+    Log 'Starting the D-Predict graphical bootstrap after database configuration.'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $bootstrapUi -InstallDir $InstallDir -SourceRef $SourceRef
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
-        throw "D-Predict prerequisite setup failed (exit code $exitCode). See $logFile"
+        throw "D-Predict prerequisite setup failed (exit code $exitCode). See $logFile and $bootstrapLog"
     }
 
     New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
