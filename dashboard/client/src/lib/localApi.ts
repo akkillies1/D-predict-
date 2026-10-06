@@ -96,6 +96,14 @@ export async function runDecisionAgent(question: string, model: string | null, h
   }
 }
 
+export async function approveDecisionAgent(runId: string, callId: string, approved: boolean): Promise<{ ok: boolean; resolved: boolean; note?: string | null }> {
+  return json(`${API_BASE}/api/ai/agent/approval`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, callId, approved }),
+  });
+}
+
 export async function getDecisionCandidateScan(symbols: string[], horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<{ ok: boolean; horizon: string; count: number; candidates: DecisionCandidate[]; disclaimer?: string }> {
   const clean = symbols.map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
   const params = new URLSearchParams({ symbols: clean.join(","), horizon });
