@@ -869,7 +869,7 @@ export default function DecisionDashboard() {
           <Card className="p-5">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <Label>Price action · WebSocket live feed</Label>
+                <Label>Price action · {wsConnected ? "WebSocket live" : "WebSocket reconnecting"}</Label>
                 <h2 className="mt-1 font-display text-xl font-semibold">
                   {symbol}
                 </h2>
