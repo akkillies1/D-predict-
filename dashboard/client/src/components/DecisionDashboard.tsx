@@ -38,6 +38,8 @@ import {
   getLatestSignal,
   getLiveQuote,
   getLocalHealth,
+  getTrainingCoverage,
+  getAiStatus,
   getLivePrediction,
   getMarketHistory,
   getMarketScan,
@@ -57,6 +59,8 @@ import {
   type LivePrediction,
   type PredictionPerformance,
   type DecisionCandidate,
+  type TrainingCoverage,
+  type AiStatus,
   type PriceBar,
   type ResearchResult,
   type Signal,
@@ -257,6 +261,8 @@ export default function DecisionDashboard() {
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -291,12 +297,14 @@ export default function DecisionDashboard() {
     const requestId = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [health, live, bars, latest, forecastResult] = await Promise.allSettled([
+      const [health, live, bars, latest, forecastResult, coverageResult, aiResult] = await Promise.allSettled([
         getLocalHealth(),
         getLiveQuote(symbol),
         getMarketHistory(symbol, chartTimeframe === "1m" ? "1m" : "1d", undefined, chartTimeframe === "1m" ? 400 : chartTimeframe === "1d" ? 140 : 520),
         getLatestSignal(symbol),
         getForecast(symbol, forecastHorizon),
+        getTrainingCoverage(),
+        getAiStatus(),
       ]);
       if (requestId !== refreshSequence.current) return;
       setConnected(health.status === "fulfilled" && health.value.ok);
@@ -306,6 +314,8 @@ export default function DecisionDashboard() {
       setForecast(
         forecastResult.status === "fulfilled" ? forecastResult.value : null
       );
+      setTrainingCoverage(coverageResult.status === "fulfilled" ? coverageResult.value : null);
+      setAiStatus(aiResult.status === "fulfilled" ? aiResult.value : null);
       setLastUpdate(new Date().toISOString());
       setLoading(false);
       setEnrichmentLoading(true);
@@ -425,6 +435,8 @@ export default function DecisionDashboard() {
   }, [symbol]);
 
   const thesis = signal?.tradeThesis;
+  const coverageSummary = trainingCoverage?.summary;
+  const mlReady = (coverageSummary?.productionModels ?? 0) > 0;
   const liveActive = liveQuote?.status === "LIVE" && liveQuote.close != null && !!liveQuote.timestamp;
   const displayBars = useMemo(() => {
     const base = chartTimeframe === "1w" || chartTimeframe === "1mo" ? resampleBars(history, chartTimeframe === "1w" ? "week" : "month") : history;
