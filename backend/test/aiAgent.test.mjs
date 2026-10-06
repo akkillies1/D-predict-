@@ -88,11 +88,13 @@ async function testModelAnsweringWithoutToolsFailsClosed() {
     apiKey: "nvapi-test", baseUrl: "https://example.invalid/v1", model: "test-model",
     question: "Is the model working?", env: toolEnv,
   });
-  assert.equal(calls.length, 1, "a direct answer needs no extra upstream call");
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "The ledger has no scored rows in that window.");
+  assert.equal(calls.length, 1, "the first turn is still a tool-required investigation turn");
+  assert.equal(calls[0].tool_choice, "required");
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "AGENT_TOOL_REQUIRED");
+  assert.equal(result.text, "");
   assert.equal(result.toolCalls, 0);
-  assert.deepEqual(events.map((event) => event.event), ["meta", "answer", "done"]);
+  assert.deepEqual(events.map((event) => event.event), ["meta", "aierror"]);
 }
 
 async function testStepsAndToolCallsAreCapped() {
