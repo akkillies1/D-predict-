@@ -483,7 +483,6 @@ export default function ShadowTradingPanel() {
       const runtime = await getDatabaseRuntimeStatus();
       if (!runtime.configured || !runtime.healthy) {
         setError(runtime.error ?? "Database is not ready. Open Data & Database and complete setup.");
-        setLoading(false);
         return;
       }
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
