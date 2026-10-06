@@ -153,6 +153,47 @@ function Read-StateValue([string]$Name) {
     if (-not (Test-Path $path)) { return $null }
     return (Get-Content $path -Raw).Trim()
 }
+
+function Assert-DatabaseConfiguration {
+    $envFile = Join-Path $InstallDir '.env'
+    if (-not (Test-Path $envFile)) {
+        throw "Database configuration is missing: $envFile. Run D-Predict Setup & Repair and complete the database wizard before starting the bootstrap."
+    }
+
+    $values = @{}
+    foreach ($line in Get-Content $envFile) {
+        $text = "$line".Trim()
+        if (-not $text -or $text.StartsWith('#') -or -not $text.Contains('=')) { continue }
+        $parts = $text.Split('=', 2)
+        $values[$parts[0].Trim()] = $parts[1].Trim()
+    }
+
+    $mode = if ($values.ContainsKey('DATABASE_MODE')) { $values['DATABASE_MODE'] } else { '' }
+    if ($mode -eq 'local_postgres') {
+        $dataDir = if ($values.ContainsKey('D_PREDICT_DATA_DIR')) { $values['D_PREDICT_DATA_DIR'] } else { '' }
+        if ([string]::IsNullOrWhiteSpace($dataDir)) {
+            throw "Local PostgreSQL is selected but D_PREDICT_DATA_DIR is unset in $envFile. Refusing to start Docker with an unset database data directory."
+        }
+        if ($dataDir -match '^\./|^\.\\') {
+            throw "D_PREDICT_DATA_DIR must be an explicit user-selected path for an installed Windows instance. Refusing relative data directory '$dataDir'."
+        }
+        New-Item -ItemType Directory -Force -Path ($dataDir -replace '/', '\') | Out-Null
+        Log "Database configuration verified before Docker startup. Mode=local_postgres DataRoot=$dataDir"
+        return
+    }
+
+    if ($mode -eq 'supabase_cloud' -or $mode -eq 'supabase_self_hosted') {
+        $databaseUrl = if ($values.ContainsKey('DATABASE_URL')) { $values['DATABASE_URL'] } else { '' }
+        if ([string]::IsNullOrWhiteSpace($databaseUrl)) {
+            throw "Database mode '$mode' is selected but DATABASE_URL is unset in $envFile. Refusing to continue."
+        }
+        Log "Database configuration verified before Docker startup. Mode=$mode"
+        return
+    }
+
+    throw "Invalid or missing DATABASE_MODE in $envFile. Run the database setup wizard before starting the bootstrap."
+}
+
 function Sync-Source([string]$RequestedRef) {
     $trainingMarker = Join-Path $InstallDir 'training'
     $envExample = Join-Path $InstallDir '.env.example'
@@ -223,6 +264,7 @@ try {
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
         exit $p.ExitCode
     }
+    Assert-DatabaseConfiguration
     Ensure-Winget
     Ensure-Git
     Ensure-Python312
