@@ -29,6 +29,28 @@ export type PaperAnalytics = { ok: boolean; periodDays: number; since: string; s
 export type Coverage = { symbol: string; timeframe: string; status: "FRESH" | "STALE" | "NO_DATA"; observations: number; firstTimestamp: string | null; lastTimestamp: string | null; lastCollectedAt: string | null; source: string | null; ageSeconds: number | null };
 export type Performance = { symbol: string; period: string; timeframe: string; requestedDays: number; availableDays: number; coverage: number; metrics: { status: string; observations: number; startingPrice?: number; endingPrice?: number; absoluteReturn?: number; percentageReturn?: number; cagr?: number; volatility?: number; maxDrawdown?: number; bestDay?: number; worstDay?: number; positiveDayRatio?: number } };
 export type WatchlistItem = { symbol: string; position: number; note: string | null; price: number | null; timestamp: string | null; status: "AVAILABLE" | "NO_DATA" };
+export type DecisionCandidate = {
+  status: "PAPER_CANDIDATE" | "ABSTAIN";
+  symbol: string;
+  horizon: string;
+  direction: "LONG" | "SHORT" | "ABSTAIN";
+  score: number;
+  provenance: "ML_CONFIRMED" | "STATISTICAL_BASELINE" | "OPTION_INTELLIGENCE";
+  modelConfidence: number | null;
+  expectedReturn: number | null;
+  spot: number;
+  invalidation: number | null;
+  rewardRisk: { reward: number; risk: number; ratio: number } | null;
+  evidence: Array<{ name: string; value: number | string | boolean | null; weight: number; contribution: number }>;
+  gates: Array<{ name: string; passed: boolean; reason: string }>;
+  blockers: Array<{ name: string; reason: string }>;
+  reasons: string[];
+  option: unknown;
+  paperSuggestion: { direction: string; entryReference: number; invalidation: number | null; option: unknown; note: string } | null;
+  dataQuality: { observations: number; fresh: boolean };
+  gateSummary: string;
+};
+
 export type MarketPick = { symbol: string; name?: string | null; spot: number; expectedReturn: number; netExpectedReturn: number; confidence: number; horizon: string; dailyVolatility: number; momentum20d: number; momentum60d: number; maxDrawdown60d: number; dataDays: number; dataAsOf: string; dataStatus: "CURRENT" | "CLOSED_LAST_SESSION"; score: number; basis: "MODEL" | "EVIDENCE"; reasons: string[]; risks: string[] };
 export type PredictionPerformance = { periodDays: number; generatedAt: string; metrics: { scoredPredictions: number; pendingPredictions: number; accuracy: number | null; balancedAccuracy: number | null; directionalAccuracy: number | null; logLoss: number | null; brier: number | null; calibrationError: number | null; meanExpectedReturn: number | null; meanRealizedReturn: number | null; returnMae: number | null }; byHorizon: Array<{ horizon: string; scoredPredictions: number; accuracy: number | null; directionalAccuracy: number | null; logLoss: number | null; pendingPredictions: number }> };
 export type LivePrediction = { ok: boolean; symbol: string; timestamp: string; horizon: "1d" | "3d" | "5d"; prediction: "DOWN" | "FLAT" | "UP"; probabilities: { DOWN: number; FLAT: number; UP: number }; expected_return: number; confidence: number; probability_margin: number; return_interval: { p10: number; p50: number; p90: number }; probability_net_positive: number; calibration_status: "CALIBRATED" | "UNCALIBRATED"; prediction_status: "PROMOTION_READY" | "ABSTAIN"; action_status: "ACTIONABLE_LONG" | "ACTIONABLE_SHORT" | "WATCH_FLAT" | "WATCH_LOW_EDGE" | "ABSTAIN_MODEL_GATE"; action_reasons: string[]; promotion_checks: Record<string, boolean>; oos_metrics: { accuracy: number; majority_baseline: number; log_loss: number; directional_accuracy: number | null }; model_version: string; training_cutoff: string; validation_oos_examples: number };
@@ -48,6 +70,10 @@ export async function getWatchlist(signal?: AbortSignal): Promise<WatchlistItem[
 export async function addToWatchlist(symbol: string, note?: string): Promise<WatchlistItem> { const payload = await json<{ item: WatchlistItem }>(`${API_BASE}/api/watchlist`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, note }) }); return payload.item; }
 export async function removeFromWatchlist(symbol: string): Promise<void> { await json(`${API_BASE}/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }); }
 export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal | null> { const payload = await json<{ ok: boolean; signal?: Signal | null }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); if (!payload.ok || !payload.signal) return null; const signalRow = payload.signal; const parameters = signalRow.parameters ?? {}; const embedded = parameters.tradeThesis ?? parameters.trade_thesis; return { ...signalRow, tradeThesis: signalRow.tradeThesis ?? (embedded as TradeThesis | null | undefined) ?? null }; }
+export async function getDecisionCandidate(symbol: string, horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<DecisionCandidate> {
+  const payload = await json<DecisionCandidate>(`${API_BASE}/api/ai/candidate?symbol=${encodeURIComponent(symbol)}&horizon=${encodeURIComponent(horizon)}`, { signal });
+  return payload;
+}
 export async function getOptionChain(symbol: string, signal?: AbortSignal): Promise<OptionRow[]> { const payload = await json<{ rows: OptionRow[] }>(`${API_BASE}/api/options/chain?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.rows; }
 export async function getOptionIntelligence(symbol: string, signal?: AbortSignal): Promise<OptionIntelligence> { return json<OptionIntelligence>(`${API_BASE}/api/options/intelligence?symbol=${encodeURIComponent(symbol)}`, { signal }); }
 export async function placeOptionPaperOrder(input: { symbol: string; expiry: string; strike: number; optionType: "CE" | "PE"; side: "BUY" | "SELL"; lots: number }): Promise<{ id: string; entryPrice: number }> { const payload = await json<{ order: { id: string; entryPrice: number } }>(`${API_BASE}/api/shadow/paper-orders`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); return payload.order; }
