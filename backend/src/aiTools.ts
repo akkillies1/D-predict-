@@ -646,7 +646,75 @@ const objectSchema = (properties: Record<string, unknown>, required: string[] = 
   additionalProperties: false,
 });
 
-const TOOLS: ToolDefinition[] = [
+async function statisticalBaselineTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol for the statistical baseline.");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const horizonDays = intOf(args.horizonDays, 5, 1, 30);
+  const { bars, lastTimestamp, ageSeconds, fresh } = await loadDailyBars(env.pool, symbol, 730);
+  if (bars.length < 20) return fail("INSUFFICIENT_HISTORY", `${symbol} has ${bars.length} stored daily bars; the statistical baseline needs at least 20. No prediction was fabricated.`);
+  const closes = bars.map((bar) => bar.close);
+  const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index]));
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const volatility = std(returns);
+  const spot = closes[closes.length - 1];
+  const scale = volatility * Math.sqrt(horizonDays);
+  const expectedReturn = Math.exp(mean * horizonDays) - 1;
+  const probabilityAbove = 1 - normalCdf(-mean * Math.sqrt(horizonDays) / Math.max(volatility, 1e-9));
+  const probabilityBelow = 1 - probabilityAbove;
+  const edgeThreshold = Math.max(0.005, volatility * Math.sqrt(horizonDays) * 0.15);
+  const direction = Math.abs(expectedReturn) >= edgeThreshold
+    ? probabilityAbove >= 0.55 ? "LONG" : probabilityBelow >= 0.55 ? "SHORT" : "FLAT"
+    : "FLAT";
+  const p10 = spot * Math.exp(mean * horizonDays - 1.2816 * scale);
+  const p90 = spot * Math.exp(mean * horizonDays + 1.2816 * scale);
+  const data = {
+    symbol, asOf: lastTimestamp, dataFresh: fresh, dataAgeSeconds: ageSeconds == null ? null : round(ageSeconds, 1),
+    horizonDays, daysOfHistoryUsed: closes.length, spot: round(spot, 4),
+    dailyVolatility: round(volatility, 8), expectedReturn: round(expectedReturn, 6),
+    probabilityAboveSpot: round(probabilityAbove, 6), probabilityBelowSpot: round(probabilityBelow, 6),
+    forecastRange: { low: round(p10, 4), high: round(p90, 4) },
+    direction, status: direction === "FLAT" ? "WAIT" : "PAPER_CANDIDATE",
+    mlConfirmation: "UNAVAILABLE", methodology: "STATISTICAL_BASELINE",
+    rationale: direction === "FLAT"
+      ? "Historical drift does not clear the configured volatility-adjusted edge threshold."
+      : `${direction} is supported by stored daily-return drift and probability calculations; this is not an ML forecast.`,
+    paperSuggestion: direction === "FLAT" ? null : {
+      direction, entryReference: round(spot, 4), invalidation: round(direction === "LONG" ? p10 : p90, 4),
+      note: "Research/paper candidate only. No broker order is sent."
+    },
+    limitations: [
+      "Uses stored daily log returns, not the trained ML artifact.",
+      "Probability is a closed-form statistical calculation, not a calibrated ML probability.",
+      "News, gaps, liquidity and intraday structure are not modeled."
+    ]
+  };
+  return { ok: true, summary: `${symbol} statistical baseline ${horizonDays}d: ${direction}; ML confirmation unavailable; ${closes.length} daily bars measured.`, data };
+}
+
+function normalCdf(value: number): number {
+  const sign = value < 0 ? -1 : 1;
+  const magnitude = Math.abs(value) / Math.sqrt(2);
+  const tt = 1 / (1 + 0.3275911 * magnitude);
+  const polynomial = 1 - (((((1.061405429 * tt - 1.453152027) * tt) + 1.421413741) * tt - 0.284496736) * tt + 0.254829592) * tt * Math.exp(-magnitude * magnitude);
+  return 0.5 * (1 + sign * polynomial);
+}
+
+const TOOLS: ToolDefinition[] = [  {
+    spec: {
+      type: "function",
+      function: {
+        name: "statistical_baseline",
+        description: "When ML inference is unavailable, compute a clearly labeled statistical baseline from real stored daily bars. It may produce a research/paper candidate, but it is never an ML prediction.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizonDays: { type: "integer", description: "Forward horizon, 1-30. Default 5." },
+        }, ["symbol"]),
+      },
+    },
+    run: statisticalBaselineTool,
+  },
+
   {
     spec: {
       type: "function",
