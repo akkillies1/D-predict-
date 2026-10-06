@@ -61,7 +61,7 @@ async function testLoopUsesRealToolsThenAnswersWithoutThem() {
   assert.equal(calls.length, 2, "one tool step, then the model answers instead of investigating further");
   const offered = calls[0].tools.map((tool) => tool.function.name);
   assert.deepEqual(offered.sort(), [...AGENT_TOOL_NAMES].sort(), "the model is offered exactly the local tools");
-  assert.equal(calls[0].tool_choice, "auto");
+  assert.equal(calls[0].tool_choice, "required", "the first agent turn must use a real D-Predict tool");
   assert.equal(calls[0].stream, false, "investigation steps are answered as JSON so tool calls can be parsed");
 
   const toolMessage = calls[1].messages.find((message) => message.role === "tool");
@@ -389,7 +389,7 @@ async function testApprovalGateSettlesExactlyOnce() {
 
 const tests = [
   testLoopUsesRealToolsThenAnswersWithoutThem,
-  testModelAnsweringWithoutToolsStillStreamsNothingFake,
+  testModelAnsweringWithoutToolsFailsClosed,
   testStepsAndToolCallsAreCapped,
   testUnknownToolFailsWithoutFabricating,
   testProviderFailureSurfacesAsErrorNotInventedAnswer,
