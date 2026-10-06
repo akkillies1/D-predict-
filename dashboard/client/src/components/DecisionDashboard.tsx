@@ -706,6 +706,20 @@ export default function DecisionDashboard() {
         </div>
       </header>
 
+      <section className="relative mx-auto w-full max-w-[1800px] px-0">
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div><Label>Runtime · provenance · readiness</Label><h2 className="mt-1 font-display text-base font-semibold text-[#eff7ea]">System Operations</h2></div>
+            <span className="font-mono-ui text-[9px] uppercase tracking-[.14em] text-[#70887d]">Local only · paper trading</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Local API</Label><div className={`mt-1 text-xs font-semibold ${connected ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{connected ? "READY" : "CHECK"}</div><p className="mt-1 text-[10px] text-[#789087]">REST is authoritative for state and commands.</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Realtime</Label><div className={`mt-1 text-xs font-semibold ${wsConnected ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{wsConnected ? "CONNECTED" : "RECONNECTING"}</div><p className="mt-1 text-[10px] text-[#789087]">WebSocket /live carries quotes, paper state and alerts.</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>ML pipeline</Label><div className={`mt-1 text-xs font-semibold ${mlReady ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{mlReady ? "PROMOTED MODEL" : "NO PROMOTED MODEL"}</div><p className="mt-1 text-[10px] text-[#789087]">{coverageSummary ? `${coverageSummary.productionModels} promoted · ${coverageSummary.trainingRequired} training required · ${coverageSummary.insufficientHistory} insufficient history` : "Coverage unavailable."}</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Nemotron agent</Label><div className={`mt-1 text-xs font-semibold ${aiStatus?.configured && aiStatus.enabled ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{aiStatus?.configured && aiStatus.enabled ? "READY" : "NOT CONFIGURED"}</div><p className="mt-1 truncate text-[10px] text-[#789087]">{aiStatus?.model ?? "Configure local BYOK in AI Settings."}</p></div>
+          </div>
+        </Card>
+      </section>
       <main className="relative mx-auto max-w-[1800px] space-y-5 px-4 py-5 lg:px-8">
         {isRefreshing ? <div className="flex items-center gap-3 rounded-xl border border-[#36513e] bg-[#0d211a] px-4 py-3 text-xs text-[#c8f169] animate-pulse"><Loader2 size={15} className="animate-spin" /><span>{loading ? <>Loading live data for <strong>{symbol}</strong>...</> : <>Finishing analysis for <strong>{symbol}</strong>...</>}</span><span className="ml-auto hidden text-[10px] text-[#789087] sm:inline">{loading ? "Core data first" : "Research and signals updating"}</span></div> : null}
         <section
