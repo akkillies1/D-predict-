@@ -355,6 +355,22 @@ export default function DecisionDashboard() {
       setScanExcluded(
         scanResult.status === "fulfilled" ? scanResult.value.excluded : []
       );
+      if (scanResult.status === "fulfilled" && scanResult.value.picks.length) {
+        setCandidateScanLoading(true);
+        try {
+          const ranked = await getDecisionCandidateScan(
+            scanResult.value.picks.map(pick => pick.symbol),
+            `${forecastHorizon}d` as "1d" | "3d" | "5d"
+          );
+          if (requestId === refreshSequence.current) setRankedCandidates(ranked.candidates);
+        } catch {
+          if (requestId === refreshSequence.current) setRankedCandidates([]);
+        } finally {
+          if (requestId === refreshSequence.current) setCandidateScanLoading(false);
+        }
+      } else {
+        setRankedCandidates([]);
+      }
       setPredictionPerformance(
         performanceResult.status === "fulfilled" ? performanceResult.value : null
       );
