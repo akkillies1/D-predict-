@@ -70,6 +70,12 @@ export async function getWatchlist(signal?: AbortSignal): Promise<WatchlistItem[
 export async function addToWatchlist(symbol: string, note?: string): Promise<WatchlistItem> { const payload = await json<{ item: WatchlistItem }>(`${API_BASE}/api/watchlist`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, note }) }); return payload.item; }
 export async function removeFromWatchlist(symbol: string): Promise<void> { await json(`${API_BASE}/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }); }
 export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal | null> { const payload = await json<{ ok: boolean; signal?: Signal | null }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); if (!payload.ok || !payload.signal) return null; const signalRow = payload.signal; const parameters = signalRow.parameters ?? {}; const embedded = parameters.tradeThesis ?? parameters.trade_thesis; return { ...signalRow, tradeThesis: signalRow.tradeThesis ?? (embedded as TradeThesis | null | undefined) ?? null }; }
+export async function getDecisionCandidateScan(symbols: string[], horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<{ ok: boolean; horizon: string; count: number; candidates: DecisionCandidate[]; disclaimer?: string }> {
+  const clean = symbols.map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
+  const params = new URLSearchParams({ symbols: clean.join(","), horizon });
+  return json(`${API_BASE}/api/ai/candidate-scan?${params.toString()}`, { signal });
+}
+
 export async function getDecisionCandidate(symbol: string, horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<DecisionCandidate> {
   const payload = await json<{ ok: boolean; summary: string; data: DecisionCandidate }>(`${API_BASE}/api/ai/candidate?symbol=${encodeURIComponent(symbol)}&horizon=${encodeURIComponent(horizon)}`, { signal });
   return payload.data;
