@@ -18,7 +18,7 @@ import {
   retrainSymbol,
   removeWatchlistItem,
   unreadAlertCount,
-} from "./appActions.js";
+} from "./appActions.js";\nimport { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
 
 /** Anything longer is cut and the cut is declared inside the payload. Sized so a
  * full 26-instrument coverage report fits without losing its tail. */
@@ -417,6 +417,64 @@ async function modelCoverageTool(env: ToolEnv, args: Record<string, unknown>): P
       : `Model coverage reported: ${JSON.stringify(body).slice(0, 200)}`,
     data: body,
   };
+}
+
+async function optionChainTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide NIFTY or BANKNIFTY (or another stored index symbol).");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+    from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
+    where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
+    order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
+  if (!result.rows.length) return fail("NO_OPTION_CHAIN", `${symbol} has no persisted option-chain snapshot.`);
+  const rows = result.rows.map(r => ({ expiryDate: String(r.expiry_date), strike: Number(r.strike), optionType: String(r.option_type) as OptionType, timestamp: new Date(r.market_timestamp), ltp: round(r.ltp,2), bid: round(r.bid,2), ask: round(r.ask,2), oi: round(r.oi,0), oiChange: round(r.oi_change,0), iv: round(r.iv,2), volume: round(r.volume,0) }));
+  return { ok: true, summary: `${symbol}: ${rows.length} option contracts across ${new Set(rows.map(r=>r.expiryDate)).size} expiry snapshot(s).`, data: { symbol, rows } };
+}
+
+async function optionIntelligenceTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide the stored underlying symbol.");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const [spot, chain] = await Promise.all([
+    env.pool.query(`select close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 1`, [symbol]),
+    env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+      from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
+      where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
+      order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]),
+  ]);
+  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume) }));
+  const intelligence = analyzeOptionChain(symbol, rows, spot.rows.length ? finite(spot.rows[0].close) : null);
+  return { ok: intelligence.ok, summary: `${symbol}: ${intelligence.status} · ${intelligence.recommendation.action} · ${intelligence.recommendation.direction} · confidence ${(intelligence.recommendation.confidence*100).toFixed(0)}%.`, data: intelligence };
+}
+
+function finite(value: unknown): number | null {
+  const n = Number(value);
+  return value == null || !Number.isFinite(n) ? null : n;
+}
+
+async function optionCandidateTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide the underlying symbol.");
+  const intelligence = await optionIntelligenceTool(env, { symbol });
+  if (!intelligence.ok) return intelligence;
+  const data = intelligence.data as any;
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  const preferred = data?.recommendation?.contract;
+  if (!preferred) return fail("NO_OPTION_CANDIDATE", `${symbol}: no contract passed the current chain evidence gates.`);
+  return { ok: true, summary: `${symbol}: candidate ${preferred.optionType} ${preferred.strike} ${preferred.expiry} at ask ₹${preferred.ask}; action ${data.recommendation.action}.`, data: { symbol, recommendation: data.recommendation, gates: data.gates, topCandidates: candidates.slice(0,10), spot: data.spot, expiry: data.expiry } };
+}
+
+async function optionPayoffTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const optionType = String(args.optionType ?? "").toUpperCase();
+  if (optionType !== "CE" && optionType !== "PE") return fail("INVALID_OPTION_TYPE", "optionType must be CE or PE.");
+  const strike = Number(args.strike), premium = Number(args.premium), quantity = intOf(args.quantity, 1, 1, 1000000);
+  if (!Number.isFinite(strike) || strike <= 0 || !Number.isFinite(premium) || premium < 0) return fail("INVALID_PAYOFF_INPUT", "Provide positive strike and non-negative premium.");
+  const expirySpot = Number(args.expirySpot);
+  if (!Number.isFinite(expirySpot) || expirySpot < 0) return fail("INVALID_EXPIRY_SPOT", "Provide expirySpot.");
+  const intrinsic = optionType === "CE" ? Math.max(0, expirySpot-strike) : Math.max(0, strike-expirySpot);
+  const gross = (intrinsic-premium)*quantity;
+  return { ok:true, summary:`${optionType} ${strike}: expiry spot ₹${expirySpot} gives gross P&L ₹${gross.toFixed(2)} for ${quantity} units before costs.`, data:{optionType,strike,premium,expirySpot,quantity,intrinsic,grossPnl:gross,breakeven:optionType==="CE"?strike+premium:strike-premium} };
 }
 
 async function marketScanTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
