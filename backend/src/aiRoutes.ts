@@ -7,6 +7,8 @@ import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agen
 import { mlFetch } from "./mlProxy.js";
 import {
   DEFAULT_AI_BASE_URL,
+  DEFAULT_AI_MODEL,
+  normalizeModel,
   buildSystemPrompt,
   describeUpstreamError,
   looksLikeNvidiaKey,
@@ -61,7 +63,7 @@ async function effectiveConfig(pool: Pool | null): Promise<AiConfig> {
   return {
     apiKey,
     baseUrl: normalizeBaseUrl(saved?.baseUrl || process.env.NVIDIA_API_BASE_URL),
-    model: saved?.model || String(process.env.NVIDIA_MODEL ?? "").trim() || null,
+    model: normalizeModel(saved?.model || String(process.env.NVIDIA_MODEL ?? "").trim()) || DEFAULT_AI_MODEL,
     enabled: saved ? saved.enabled : true,
     source: saved?.apiKey?.trim() ? "saved" : envKey ? "env" : null,
   };
@@ -230,7 +232,7 @@ export function createAiRouter(pool: Pool | null): Router {
     const config = await effectiveConfig(pool);
     if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "The assistant needs an NVIDIA API key. Open AI Assistant settings and paste your own key — it is stored locally on this machine." });
     if (!config.enabled) return res.status(400).json({ ok: false, error: "AI_DISABLED", message: "The assistant is switched off in AI Assistant settings." });
-    const model = String(body.model ?? "").trim().slice(0, 160) || config.model;
+    const model = normalizeModel(body.model) || config.model;
     if (!model) return res.status(400).json({ ok: false, error: "AI_MODEL_REQUIRED", message: "Choose a model in AI Assistant settings first (the picker lists what your own key can access)." });
 
     const payload = {
@@ -238,7 +240,8 @@ export function createAiRouter(pool: Pool | null): Router {
       messages: [{ role: "system", content: buildSystemPrompt(evidence, body.marketContext == null ? null : String(body.marketContext)) }, ...history, { role: "user", content: question }],
       temperature: Math.min(1, Math.max(0, Number(body.temperature ?? 0.2))),
       top_p: 0.95,
-      max_tokens: Math.min(2048, Math.max(64, Number(body.maxTokens ?? 700))),
+      max_tokens: Math.min(4096, Math.max(128, Number(body.maxTokens ?? 1200))),
+      extra_body: { chat_template_kwargs: { enable_thinking: true } },
       stream: body.stream !== false,
     };
 
