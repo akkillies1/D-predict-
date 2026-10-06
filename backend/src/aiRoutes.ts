@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { runAgent } from "./aiAgent.js";
+import { executeAgentTool } from "./aiTools.js";
 import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agentApprovals.js";
 import { mlFetch } from "./mlProxy.js";
 import {
@@ -128,6 +129,19 @@ async function callUpstream(config: AiConfig, path: string, payload: unknown, ti
 
 export function createAiRouter(pool: Pool | null): Router {
   const router = Router();
+
+  router.get("/candidate", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const symbol = String(req.query.symbol ?? "").trim().toUpperCase().slice(0, 40);
+    const horizon = String(req.query.horizon ?? "1d").trim();
+    if (!symbol) return res.status(400).json({ ok: false, error: "CANDIDATE_SYMBOL_REQUIRED" });
+    try {
+      const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
+      return res.status(outcome.ok ? 200 : 422).json(outcome);
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: "CANDIDATE_FAILED", message: error instanceof Error ? error.message : "candidate_failed" });
+    }
+  });
 
   router.get("/status", async (req, res) => {
     if (!isLoopbackRequest(req)) return refuseRemote(req, res);
