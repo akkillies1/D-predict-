@@ -272,6 +272,7 @@ async function testPromptNamesOnlyRealToolsAndKeepsHonestyRules() {
   assert.match(prompt, /never override or reinterpret/);
   assert.match(prompt, /Attached ledger row/);
   assert.ok(!prompt.includes("undefined"));
+  assert.match(prompt, /prediction_health/);
   const noEvidence = buildAgentSystemPrompt([]);
   assert.match(noEvidence, /EVIDENCE: none supplied/);
 }
