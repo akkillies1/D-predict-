@@ -1,7 +1,6 @@
-// Agent tools. Every number a tool returns comes from the local Postgres store
-// or the local ML service — this file never computes a probability and never
-// falls back to an example or placeholder value. When data is missing the tool
-// says so; a failed tool is a failed tool.
+// Agent tools. Market/model facts come from the local Postgres store or the local ML service.
+// Deterministic analytics are explicitly labelled as such; this file never invents
+// missing observations or presents a fallback calculation as an ML prediction.
 // Four tools change app state (train, watchlist add/remove, alert ack). Each one
 // is gated: aiAgent.ts will not execute it until the user approves that exact
 // change in the dashboard, and it runs the same appActions.ts statements the
@@ -18,7 +17,8 @@ import {
   retrainSymbol,
   removeWatchlistItem,
   unreadAlertCount,
-} from "./appActions.js";\nimport { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
+} from "./appActions.js";
+import { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
 
 /** Anything longer is cut and the cut is declared inside the payload. Sized so a
  * full 26-instrument coverage report fits without losing its tail. */
@@ -403,6 +403,44 @@ async function recentAlertsTool(env: ToolEnv, args: Record<string, unknown>): Pr
   };
 }
 
+async function predictionHealthTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol.");
+  const horizon = horizonOf(args.horizon);
+  const coverageResponse = await env.mlFetch(`/training/coverage?horizons=${encodeURIComponent(horizon)}`, {}, 20_000);
+  if (coverageResponse.status < 200 || coverageResponse.status >= 300 || !coverageResponse.body) {
+    return fail("ML_COVERAGE_UNAVAILABLE", `${symbol} ${horizon}: training service coverage unavailable (HTTP ${coverageResponse.status}).`);
+  }
+  const instruments = Array.isArray(coverageResponse.body.instruments)
+    ? coverageResponse.body.instruments
+    : Array.isArray(coverageResponse.body.coverage) ? coverageResponse.body.coverage : [];
+  const matches = instruments.filter((entry: any) => String(entry.symbol ?? entry.instrument ?? entry.ticker ?? "").toUpperCase() === symbol);
+  const bundle = matches.find((entry: any) => String(entry.horizon ?? entry.target_horizon ?? horizon).toLowerCase() === horizon) ?? matches[0] ?? null;
+  let history: { observations: number; lastBar: string | null; dataStatus: string } | null = null;
+  if (env.pool) {
+    const loaded = await loadDailyBars(env.pool, symbol, 730);
+    history = { observations: loaded.bars.length, lastBar: loaded.lastTimestamp, dataStatus: loaded.fresh ? "FRESH" : loaded.bars.length ? "STALE" : "NO_DATA" };
+  }
+  const live = await callMlForecast(env, symbol, horizon);
+  const health = {
+    symbol, horizon,
+    history,
+    coverageReported: matches.length > 0,
+    bundle: bundle ?? null,
+    inference: live.ok
+      ? { status: "AVAILABLE", modelVersion: live.forecast.modelVersion, modelStatus: live.forecast.modelStatus, predictionStatus: live.forecast.predictionStatus, calibrationStatus: live.forecast.calibrationStatus, promotionChecks: live.forecast.promotionChecks }
+      : { status: "UNAVAILABLE", code: live.code, reason: live.reason },
+  };
+  const status = live.ok ? "AVAILABLE" : bundle ? "BUNDLE_REPORTED_BUT_INFERENCE_UNAVAILABLE" : "NO_HORIZON_BUNDLE_REPORTED";
+  return {
+    ok: true,
+    summary: live.ok
+      ? `${symbol} ${horizon}: ML inference AVAILABLE; model ${live.forecast.modelVersion ?? "version n/a"}.`
+      : `${symbol} ${horizon}: ML inference ${status}; ${history?.observations ?? 0} daily bars stored; reason: ${live.reason}.`,
+    data: { ...health, status },
+  };
+}
+
 async function modelCoverageTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
   const horizons = Array.isArray(args.horizons) ? args.horizons.map(String).join(",") : String(args.horizons ?? "").trim();
   const query = horizons ? `?horizons=${encodeURIComponent(horizons.slice(0, 32))}` : "";
@@ -701,6 +739,20 @@ function normalCdf(value: number): number {
 }
 
 const TOOLS: ToolDefinition[] = [  {
+    spec: {
+      type: "function",
+      function: {
+        name: "prediction_health",
+        description: "Diagnose one symbol and horizon using real ML coverage, live inference, and stored daily history. Use this before falling back when fresh_forecast is unavailable.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizon: { type: "string", enum: ["1d", "3d", "5d"], description: "Prediction horizon." },
+        }, ["symbol"]),
+      },
+    },
+    run: predictionHealthTool,
+  },
+  {
     spec: {
       type: "function",
       function: {
