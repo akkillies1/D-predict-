@@ -3,6 +3,20 @@
 // without a database or an outbound network call.
 
 export const DEFAULT_AI_BASE_URL = "https://integrate.api.nvidia.com/v1";
+/** Current NVIDIA-hosted Nemotron chat model. NVIDIA may retire older public model IDs. */
+export const DEFAULT_AI_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b";
+const LEGACY_NEMOTRON_MODELS = new Set([
+  "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "nvidia/llama-3.3-nemotron-super-49b-v1",
+  "nvidia/nemotron-3-super-120b-a12b",
+]);
+
+export function normalizeModel(value: unknown): string | null {
+  const model = String(value ?? "").trim().slice(0, 160);
+  if (!model) return null;
+  return LEGACY_NEMOTRON_MODELS.has(model.toLowerCase()) ? DEFAULT_AI_MODEL : model;
+}
 /** NVIDIA API keys are issued with this prefix; used only for a shape warning. */
 const NVIDIA_KEY_PREFIX = "nvapi-";
 /** Characters of serialized evidence handed to the model. Keeps requests small and cheap. */
