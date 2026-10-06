@@ -39,6 +39,9 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "sourceRef=$sourceRef" >> $env:GITHUB_OUTPUT
+          # A release target must be a commit: on a tag push sourceRef is the tag
+          # itself, which GitHub will not accept as target_commitish.
+          "target=${{ github.sha }}" >> $env:GITHUB_OUTPUT
 
       - name: Install Inno Setup
         shell: powershell
@@ -121,9 +124,9 @@ jobs:
           }
 
           if ($releaseExists) {
-            # Retarget an existing release when rebuilding it from the current source ref.
-            gh release edit $tag --target '${{ steps.release.outputs.sourceRef }}'
+            # Retarget an existing release when rebuilding it from the current source commit.
+            gh release edit $tag --target '${{ steps.release.outputs.target }}'
             gh release upload $tag $versioned $stable $scriptBundle --clobber
           } else {
-            gh release create $tag --target '${{ steps.release.outputs.sourceRef }}' $versioned $stable $scriptBundle --title "D-Predict $tag" --generate-notes
+            gh release create $tag --target '${{ steps.release.outputs.target }}' $versioned $stable $scriptBundle --title "D-Predict $tag" --generate-notes
           }
