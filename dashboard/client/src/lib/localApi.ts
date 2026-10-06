@@ -90,7 +90,7 @@ export async function runDecisionAgent(question: string, model: string | null, h
       try {
         const data = JSON.parse(dataLine.slice(5).trim());
         handlers.onEvent?.(event, data);
-        if (event === "text" && typeof data.text === "string") handlers.onText?.(data.text);
+        if (event === "answer" && typeof data.delta === "string") handlers.onText?.(data.delta);
       } catch { /* ignore malformed SSE frame */ }
     }
   }
