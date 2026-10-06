@@ -125,6 +125,23 @@ def test_action_gate_requires_net_edge_and_margin():
     assert _action_gate("FLAT", np.asarray([0.2, 0.7, 0.1]), 0.0, True)["status"] == "WATCH_FLAT"
 
 
+def test_action_gate_requires_uncertainty_interval_to_clear_cost():
+    base = ("UP", np.asarray([0.1, 0.2, 0.7]), 0.01, True)
+    assert _action_gate(*base, return_interval={"p10": 0.003, "p50": 0.01, "p90": 0.02})["status"] == "ACTIONABLE_LONG"
+    blocked = _action_gate(*base, return_interval={"p10": -0.004, "p50": 0.01, "p90": 0.02})
+    assert blocked["status"] == "WATCH_LOW_EDGE"
+    assert "LOWER_RETURN_INTERVAL_DOES_NOT_CLEAR_COST" in blocked["reasons"]
+
+    short = _action_gate("DOWN", np.asarray([0.7, 0.2, 0.1]), -0.01, True, return_interval={"p10": -0.02, "p50": -0.01, "p90": -0.003})
+    assert short["status"] == "ACTIONABLE_SHORT"
+    short_blocked = _action_gate("DOWN", np.asarray([0.7, 0.2, 0.1]), -0.01, True, return_interval={"p10": -0.02, "p50": -0.01, "p90": 0.004})
+    assert "UPPER_RETURN_INTERVAL_DOES_NOT_CLEAR_COST" in short_blocked["reasons"]
+
+    # Research users can explicitly disable the stricter interval gate for a
+    # controlled comparison, without changing the default production behavior.
+    assert _action_gate(*base, return_interval={"p10": -0.004, "p50": 0.01, "p90": 0.02}, require_interval_edge=False)["status"] == "ACTIONABLE_LONG"
+
+
 def test_promotion_report_exposes_confidence_intervals():
     actual = _actual()
     probabilities = np.asarray([

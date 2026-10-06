@@ -56,6 +56,7 @@ MIN_ACTION_CONFIDENCE = 0.55
 MIN_ACTION_MARGIN = 0.10
 MIN_NET_EDGE_PROBABILITY = 0.55
 ROUND_TRIP_COST = float(os.environ.get("SCANNER_ROUND_TRIP_COST", "0.002"))
+REQUIRE_INTERVAL_EDGE = os.environ.get("REQUIRE_INTERVAL_EDGE", "true").lower() in {"1", "true", "yes"}
 DB_URL = os.environ.get("DATABASE_URL")
 MODEL_ARTIFACT_DIR = Path(os.environ.get("MODEL_ARTIFACT_DIR", "/app/models/live"))
 
@@ -538,7 +539,7 @@ def _fit_meta(meta_x: np.ndarray, correct: np.ndarray) -> tuple[object | None, d
     return classifier, report
 
 
-def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST, meta_probability: float | None = None, meta_ready: bool = False) -> dict:
+def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: float, promotion_ready: bool, probability_net_positive: float = 1.0, round_trip_cost: float = ROUND_TRIP_COST, meta_probability: float | None = None, meta_ready: bool = False, return_interval: dict | None = None, require_interval_edge: bool = REQUIRE_INTERVAL_EDGE) -> dict:
     ordered = np.sort(probabilities)[::-1]
     confidence = float(ordered[0])
     margin = float(ordered[0] - ordered[1]) if len(ordered) > 1 else confidence
@@ -559,6 +560,13 @@ def _action_gate(prediction: str, probabilities: np.ndarray, expected_return: fl
         reasons.append("EXPECTED_RETURN_DOES_NOT_CLEAR_COST")
     if probability_net_positive < MIN_NET_EDGE_PROBABILITY:
         reasons.append("PROBABILITY_NET_EDGE_TOO_LOW")
+    if require_interval_edge and return_interval:
+        p10 = return_interval.get("p10")
+        p90 = return_interval.get("p90")
+        if prediction == "UP" and (p10 is None or float(p10) <= round_trip_cost):
+            reasons.append("LOWER_RETURN_INTERVAL_DOES_NOT_CLEAR_COST")
+        if prediction == "DOWN" and (p90 is None or float(p90) >= -round_trip_cost):
+            reasons.append("UPPER_RETURN_INTERVAL_DOES_NOT_CLEAR_COST")
     # Meta gate only tightens, and only when a validated meta layer exists. A
     # ready meta layer can veto an otherwise-actionable directional call it
     # believes is likely wrong; an absent/unpromoted meta layer imposes no extra
@@ -783,7 +791,7 @@ def predict(request: PredictRequest):
     meta_context = latest[META_CONTEXT_COLUMNS].to_numpy(dtype=float)
     meta_x = _build_meta_features(np.asarray(raw_probs).reshape(1, -1), np.array([expected_return]), meta_context, bundle.return_residuals)
     meta_probability = _meta_probability(bundle, meta_x)
-    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready, probability_net_positive, meta_probability=meta_probability, meta_ready=bundle.meta_ready)
+    action = _action_gate(prediction, probs, expected_return, bundle.promotion_ready, probability_net_positive, meta_probability=meta_probability, meta_ready=bundle.meta_ready, return_interval=return_interval)
 
     # Freshness is reported independently of the action gate: a model can be
     # current while data is stale, or data live while the model lags the last bar.
@@ -800,6 +808,7 @@ def predict(request: PredictRequest):
         "raw_probabilities": {"DOWN": float(raw_probs[0]), "FLAT": float(raw_probs[1]), "UP": float(raw_probs[2])},
         "expected_return": expected_return, "confidence": confidence,
         "return_interval": return_interval, "probability_net_positive": probability_net_positive,
+        "interval_edge_required": REQUIRE_INTERVAL_EDGE,
         "probability_margin": action["probability_margin"],
         "calibration_status": "CALIBRATED" if bundle.calibration_verified else ("UNCALIBRATED" if not bundle.calibrated else "CALIBRATION_UNVERIFIED"),
         "prediction_status": prediction_status,
