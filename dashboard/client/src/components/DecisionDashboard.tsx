@@ -1126,6 +1126,17 @@ export default function DecisionDashboard() {
                     icon={Database}
                   />
                 </div>
+                <div className="mt-4 rounded-xl border border-[#1d332f] bg-[#08120f] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <Label>Decision summary</Label>
+                    <span className={`rounded-full border px-2.5 py-1 font-mono-ui text-[8px] uppercase tracking-[.12em] ${statusTone(decisionCandidate.status)}`}>{decisionCandidate.status.replaceAll("_", " ")}</span>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div><div className="text-[9px] text-[#70887d]">PROVENANCE</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.provenance.replaceAll("_"," ")}</div></div>
+                    <div><div className="text-[9px] text-[#70887d]">RISK / REWARD</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.rewardRisk?.ratio != null ? decisionCandidate.rewardRisk.ratio.toFixed(2) + "×" : "Not established"}</div></div>
+                    <div><div className="text-[9px] text-[#70887d]">OBSERVATIONS</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.dataQuality.observations} · {decisionCandidate.dataQuality.fresh ? "fresh" : "stale"}</div></div>
+                  </div>
+                </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
                     <Label>Execution / position strategy</Label>
