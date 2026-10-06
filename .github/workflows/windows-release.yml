@@ -121,7 +121,9 @@ jobs:
           }
 
           if ($releaseExists) {
+            # Retarget an existing release when rebuilding it from the current source ref.
+            gh release edit $tag --target '${{ steps.release.outputs.sourceRef }}'
             gh release upload $tag $versioned $stable $scriptBundle --clobber
           } else {
-            gh release create $tag $versioned $stable $scriptBundle --title "D-Predict $tag" --generate-notes
+            gh release create $tag --target '${{ steps.release.outputs.sourceRef }}' $versioned $stable $scriptBundle --title "D-Predict $tag" --generate-notes
           }
