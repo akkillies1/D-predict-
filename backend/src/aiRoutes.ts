@@ -6,6 +6,7 @@ import { runAgent } from "./aiAgent.js";
 import { executeAgentTool } from "./aiTools.js";
 import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agentApprovals.js";
 import { mlFetch } from "./mlProxy.js";
+import { rankDecisionCandidates } from "./decisionEngine.js";
 import {
   DEFAULT_AI_BASE_URL,
   DEFAULT_AI_MODEL,
@@ -154,11 +155,8 @@ export function createAiRouter(pool: Pool | null): Router {
         const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
         if (outcome.ok && outcome.data) results.push(outcome.data);
       }
-      results.sort((a: any, b: any) => {
-        if (a.status !== b.status) return a.status === "PAPER_CANDIDATE" ? -1 : 1;
-        return (b.score ?? 0) - (a.score ?? 0);
-      });
-      return res.json({ ok: true, horizon, count: results.length, candidates: results, disclaimer: "Ranked deterministic research/paper candidates only. No broker orders are sent." });
+      const ranked = rankDecisionCandidates(results as Array<ReturnType<typeof import("./decisionEngine.js").buildDecisionCandidate>>);
+      return res.json({ ok: true, horizon, count: ranked.length, candidates: ranked, disclaimer: "Ranked deterministic research/paper candidates only. No broker orders are sent." });
     } catch (error) {
       return res.status(500).json({ ok: false, error: "CANDIDATE_SCAN_FAILED", message: error instanceof Error ? error.message : "candidate_scan_failed" });
     }
