@@ -139,7 +139,18 @@ try {
     $message += " Keep this configuration?"
     $keep = [System.Windows.Forms.MessageBox]::Show($message, 'D-Predict Database Configuration',
       [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($keep -eq [System.Windows.Forms.DialogResult]::Yes) { exit 0 }
+    if ($keep -eq [System.Windows.Forms.DialogResult]::Yes) {
+      # Only keep an existing configuration when the project-level .env is still
+      # present. Reinstallations may preserve %LOCALAPPDATA% state while replacing
+      # the application directory.
+      if (Test-Path $ComposeEnvFile) { exit 0 }
+      [void][System.Windows.Forms.MessageBox]::Show(
+        'The saved database settings are incomplete for this installation. Please review the configuration before continuing.',
+        'D-Predict Database Configuration',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+      )
+    }
   }
   if ($NonInteractive) {
     $mode = if ($existing) { $existing.mode } else { 'local_postgres' }
