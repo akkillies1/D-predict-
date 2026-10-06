@@ -22,7 +22,7 @@
     <p class="small" id="asset-size">Installer size: loading…</p>
     <a id="download-link" class="btn primary" href="https://github.com/akkillies1/D-predict-/releases/download/v2.1.2/D-Predict-Setup-v2.1.2.exe">Download the installer</a>
     <a class="btn" href="https://github.com/akkillies1/D-predict-/releases/tag/v2.1.2">View release notes</a>
-    <p class="small">Source commit: <a href="https://github.com/akkillies1/D-predict-/commit/7156f73bd8ccdd90d68e8a27b77dbf84e113dfe5">7156f73</a> · Windows build workflow: <a href="https://github.com/akkillies1/D-predict-/actions/runs/37480551185">37480551185</a></p>
+    <p class="small">Source commit: <a href="https://github.com/akkillies1/D-predict-/commit/d9d5cebdcf1cd908ea3dcbdf12c6cb7f31211acb">d9d5ceb</a> · Windows build workflow: <a href="https://github.com/akkillies1/D-predict-/actions/runs/37484862470">37484862470</a></p>
   </section>
   <section class="panel">
     <h2>Alternative: script-based installation</h2>
@@ -36,7 +36,7 @@
     <p class="muted">After downloading in PowerShell, run:</p>
     <code class="hash">Get-FileHash .\D-Predict-Setup-v2.1.2.exe -Algorithm SHA256</code>
     <p class="muted">Expected SHA-256:</p>
-    <code class="hash" id="sha256">b9c0d7ec530c4ad435cdf2b5c3d66984e593f3d34f1a35997e7ac63537ae8812</code>
+    <code class="hash" id="sha256">8a6fd334f835039aba822c17432d5b7219c5333a24770255b1fbdf54d0bcaaba</code>
     <p class="small" id="verified-time">Release metadata verified: loading…</p>
   </section>
   <section class="panel warning">
@@ -66,7 +66,7 @@
     document.getElementById('version').textContent='D-Predict '+d.tag_name;
     document.getElementById('asset-name').textContent=asset.name;
     document.getElementById('asset-size').textContent='Installer size: '+(asset.size/1048576).toFixed(2)+' MB';
-    document.getElementById('release-time').textContent='Published: '+fmt(d.published_at);
+    document.getElementById('release-time').textContent='Published: '+fmt(d.published_at)+(asset.updated_at&&asset.updated_at!==d.published_at?' · this installer was rebuilt and uploaded '+fmt(asset.updated_at):'');
     document.getElementById('download-link').href=asset.browser_download_url;
     document.getElementById('sha256').textContent=(asset.digest||'').replace(/^sha256:/,'')||'SHA-256 not supplied by GitHub release';
     document.getElementById('verified-time').textContent='Release metadata verified '+fmt(new Date().toISOString())+' · GitHub release '+d.tag_name;
