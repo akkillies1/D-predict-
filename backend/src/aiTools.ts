@@ -473,7 +473,7 @@ async function optionPaperOrderTool(env: ToolEnv, args: Record<string, unknown>)
   const strike = Number(args.strike);
   const lots = intOf(args.lots, 1, 1, 1000);
   if (!symbol) return fail("INVALID_SYMBOL", "Provide the underlying symbol.");
-  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(expiry)) return fail("INVALID_EXPIRY", "Use YYYY-MM-DD.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return fail("INVALID_EXPIRY", "Use YYYY-MM-DD.");
   if (optionType !== "CE" && optionType !== "PE") return fail("INVALID_OPTION_TYPE", "optionType must be CE or PE.");
   if (side !== "BUY" && side !== "SELL") return fail("INVALID_SIDE", "side must be BUY or SELL.");
   if (!Number.isFinite(strike) || strike <= 0) return fail("INVALID_STRIKE", "Provide a positive strike.");
