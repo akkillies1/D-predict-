@@ -19,6 +19,7 @@ from app import (  # noqa: E402
     _promotion_report,
     _training_frame,
 )
+from training.build_dataset import FEATURE_COLUMNS, TARGET_DEFINITION_VERSION, make_features, make_targets
 
 
 def _actual(rows=120):
@@ -79,6 +80,41 @@ def test_three_day_training_label_uses_three_future_closes():
     first_position = raw.index.get_loc(frame.index[0])
     expected = closes[first_position + 3] / closes[first_position] - 1
     assert abs(float(first["target_return"]) - expected) < 1e-12
+
+
+def test_feature_set_contains_point_in_time_regime_features():
+    steps = np.arange(700, dtype=float)
+    closes = 100.0 + steps * 0.1 + np.sin(steps * 0.2)
+    index = pd.date_range("2024-01-01", periods=len(closes), freq="D", tz="UTC")
+    raw = pd.DataFrame({
+        "open": closes * 1.001,
+        "high": closes * 1.012,
+        "low": closes * 0.988,
+        "close": closes,
+        "volume": 1000.0 + (steps % 23) * 20.0,
+    }, index=index)
+    features = make_features(raw)
+    assert {"gap_1", "range_pct", "close_location_value", "trend_strength_20", "volatility_regime_z20", "volume_price_trend20"}.issubset(FEATURE_COLUMNS)
+    assert list(features.columns) == list(FEATURE_COLUMNS)
+    assert np.isfinite(features.dropna().to_numpy()).all()
+
+
+def test_target_threshold_scales_with_horizon_volatility():
+    steps = np.arange(700, dtype=float)
+    closes = 100.0 + steps * 0.05 + np.sin(steps * 0.4)
+    index = pd.date_range("2024-01-01", periods=len(closes), freq="D", tz="UTC")
+    raw = pd.DataFrame({
+        "open": closes,
+        "high": closes + 1.5,
+        "low": closes - 1.5,
+        "close": closes,
+        "volume": 1000.0,
+    }, index=index)
+    one = make_targets(raw, 1)
+    five = make_targets(raw, 5)
+    assert TARGET_DEFINITION_VERSION == "volatility-normalized-v1"
+    assert (five["target_threshold"].dropna() >= one["target_threshold"].dropna()).all()
+    assert set(one["target_class"].dropna().unique()).issubset({"DOWN", "FLAT", "UP"})
 
 
 def test_action_gate_requires_net_edge_and_margin():

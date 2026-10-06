@@ -26,7 +26,8 @@ load_dotenv(ROOT / ".env")
 HORIZONS = {"1d": 1, "3d": 3, "5d": 5}
 # Bumped when make_features changes: the served path validates artifacts against
 # this string, so a stale model can never be scored with a new feature layout.
-FEATURE_SET_VERSION = "market-v2"
+FEATURE_SET_VERSION = "market-v3"
+TARGET_DEFINITION_VERSION = "volatility-normalized-v1"
 
 # Single source of truth for the model input columns. make_features produces
 # exactly these, in this order; app.py and train_baseline.py import this list so
@@ -48,6 +49,13 @@ FEATURE_COLUMNS = [
     "stoch_k14", "cci20",
     # calendar
     "day_of_month_norm",
+    # price-state / regime
+    "gap_1",
+    "range_pct",
+    "close_location_value",
+    "trend_strength_20",
+    "volatility_regime_z20",
+    "volume_price_trend20",
 ]
 
 
@@ -132,12 +140,59 @@ def make_features(frame: pd.DataFrame) -> pd.DataFrame:
     # Calendar
     out["day_of_month_norm"] = pd.Series(df.index.day, index=df.index) / 31.0
 
+    # Price-state / regime. These remain point-in-time: each value uses only the
+    # current bar and backward-looking rolling windows.
+    out["gap_1"] = df["open"].astype(float) / close.shift(1) - 1.0
+    out["range_pct"] = (high - low) / close.replace(0, np.nan)
+    out["close_location_value"] = (close - low) / (high - low).replace(0, np.nan)
+    out["trend_strength_20"] = (close.rolling(20).mean() - close.rolling(20).mean().shift(5)) / close
+    vol_mean20 = out["volatility20"].rolling(60).mean()
+    vol_std20 = out["volatility20"].rolling(60).std().replace(0, np.nan)
+    out["volatility_regime_z20"] = (out["volatility20"] - vol_mean20) / vol_std20
+    out["volume_price_trend20"] = (out["return_1"] * volume).rolling(20).sum() / (volume.rolling(20).sum() + 1.0)
+
     out = out.replace([np.inf, -np.inf], np.nan)
     missing = [c for c in FEATURE_COLUMNS if c not in out.columns]
     extra = [c for c in out.columns if c not in FEATURE_COLUMNS]
     if missing or extra:
         raise AssertionError(f"make_features/FEATURE_COLUMNS drift: missing={missing} extra={extra}")
     return out[FEATURE_COLUMNS]
+
+
+def make_targets(raw: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
+    """Create return and volatility-normalized directional labels.
+
+    A fixed +/-0.1% class boundary treats a 0.15% move and a 3% move as the
+    same event. The boundary below scales with the observed ATR and horizon,
+    while retaining a small absolute floor so noise is not promoted to a
+    directional label. The raw return remains available for regression and
+    expected-value calculations.
+    """
+    close = pd.to_numeric(raw["close"], errors="coerce")
+    high = pd.to_numeric(raw["high"], errors="coerce")
+    low = pd.to_numeric(raw["low"], errors="coerce")
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [(high - low), (high - previous_close).abs(), (low - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr14_pct = true_range.rolling(14).mean() / close.replace(0, np.nan)
+    target_return = close.shift(-horizon_days) / close - 1.0
+    horizon_vol = atr14_pct * np.sqrt(float(horizon_days))
+    threshold = np.maximum(0.001, 0.50 * horizon_vol)
+    target_class = np.select(
+        [target_return > threshold, target_return < -threshold],
+        ["UP", "DOWN"],
+        default="FLAT",
+    )
+    return pd.DataFrame(
+        {
+            "target_return": target_return,
+            "target_threshold": threshold,
+            "target_class": target_class,
+        },
+        index=raw.index,
+    )
 
 
 def read_csv(symbol: str) -> pd.DataFrame | None:
@@ -207,15 +262,13 @@ def build(symbol: str, min_rows: int = 500) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     for horizon, days in HORIZONS.items():
-        target = raw["close"].shift(-days) / raw["close"] - 1
+        target = make_targets(raw, days)
         data = features.copy()
-        data["target_return"] = target
-        data["target_class"] = np.select(
-            [target > 0.001, target < -0.001], ["UP", "DOWN"], default="FLAT"
-        )
+        data = data.join(target)
         data["symbol"] = symbol.upper()
         data["horizon"] = horizon
         data["feature_set_version"] = FEATURE_SET_VERSION
+        data["target_definition_version"] = TARGET_DEFINITION_VERSION
         data["source_cutoff"] = data.index
         data = data.dropna(subset=list(features.columns) + ["target_return"]).copy()
         if data.empty:

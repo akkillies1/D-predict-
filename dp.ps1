@@ -20,6 +20,9 @@ function Refresh-Path {
   foreach ($dir in @((Join-Path $env:ProgramFiles 'nodejs'),(Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),(Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin'))) {
     if ($dir -and (Test-Path $dir) -and (($env:Path -split ';') -notcontains $dir)) { $env:Path = "$dir;$env:Path" }
   }
+  foreach ($dir in @((Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin'))) {
+    if ($dir -and (Test-Path $dir) -and (($env:Path -split ';') -notcontains $dir)) { $env:Path = "$dir;$env:Path" }
+  }
 }
 function Need($name) { Refresh-Path; if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { Die "Missing '$name'. Run D-Predict Repair & Check." } }
 function Test-DevCheckout { Test-Path (Join-Path $Root '.git') }
@@ -85,19 +88,37 @@ function Ensure-ProjectEnvFile {
   Copy-Item $seed $ProjectEnv
   Info "Created .env for Docker Compose from $(Split-Path -Leaf $seed)"
 }
+function Find-DockerDesktop {
+  @(
+    (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe')
+  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+function Test-DockerEngine {
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+  # Windows PowerShell 5.1 promotes native stderr to ErrorRecord objects. Run
+  # through cmd so a missing npipe is a normal readiness result, not a fatal
+  # NativeCommandError that stops the launcher before it can wait or diagnose.
+  $null = & cmd.exe /c 'docker info >nul 2>&1'
+  return ($LASTEXITCODE -eq 0)
+}
+function Get-DockerDiagnostic {
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return 'Docker CLI is not available on PATH.' }
+  $lines = @(& cmd.exe /c 'docker context show 2>&1'; & cmd.exe /c 'docker info 2>&1' | Select-Object -First 1)
+  ($lines | Where-Object { $_ -and $_.ToString().Trim() } | ForEach-Object { $_.ToString().Trim() }) -join ' | '
+}
 function Ensure-DockerReady {
   Refresh-Path
   Need docker
-  $null = & docker info 2>&1
-  if ($LASTEXITCODE -eq 0) { return }
-  $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-  if (Test-Path $desktop) { Start-Process $desktop | Out-Null }
-  for ($i=0; $i -lt 45; $i++) {
+  if (Test-DockerEngine) { return }
+  $desktop = Find-DockerDesktop
+  if ($desktop) { Start-Process -FilePath $desktop -WorkingDirectory (Split-Path -Parent $desktop) | Out-Null }
+  for ($i = 0; $i -lt 90; $i++) {
     Start-Sleep -Seconds 2
-    $null = & docker info 2>&1
-    if ($LASTEXITCODE -eq 0) { return }
+    if (Test-DockerEngine) { return }
   }
-  Die 'Docker Desktop is installed but the engine is not ready.'
+  $diagnostic = Get-DockerDiagnostic
+  Die "Docker Desktop Linux engine is not ready. Docker could not open its Linux engine pipe. Open Docker Desktop, wait until it says Running, confirm Linux containers / WSL 2 mode is enabled, then run D-Predict Setup & Repair again. Diagnostic: $diagnostic"
 }
 function Ensure-Tooling {
   Refresh-Path

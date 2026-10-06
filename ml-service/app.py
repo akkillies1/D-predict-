@@ -28,7 +28,7 @@ from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from training.build_dataset import FEATURE_COLUMNS, FEATURE_SET_VERSION, make_features
+from training.build_dataset import FEATURE_COLUMNS, FEATURE_SET_VERSION, TARGET_DEFINITION_VERSION, make_features, make_targets
 
 CLASS_NAMES = ["DOWN", "FLAT", "UP"]
 CLASS_MAP = {"DOWN": 0, "FLAT": 1, "UP": 2}
@@ -116,6 +116,7 @@ class PredictRequest(BaseModel):
 class ModelBundle:
     horizon: str
     feature_set_version: str
+    target_definition_version: str
     classifier: HistGradientBoostingClassifier
     regressor: HistGradientBoostingRegressor
     calibrators: list[IsotonicRegression | None]
@@ -188,11 +189,10 @@ def _normalize_horizon(value: str) -> str:
 def _training_frame(raw: pd.DataFrame, horizon: str) -> pd.DataFrame:
     horizon_days = SUPPORTED_HORIZONS[horizon]
     features = make_features(raw)
-    target = raw["close"].shift(-horizon_days) / raw["close"] - 1
+    target = make_targets(raw, horizon_days)
     frame = features.copy()
-    frame["target_return"] = target
-    frame["target_class"] = np.select([target > 0.001, target < -0.001], ["UP", "DOWN"], default="FLAT")
-    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLUMNS + ["target_return", "target_class"])
+    frame = frame.join(target)
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLUMNS + ["target_return", "target_threshold", "target_class"])
     if len(frame) < MIN_HISTORY:
         raise HTTPException(status_code=503, detail=f"Need at least {MIN_HISTORY} usable daily examples; found {len(frame)}")
     return frame
@@ -613,7 +613,7 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     reg.fit(frame[FEATURE_COLUMNS], frame["target_return"])
     training_end = pd.Timestamp(frame.index.max()).tz_convert("UTC")
     signature = hashlib.sha256(
-        (symbol.upper() + "|" + horizon + "|" + FEATURE_SET_VERSION + "|" + training_end.isoformat()
+        (symbol.upper() + "|" + horizon + "|" + FEATURE_SET_VERSION + "|" + TARGET_DEFINITION_VERSION + "|" + training_end.isoformat()
          + "|histgb:lr=.05,max_iter=250,max_leaf_nodes=15,l2=1,seed=42|cal="
          + ("isotonic" if calibration_verified else "raw")
          + "|" + META_VERSION + "=" + ("ready" if meta_ready else "dormant")
@@ -622,6 +622,7 @@ def _fit_bundle(symbol: str, frame: pd.DataFrame, horizon: str) -> ModelBundle:
     return ModelBundle(
         horizon=horizon,
         feature_set_version=FEATURE_SET_VERSION,
+        target_definition_version=TARGET_DEFINITION_VERSION,
         classifier=clf, regressor=reg, calibrators=calibrators, calibrated=calibrated,
         training_end=training_end, validation_examples=oos_examples,
         calibration_examples=oos_examples if calibrated else 0,
@@ -685,7 +686,9 @@ def _load_bundle(symbol: str, horizon: str) -> ModelBundle:
             "message": f"Validated model artifact could not be loaded: {error}",
             "artifact": str(path),
         }) from error
-    if not isinstance(bundle, ModelBundle) or bundle.horizon != horizon or bundle.feature_set_version != FEATURE_SET_VERSION:
+    if (not isinstance(bundle, ModelBundle) or bundle.horizon != horizon
+            or getattr(bundle, "feature_set_version", None) != FEATURE_SET_VERSION
+            or getattr(bundle, "target_definition_version", None) != TARGET_DEFINITION_VERSION):
         raise HTTPException(status_code=503, detail={
             "code": "MODEL_ARTIFACT_INVALID",
             "message": "Model artifact metadata does not match the requested horizon or feature set.",
@@ -737,7 +740,7 @@ def _meta_probability(bundle: ModelBundle, meta_x: np.ndarray) -> float | None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS), "artifact_directory": str(MODEL_ARTIFACT_DIR), "training_inference_separated": True}
+    return {"ok": True, "service": "ml-inference", "feature_set_version": FEATURE_SET_VERSION, "target_definition_version": TARGET_DEFINITION_VERSION, "default_horizon": DEFAULT_HORIZON, "supported_horizons": sorted(SUPPORTED_HORIZONS), "artifact_directory": str(MODEL_ARTIFACT_DIR), "training_inference_separated": True}
 
 
 @app.post("/predict")
@@ -850,6 +853,7 @@ def predict(request: PredictRequest):
             "features": {name: float(meta_x[0][i]) for i, name in enumerate(bundle.meta_feature_names)},
         },
         "model_version": bundle.model_version, "feature_set_version": FEATURE_SET_VERSION,
+        "target_definition_version": TARGET_DEFINITION_VERSION,
         "training_cutoff": bundle.training_end.isoformat(),
         "validation_oos_examples": bundle.validation_examples, "calibration_examples": bundle.calibration_examples,
         "features": {column: float(latest.iloc[0][column]) for column in FEATURE_COLUMNS},

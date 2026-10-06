@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from app import DEFAULT_HORIZON, FEATURE_SET_VERSION, SUPPORTED_HORIZONS, _fit_bundle, _load_daily, _save_bundle, _training_frame
+from app import DEFAULT_HORIZON, FEATURE_SET_VERSION, SUPPORTED_HORIZONS, TARGET_DEFINITION_VERSION, _fit_bundle, _load_daily, _save_bundle, _training_frame
 
 
 def train_one(symbol: str, horizon: str) -> dict:
@@ -21,6 +21,7 @@ def train_one(symbol: str, horizon: str) -> dict:
         "artifact": str(artifact),
         "model_version": bundle.model_version,
         "feature_set_version": FEATURE_SET_VERSION,
+        "target_definition_version": TARGET_DEFINITION_VERSION,
         "training_cutoff": bundle.training_end.isoformat(),
         "validation_oos_examples": bundle.validation_examples,
         "calibration_examples": bundle.calibration_examples,
