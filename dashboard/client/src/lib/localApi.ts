@@ -71,8 +71,8 @@ export async function addToWatchlist(symbol: string, note?: string): Promise<Wat
 export async function removeFromWatchlist(symbol: string): Promise<void> { await json(`${API_BASE}/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }); }
 export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal | null> { const payload = await json<{ ok: boolean; signal?: Signal | null }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); if (!payload.ok || !payload.signal) return null; const signalRow = payload.signal; const parameters = signalRow.parameters ?? {}; const embedded = parameters.tradeThesis ?? parameters.trade_thesis; return { ...signalRow, tradeThesis: signalRow.tradeThesis ?? (embedded as TradeThesis | null | undefined) ?? null }; }
 export async function getDecisionCandidate(symbol: string, horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<DecisionCandidate> {
-  const payload = await json<DecisionCandidate>(`${API_BASE}/api/ai/candidate?symbol=${encodeURIComponent(symbol)}&horizon=${encodeURIComponent(horizon)}`, { signal });
-  return payload;
+  const payload = await json<{ ok: boolean; summary: string; data: DecisionCandidate }>(`${API_BASE}/api/ai/candidate?symbol=${encodeURIComponent(symbol)}&horizon=${encodeURIComponent(horizon)}`, { signal });
+  return payload.data;
 }
 export async function getOptionChain(symbol: string, signal?: AbortSignal): Promise<OptionRow[]> { const payload = await json<{ rows: OptionRow[] }>(`${API_BASE}/api/options/chain?symbol=${encodeURIComponent(symbol)}`, { signal }); return payload.rows; }
 export async function getOptionIntelligence(symbol: string, signal?: AbortSignal): Promise<OptionIntelligence> { return json<OptionIntelligence>(`${API_BASE}/api/options/intelligence?symbol=${encodeURIComponent(symbol)}`, { signal }); }
