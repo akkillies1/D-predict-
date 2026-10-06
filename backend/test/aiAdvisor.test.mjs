@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
   DEFAULT_AI_BASE_URL,
+  DEFAULT_AI_MODEL,
+  normalizeModel,
   buildEvidenceBlock,
   buildSystemPrompt,
   describeUpstreamError,
@@ -14,6 +16,9 @@ import {
 // --- base URL normalisation: users paste anything from a bare host to a full
 // chat-completions URL; the router must end up with a usable /v1 root.
 assert.equal(normalizeBaseUrl(""), DEFAULT_AI_BASE_URL);
+assert.equal(DEFAULT_AI_MODEL, "nvidia/nemotron-3.5-lightning-30b-a3b");
+assert.equal(normalizeModel("nvidia/llama-3.1-nemotron-ultra-253b-v1"), DEFAULT_AI_MODEL);
+assert.equal(normalizeModel("nvidia/nemotron-3.5-lightning-30b-a3b"), DEFAULT_AI_MODEL);
 assert.equal(normalizeBaseUrl("integrate.api.nvidia.com/v1"), "https://integrate.api.nvidia.com/v1");
 assert.equal(normalizeBaseUrl("https://integrate.api.nvidia.com/v1/"), "https://integrate.api.nvidia.com/v1");
 assert.equal(normalizeBaseUrl("https://example.com/v1/chat/completions"), "https://example.com/v1");
@@ -70,7 +75,7 @@ assert.ok(buildSystemPrompt([]).includes("EVIDENCE: none supplied"));
 
 // --- upstream failures must map to codes the UI can explain honestly.
 assert.equal(describeUpstreamError(401, '{"error":"Invalid API key"}').code, "AI_KEY_REJECTED");
-assert.equal(describeUpstreamError(403, "").code, "AI_KEY_REJECTED");
+assert.equal(describeUpstreamError(403, "").code, "AI_INFERENCE_FORBIDDEN");
 assert.ok(describeUpstreamError(404, '{"detail":{"code":"Not_Found","message":"model removed"}}').message.includes("model removed"));
 assert.equal(describeUpstreamError(404, "").code, "AI_MODEL_UNAVAILABLE");
 assert.equal(describeUpstreamError(429, "too many requests").code, "AI_RATE_LIMITED");

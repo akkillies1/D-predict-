@@ -38,10 +38,18 @@ import {
   getLatestSignal,
   getLiveQuote,
   getLocalHealth,
+  getTrainingCoverage,
+  getAiStatus,
   getLivePrediction,
   getMarketHistory,
   getMarketScan,
   getPredictionPerformance,
+  getPaperAnalytics,
+  runTraining,
+  type PaperAnalytics,
+  type TrainingRunReport,
+  getDecisionCandidate,
+  getDecisionCandidateScan,
   getOptionChain,
   getOptionIntelligence,
   placeOptionPaperOrder,
@@ -55,6 +63,10 @@ import {
   type OptionIntelligence,
   type LivePrediction,
   type PredictionPerformance,
+  type DecisionCandidate,
+  type TrainingCoverage,
+  type AiStatus,
+  type PaperState,
   type PriceBar,
   type ResearchResult,
   type Signal,
@@ -66,6 +78,7 @@ import TradingDesk from "@/components/TradingDesk";
 import PriceChart, { type ChartOverlays, type ChartBand } from "@/components/PriceChart";
 import BacktestCard from "@/components/BacktestCard";
 import AlertsBell from "@/components/AlertsBell";
+import DecisionCopilot from "@/components/DecisionCopilot";
 
 const STORAGE_KEY = "dpredict:selected-symbol";
 const TIMEFRAME_KEY = "dpredict:chart-timeframe";
@@ -175,6 +188,12 @@ function Label({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+function statusTone(status: string) {
+  if (status === "PAPER_CANDIDATE" || status === "READY" || status === "LIVE") return "border-[#476238] bg-[#102016] text-[#c8f169]";
+  if (status === "ABSTAIN" || status === "BLOCKED" || status === "OFFLINE") return "border-[#633d38] bg-[#1b120f] text-[#ff9d91]";
+  return "border-[#5b4b2b] bg-[#21180e] text-[#e5b55f]";
+}
+
 function DecisionPill({
   decision,
   confidence,
@@ -246,6 +265,9 @@ export default function DecisionDashboard() {
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
   const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
+  const [decisionCandidate, setDecisionCandidate] = useState<DecisionCandidate | null>(null);
+  const [rankedCandidates, setRankedCandidates] = useState<DecisionCandidate[]>([]);
+  const [candidateScanLoading, setCandidateScanLoading] = useState(false);
   const [scanExcluded, setScanExcluded] = useState<
     Array<{ symbol: string; reason: string }>
   >([]);
@@ -253,6 +275,13 @@ export default function DecisionDashboard() {
   const [optionOrderMessage, setOptionOrderMessage] = useState<string | null>(null);
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [paperState, setPaperState] = useState<PaperState | null>(null);
+  const [paperAnalytics, setPaperAnalytics] = useState<PaperAnalytics | null>(null);
+  const [trainingRun, setTrainingRun] = useState<TrainingRunReport | null>(null);
+  const [trainingBusy, setTrainingBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -275,6 +304,7 @@ export default function DecisionDashboard() {
       setOptions([]);
       setOptionIntelligence(null);
       setLivePrediction(null);
+      setDecisionCandidate(null);
       setWatchlistSaved(false);
       localStorage.setItem(STORAGE_KEY, value);
       window.dispatchEvent(new Event("dpredict:symbol"));
@@ -282,16 +312,21 @@ export default function DecisionDashboard() {
     []
   );
 
+  const refreshPaperAnalytics = async () => { try { setPaperAnalytics(await getPaperAnalytics(30)); } catch { setPaperAnalytics(null); } };
+  const refreshTraining = async () => { try { setTrainingRun(await runTraining({ trigger: "DASHBOARD_MANUAL" })); } catch (error) { setTrainingRun({ ok: false, error: error instanceof Error ? error.message : "Training request failed" }); } };
+
   const refresh = useCallback(async () => {
     const requestId = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [health, live, bars, latest, forecastResult] = await Promise.allSettled([
+      const [health, live, bars, latest, forecastResult, coverageResult, aiResult] = await Promise.allSettled([
         getLocalHealth(),
         getLiveQuote(symbol),
         getMarketHistory(symbol, chartTimeframe === "1m" ? "1m" : "1d", undefined, chartTimeframe === "1m" ? 400 : chartTimeframe === "1d" ? 140 : 520),
         getLatestSignal(symbol),
         getForecast(symbol, forecastHorizon),
+        getTrainingCoverage(),
+        getAiStatus(),
       ]);
       if (requestId !== refreshSequence.current) return;
       setConnected(health.status === "fulfilled" && health.value.ok);
@@ -301,6 +336,8 @@ export default function DecisionDashboard() {
       setForecast(
         forecastResult.status === "fulfilled" ? forecastResult.value : null
       );
+      setTrainingCoverage(coverageResult.status === "fulfilled" ? coverageResult.value : null);
+      setAiStatus(aiResult.status === "fulfilled" ? aiResult.value : null);
       setLastUpdate(new Date().toISOString());
       setLoading(false);
       setEnrichmentLoading(true);
@@ -311,7 +348,7 @@ export default function DecisionDashboard() {
       const gate = predictionGate.current;
       const skipPrediction = gate.key === predictionKey && Date.now() < gate.until;
 
-      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, intelligenceResult] =
+      const [researchResult, scanResult, performanceResult, livePredictionResult, chainResult, intelligenceResult, candidateResult] =
         await Promise.allSettled([
           getResearch(symbol),
           getMarketScan(5),
@@ -319,6 +356,7 @@ export default function DecisionDashboard() {
           skipPrediction ? Promise.resolve(null) : getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
           getOptionIntelligence(symbol),
+          getDecisionCandidate(symbol, `${forecastHorizon}d` as "1d" | "3d" | "5d"),
         ]);
       if (requestId !== refreshSequence.current) return;
       if (!skipPrediction) {
@@ -336,11 +374,28 @@ export default function DecisionDashboard() {
       setScanExcluded(
         scanResult.status === "fulfilled" ? scanResult.value.excluded : []
       );
+      if (scanResult.status === "fulfilled" && scanResult.value.picks.length) {
+        setCandidateScanLoading(true);
+        try {
+          const ranked = await getDecisionCandidateScan(
+            scanResult.value.picks.map(pick => pick.symbol),
+            `${forecastHorizon}d` as "1d" | "3d" | "5d"
+          );
+          if (requestId === refreshSequence.current) setRankedCandidates(ranked.candidates);
+        } catch {
+          if (requestId === refreshSequence.current) setRankedCandidates([]);
+        } finally {
+          if (requestId === refreshSequence.current) setCandidateScanLoading(false);
+        }
+      } else {
+        setRankedCandidates([]);
+      }
       setPredictionPerformance(
         performanceResult.status === "fulfilled" ? performanceResult.value : null
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setOptionIntelligence(intelligenceResult.status === "fulfilled" ? intelligenceResult.value : null);
+      setDecisionCandidate(candidateResult.status === "fulfilled" ? candidateResult.value : null);
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
@@ -385,19 +440,34 @@ export default function DecisionDashboard() {
     const connect = () => {
       try { socket = new WebSocket(paperLiveUrl()); } catch { return; }
       wsRef.current = socket;
-      socket.onopen = () => socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current }));
+      socket.onopen = () => {
+        setWsConnected(true);
+        socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current }));
+      };
       socket.onmessage = event => {
         let message: LiveMessage; try { message = JSON.parse(String(event.data)) as LiveMessage; } catch { return; }
-        if (message.type === "quote") {
+        if (message.type === "state") {
+          setPaperState((message as Extract<LiveMessage, { type: "state" }>).state);
+        } else if (message.type === "quote") {
           const envelope = message as Extract<LiveMessage, { type: "quote" }>;
           if (envelope.symbol === symbolRef.current && envelope.quote?.ok) setLiveQuote(envelope.quote as MarketOverview);
         }
       };
-      socket.onclose = () => { wsRef.current = null; if (!closed) retry = window.setTimeout(connect, 4000); };
+      socket.onclose = () => {
+        wsRef.current = null;
+        setWsConnected(false);
+        if (!closed) retry = window.setTimeout(connect, 4000);
+      };
       socket.onerror = () => socket?.close();
     };
     connect();
-    return () => { closed = true; if (retry) window.clearTimeout(retry); socket?.close(); wsRef.current = null; };
+    return () => {
+      closed = true;
+      if (retry) window.clearTimeout(retry);
+      socket?.close();
+      wsRef.current = null;
+      setWsConnected(false);
+    };
   }, []);
   useEffect(() => {
     setLiveQuote(null);
@@ -405,6 +475,8 @@ export default function DecisionDashboard() {
   }, [symbol]);
 
   const thesis = signal?.tradeThesis;
+  const coverageSummary = trainingCoverage?.summary;
+  const mlReady = (coverageSummary?.productionModels ?? 0) > 0;
   const liveActive = liveQuote?.status === "LIVE" && liveQuote.close != null && !!liveQuote.timestamp;
   const displayBars = useMemo(() => {
     const base = chartTimeframe === "1w" || chartTimeframe === "1mo" ? resampleBars(history, chartTimeframe === "1w" ? "week" : "month") : history;
@@ -596,10 +668,19 @@ export default function DecisionDashboard() {
       const result = await getMarketScan(5);
       setMarketPicks(result.picks);
       setScanExcluded(result.excluded);
+      setCandidateScanLoading(true);
+      try {
+        const candidates = await getDecisionCandidateScan(result.picks.map(p => p.symbol), `${forecastHorizon}d` as "1d" | "3d" | "5d");
+        setRankedCandidates(candidates.candidates);
+      } catch {
+        setRankedCandidates([]);
+      } finally {
+        setCandidateScanLoading(false);
+      }
     } finally {
       setScanLoading(false);
     }
-  }, []);
+  }, [forecastHorizon]);
   const blockers = [
     !signal ? "No stored model signal" : null,
     signal && !thesis ? "Trade thesis unavailable" : null,
@@ -659,7 +740,7 @@ export default function DecisionDashboard() {
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] ${connected ? "border-[#3d5b38] bg-[#142419] text-[#c8f169]" : "border-[#5a4328] bg-[#21180e] text-[#e5b55f]"}`}
             >
               {connected ? <Wifi size={11} /> : <WifiOff size={11} />}{" "}
-              {connected ? "LOCAL LIVE" : "OFFLINE"}
+              {connected ? "LOCAL API" : "API OFFLINE"}
             </span>
             <button
               onClick={() => void refresh()}
@@ -674,6 +755,45 @@ export default function DecisionDashboard() {
         </div>
       </header>
 
+      <section className="relative mx-auto w-full max-w-[1800px] px-0">
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div><Label>Runtime · provenance · readiness</Label><h2 className="mt-1 font-display text-base font-semibold text-[#eff7ea]">System Operations</h2></div>
+            <span className="font-mono-ui text-[9px] uppercase tracking-[.14em] text-[#70887d]">Local only · paper trading</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Local API</Label><div className={`mt-1 text-xs font-semibold ${connected ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{connected ? "READY" : "CHECK"}</div><p className="mt-1 text-[10px] text-[#789087]">REST is authoritative for state and commands.</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Realtime</Label><div className={`mt-1 text-xs font-semibold ${wsConnected ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{wsConnected ? "CONNECTED" : "RECONNECTING"}</div><p className="mt-1 text-[10px] text-[#789087]">WebSocket /live carries quotes, paper state and alerts.</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>ML pipeline</Label><div className={`mt-1 text-xs font-semibold ${mlReady ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{mlReady ? "PROMOTED MODEL" : "NO PROMOTED MODEL"}</div><p className="mt-1 text-[10px] text-[#789087]">{coverageSummary ? `${coverageSummary.productionModels} promoted · ${coverageSummary.trainingRequired} training required · ${coverageSummary.insufficientHistory} insufficient history` : "Coverage unavailable."}</p></div>
+            <div className="rounded-xl border border-[#1d332f] bg-[#091512] p-3"><Label>Nemotron agent</Label><div className={`mt-1 text-xs font-semibold ${aiStatus?.configured && aiStatus.enabled ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{aiStatus?.configured && aiStatus.enabled ? "READY" : "NOT CONFIGURED"}</div><p className="mt-1 truncate text-[10px] text-[#789087]">{aiStatus?.model ?? "Configure local BYOK in AI Settings."}</p></div>
+          </div>
+        </Card>
+      </section>
+      <section className="relative mx-auto w-full max-w-[1800px] px-0">
+        <Card className="p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <Label>Model health · selected instrument</Label>
+              <h2 className="mt-1 font-display text-base font-semibold text-[#eff7ea]">{symbol} artifact readiness</h2>
+            </div>
+            <span className="font-mono-ui text-[9px] uppercase tracking-[.14em] text-[#70887d]">{trainingCoverage?.summary.productionModels ?? 0} promoted across universe</span>
+          </div>
+          {trainingCoverage ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-3 lg:grid-cols-5">
+              {trainingCoverage.instruments.filter(row => row.symbol === symbol).map(row => (
+                <div key={row.horizon} className="rounded-xl border border-[#1d332f] bg-[#091512] p-3">
+                  <div className="flex items-center justify-between gap-2"><Label>{row.horizon}</Label><span className={`font-mono-ui text-[8px] ${row.promotion_ready ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{row.model_state.replaceAll("_"," ")}</span></div>
+                  <div className="mt-2 text-[10px] text-[#9fb4a8]">Bars <strong className="text-[#d7e8d9]">{row.daily_bars}/{row.bars_required}</strong></div>
+                  <div className="mt-1 text-[10px] text-[#9fb4a8]">Data <strong className="text-[#d7e8d9]">{row.data_status}</strong></div>
+                  <div className="mt-1 text-[10px] text-[#9fb4a8]">Version <strong className="text-[#d7e8d9]">{row.model_version ?? "—"}</strong></div>
+                  <div className="mt-2 text-[9px] leading-relaxed text-[#70887d]">{row.reason}</div>
+                </div>
+              ))}
+              {!trainingCoverage.instruments.some(row => row.symbol === symbol) ? <div className="md:col-span-3 lg:col-span-5 rounded-xl border border-dashed border-[#315045] p-4 text-center text-[10px] text-[#789087]">No horizon-specific coverage record exists for {symbol}.</div> : null}
+            </div>
+          ) : <Empty text="Model coverage unavailable." />}
+        </Card>
+      </section>
       <main className="relative mx-auto max-w-[1800px] space-y-5 px-4 py-5 lg:px-8">
         {isRefreshing ? <div className="flex items-center gap-3 rounded-xl border border-[#36513e] bg-[#0d211a] px-4 py-3 text-xs text-[#c8f169] animate-pulse"><Loader2 size={15} className="animate-spin" /><span>{loading ? <>Loading live data for <strong>{symbol}</strong>...</> : <>Finishing analysis for <strong>{symbol}</strong>...</>}</span><span className="ml-auto hidden text-[10px] text-[#789087] sm:inline">{loading ? "Core data first" : "Research and signals updating"}</span></div> : null}
         <section
@@ -849,7 +969,7 @@ export default function DecisionDashboard() {
           <Card className="p-5">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <Label>Price action · WebSocket live feed</Label>
+                <Label>Price action · {wsConnected ? "WebSocket live" : "WebSocket reconnecting"}</Label>
                 <h2 className="mt-1 font-display text-xl font-semibold">
                   {symbol}
                 </h2>
@@ -1015,6 +1135,17 @@ export default function DecisionDashboard() {
                     sub="daily observations used"
                     icon={Database}
                   />
+                </div>
+                <div className="mt-4 rounded-xl border border-[#1d332f] bg-[#08120f] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <Label>Decision summary</Label>
+                    <span className={`rounded-full border px-2.5 py-1 font-mono-ui text-[8px] uppercase tracking-[.12em] ${statusTone(decisionCandidate.status)}`}>{decisionCandidate.status.replaceAll("_", " ")}</span>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div><div className="text-[9px] text-[#70887d]">PROVENANCE</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.provenance.replaceAll("_"," ")}</div></div>
+                    <div><div className="text-[9px] text-[#70887d]">RISK / REWARD</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.rewardRisk?.ratio != null ? decisionCandidate.rewardRisk.ratio.toFixed(2) + "×" : "Not established"}</div></div>
+                    <div><div className="text-[9px] text-[#70887d]">OBSERVATIONS</div><div className="mt-1 text-[10px] text-[#d7e8d9]">{decisionCandidate.dataQuality.observations} · {decisionCandidate.dataQuality.fresh ? "fresh" : "stale"}</div></div>
+                  </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
@@ -1310,8 +1441,9 @@ export default function DecisionDashboard() {
           )}
         </section>
 
-        <section
-          id="paper-lab"
+        <section className="mb-6 rounded-2xl border border-[#1d332f] bg-[#0b1714] p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-mono-ui text-[9px] uppercase tracking-[.16em] text-[#70887d]">Prediction & paper telemetry</div><h2 className="mt-1 font-display text-xl font-semibold text-[#eff7ea]">Performance Control</h2></div><div className="flex gap-2"><button onClick={() => void refreshPaperAnalytics()} className="rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.1em] text-[#aebeb3]">Refresh analytics</button><button disabled={trainingBusy} onClick={async () => { setTrainingBusy(true); await refreshTraining(); setTrainingBusy(false); }} className="rounded-lg bg-[#c8f169] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40">{trainingBusy ? "Training…" : "Run model check"}</button></div></div>{paperAnalytics ? <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4"><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">30D trades</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.trades}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Win rate</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.winRate == null ? "—" : (paperAnalytics.summary.winRate * 100).toFixed(1) + "%"}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Realized P&L</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">₹{paperAnalytics.summary.realizedPnl.toFixed(0)}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Actions</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.actions}</div></div></div> : <div className="mt-4 text-[10px] text-[#557067]">Paper analytics unavailable until the local paper ledger is initialized.</div>}{trainingRun ? <div className="mt-3 rounded-xl border border-[#1d332f] bg-[#07100f] p-3 text-[10px] text-[#aebeb3]">{trainingRun.ok ? "Training run " + (trainingRun.status ?? "completed") + " · " + (trainingRun.summary?.trained ?? 0) + " trained · " + (trainingRun.summary?.upToDate ?? 0) + " already current." : "Training request failed: " + (trainingRun.error ?? trainingRun.message ?? "unknown error")}</div> : null}</section>
+
+       id="paper-lab"
           className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-5 shadow-[0_18px_50px_rgba(0,0,0,.16)]"
         >
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1322,6 +1454,26 @@ export default function DecisionDashboard() {
             </div>
             <span className="rounded-full border border-[#5b4b2b] px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8b582]">RESEARCH ONLY</span>
           </div>
+          {paperState?.account ? (
+            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Paper equity</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#eff7ea]">{price(paperState.account.equity)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Cash</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#d7e8d9]">{price(paperState.account.cash)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Unrealized P/L</Label>
+                <div className={`mt-1 font-display text-lg font-semibold ${paperState.account.unrealizedPnl >= 0 ? "text-[#c8f169]" : "text-[#ff9d91]"}`}>{price(paperState.account.unrealizedPnl)}</div>
+              </div>
+              <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-3">
+                <Label>Open positions</Label>
+                <div className="mt-1 font-display text-lg font-semibold text-[#d7e8d9]">{paperState.account.openPositions}</div>
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4">
             <TradingDesk embedded />
           </div>
@@ -1499,6 +1651,116 @@ export default function DecisionDashboard() {
             <div className="mt-6 rounded-xl border border-[#293f35] bg-[#09130f] p-4 text-[10px] leading-relaxed text-[#71877d]">
               Confidence is displayed as evidence, not certainty. Promotion and
               live execution remain separate gates.
+            </div>
+          </Card>
+        </section>
+
+        <section id="today-candidates" className="grid gap-5 lg:grid-cols-[1.45fr_.55fr]">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><Label>Ranked opportunity set</Label><h2 className="mt-1 font-display text-xl font-semibold">Today’s Candidates</h2><p className="mt-1 text-[10px] text-[#789087]">The backend scans the current market shortlist and ranks only evidence-backed paper candidates.</p></div>
+              <button onClick={() => void refreshScan()} disabled={scanLoading || candidateScanLoading} className="inline-flex items-center gap-2 rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.12em] text-[#c8f169] hover:bg-[#10231e] disabled:opacity-50"><RefreshCw size={12} className={candidateScanLoading ? "animate-spin" : ""}/> Re-rank</button>
+            </div>
+            <div className="mt-4 space-y-2">
+              {rankedCandidates.map((candidate, index) => (
+                <button key={candidate.symbol} onClick={() => void selectSymbol(candidate.symbol)} className="w-full rounded-xl border border-[#1d332f] bg-[#09130f] p-3 text-left transition hover:border-[#476238] hover:bg-[#0d1b16]">
+                  <div className="flex items-center gap-3">
+                    <span className="w-5 font-mono-ui text-[10px] text-[#557067]">#{index + 1}</span>
+                    <span className="min-w-20 font-display text-sm font-bold text-[#eff7ea]">{candidate.symbol}</span>
+                    <span className={`rounded-full border px-2 py-1 font-mono-ui text-[8px] ${candidate.status === "PAPER_CANDIDATE" ? "border-[#476238] text-[#c8f169]" : "border-[#633d38] text-[#ff9d91]"}`}>{candidate.status.replaceAll("_"," ")}</span>
+                    <span className={`ml-auto font-mono-ui text-xs font-bold ${candidate.direction === "LONG" ? "text-[#c8f169]" : candidate.direction === "SHORT" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>{candidate.direction}</span>
+                    <span className="font-mono-ui text-xs text-[#d7e8d9]">{candidate.score}/100</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[9px] text-[#789087]"><span>{candidate.provenance.replaceAll("_"," ")}</span><span>{candidate.gateSummary}</span><span>{candidate.dataQuality.observations} bars</span></div>
+                </button>
+              ))}
+              {!rankedCandidates.length && <Empty text={candidateScanLoading ? "Ranking current candidates…" : "No ranked candidates available. No data is fabricated."} />}
+            </div>
+          </Card>
+          <Card className="p-5">
+            <Label>Ranking rules</Label>
+            <div className="mt-4 space-y-3 text-[10px] leading-relaxed text-[#8fa69a]">
+              <div><strong className="text-[#d7e8d9]">1 · Evidence first</strong><br/>Real persisted market history and model/fallback evidence are required.</div>
+              <div><strong className="text-[#d7e8d9]">2 · Gates decide</strong><br/>Failed backend gates keep a candidate in ABSTAIN.</div>
+              <div><strong className="text-[#d7e8d9]">3 · Score ranks</strong><br/>Score orders candidates only after their gate state is preserved.</div>
+              <div><strong className="text-[#d7e8d9]">4 · Paper only</strong><br/>The ranked list never sends a broker order.</div>
+            </div>
+          </Card>
+        </section>
+
+        <DecisionCopilot model={aiStatus?.model ?? null} symbol={symbol} />
+
+        <section id="candidate-intelligence" className="grid gap-5 lg:grid-cols-[1.25fr_.75fr]">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <Label>Deterministic candidate engine</Label>
+                <h2 className="mt-1 font-display text-xl font-semibold">Candidate intelligence</h2>
+                <p className="mt-1 text-[10px] text-[#789087]">Backend decision engine · no frontend scoring · paper-only</p>
+              </div>
+              {decisionCandidate && (
+                <span className={decisionCandidate.status === "PAPER_CANDIDATE" ? "rounded-full border border-[#476238] bg-[#10231e] px-3 py-1.5 font-mono-ui text-[10px] font-bold tracking-[.08em] text-[#c8f169]" : "rounded-full border border-[#633d38] bg-[#1a100f] px-3 py-1.5 font-mono-ui text-[10px] font-bold tracking-[.08em] text-[#ff9d91]"}>
+                  {decisionCandidate.status.replaceAll("_", " ")}
+                </span>
+              )}
+            </div>
+            {decisionCandidate ? (
+              <>
+                <div className="mt-5 grid gap-3 sm:grid-cols-4">
+                  <Metric label="Direction" value={decisionCandidate.direction} sub={decisionCandidate.provenance.replaceAll("_", " ")} icon={decisionCandidate.direction === "LONG" ? ArrowUpRight : decisionCandidate.direction === "SHORT" ? ArrowDownRight : ShieldAlert} />
+                  <Metric label="Decision score" value={String(decisionCandidate.score) + "/100"} sub={decisionCandidate.gateSummary} icon={Gauge} />
+                  <Metric label="Expected return" value={decisionCandidate.expectedReturn == null ? "—" : pct(decisionCandidate.expectedReturn)} sub={decisionCandidate.horizon + " horizon · measured"} icon={Target} />
+                  <Metric label="Invalidation" value={price(decisionCandidate.invalidation)} sub={String(decisionCandidate.dataQuality.observations) + " daily bars · " + (decisionCandidate.dataQuality.fresh ? "fresh" : "stale")} icon={ShieldAlert} />
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                    <Label>Decision gates</Label>
+                    <div className="mt-3 space-y-2">
+                      {decisionCandidate.gates.map(gate => (
+                        <div key={gate.name} className="flex items-start gap-2 text-[10px]">
+                          <span className={gate.passed ? "text-[#c8f169]" : "text-[#ff9d91]"}>{gate.passed ? "✓" : "×"}</span>
+                          <div><div className="font-mono-ui text-[#d7e8d9]">{gate.name}</div><div className="mt-0.5 text-[#789087]">{gate.reason}</div></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                    <Label>Evidence / blockers</Label>
+                    <div className="mt-3 space-y-2 text-[10px] leading-relaxed">
+                      {decisionCandidate.reasons.slice(0, 5).map((reason, i) => <div key={i} className="text-[#aebeb3]">• {reason}</div>)}
+                      {decisionCandidate.blockers.length ? decisionCandidate.blockers.map(blocker => <div key={blocker.name} className="text-[#ffb0a7]">! {blocker.name}: {blocker.reason}</div>) : <div className="text-[#c8f169]">No blocking gate recorded.</div>}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-[10px] leading-relaxed text-[#c8b582]">
+                  {decisionCandidate.paperSuggestion
+                    ? "Paper candidate only: " + decisionCandidate.paperSuggestion.direction + " from " + price(decisionCandidate.paperSuggestion.entryReference) + " with invalidation " + price(decisionCandidate.paperSuggestion.invalidation) + ". No broker order is sent."
+                    : "ABSTAIN: D-Predict did not produce an executable paper candidate."}
+                </div>
+              </>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed border-[#315045] p-6 text-center text-xs text-[#789087]">
+                Candidate engine unavailable for this symbol/horizon. No candidate is fabricated.
+              </div>
+            )}
+          </Card>
+          <Card className="p-5">
+            <Label>Decision provenance</Label>
+            <div className="mt-4 space-y-3">
+              {[
+                ["Market data", market?.status ?? "UNAVAILABLE"],
+                ["ML prediction", livePrediction?.prediction_status ?? "UNAVAILABLE"],
+                ["Model action", livePrediction?.action_status ?? "UNAVAILABLE"],
+                ["Candidate source", decisionCandidate?.provenance ?? "UNAVAILABLE"],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between rounded-lg border border-[#1d332f] bg-[#09130f] px-3 py-2">
+                  <span className="text-[10px] text-[#789087]">{label}</span>
+                  <span className="font-mono-ui text-[9px] text-[#d7e8d9]">{value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 text-[9px] leading-relaxed text-[#71877d]">
+              The displayed candidate is returned by the backend deterministic decision engine. Nemotron may explain it, but cannot override its gates or convert ABSTAIN into a trade.
             </div>
           </Card>
         </section>

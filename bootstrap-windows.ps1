@@ -261,7 +261,7 @@ try {
         if ($SkipChecks) { $args += '-SkipChecks' }
         if ($RefreshSource) { $args += '-RefreshSource' }
         if ($SourceRef) { $args += @('-SourceRef',"`"$SourceRef`"") }
-        $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
+        $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList $args -WorkingDirectory $InstallDir -Wait -PassThru
         exit $p.ExitCode
     }
     Assert-DatabaseConfiguration

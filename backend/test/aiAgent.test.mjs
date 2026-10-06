@@ -61,7 +61,7 @@ async function testLoopUsesRealToolsThenAnswersWithoutThem() {
   assert.equal(calls.length, 2, "one tool step, then the model answers instead of investigating further");
   const offered = calls[0].tools.map((tool) => tool.function.name);
   assert.deepEqual(offered.sort(), [...AGENT_TOOL_NAMES].sort(), "the model is offered exactly the local tools");
-  assert.equal(calls[0].tool_choice, "auto");
+  assert.equal(calls[0].tool_choice, "required", "the first agent turn must use a real D-Predict tool");
   assert.equal(calls[0].stream, false, "investigation steps are answered as JSON so tool calls can be parsed");
 
   const toolMessage = calls[1].messages.find((message) => message.role === "tool");
@@ -82,17 +82,19 @@ async function testLoopUsesRealToolsThenAnswersWithoutThem() {
   assert.equal(events.at(-1).event, "done");
 }
 
-async function testModelAnsweringWithoutToolsStillStreamsNothingFake() {
+async function testModelAnsweringWithoutToolsFailsClosed() {
   const calls = stubModel(() => json({ content: "The ledger has no scored rows in that window.", tool_calls: [] }));
   const { result, events } = await collect({
     apiKey: "nvapi-test", baseUrl: "https://example.invalid/v1", model: "test-model",
     question: "Is the model working?", env: toolEnv,
   });
-  assert.equal(calls.length, 1, "a direct answer needs no extra upstream call");
-  assert.equal(result.ok, true);
-  assert.equal(result.text, "The ledger has no scored rows in that window.");
+  assert.equal(calls.length, 1, "the first turn is still a tool-required investigation turn");
+  assert.equal(calls[0].tool_choice, "required");
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "AGENT_TOOL_REQUIRED");
+  assert.equal(result.text, "");
   assert.equal(result.toolCalls, 0);
-  assert.deepEqual(events.map((event) => event.event), ["meta", "answer", "done"]);
+  assert.deepEqual(events.map((event) => event.event), ["meta", "aierror"]);
 }
 
 async function testStepsAndToolCallsAreCapped() {
@@ -220,6 +222,20 @@ async function testToolArgumentValidation() {
   assert.match((await executeAgentTool(toolEnv, "market_scan", {})).summary, /DATABASE_UNAVAILABLE/);
 }
 
+async function testDecisionCandidateRequiresRealDatabase() {
+  const outcome = await executeAgentTool({ pool: null, mlFetch: async () => ({ status: 503, body: {} }) }, "decision_candidate", { symbol: "NIFTY", horizon: "1d" });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.data.error, "DATABASE_UNAVAILABLE");
+}
+
+async function testStatisticalBaselineIsExplicitlyNonMl() {
+  const env = { pool: null, mlFetch: async () => ({ status: 503, body: { detail: "no trained artifact" } }) };
+  const outcome = await executeAgentTool(env, "statistical_baseline", { symbol: "NIFTY", horizonDays: 5 });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.data.error, "DATABASE_UNAVAILABLE");
+  assert.match(outcome.summary, /DATABASE_UNAVAILABLE/);
+}
+
 async function testMlServiceFailureIsNotRewrittenAsZero() {
   const env = { pool: null, mlFetch: async () => ({ status: 503, body: { detail: "no trained artifact for TATASTEEL" } }) };
   const outcome = await executeAgentTool(env, "fresh_forecast", { symbol: "TATASTEEL", horizon: "1d" });
@@ -256,17 +272,18 @@ async function testPromptNamesOnlyRealToolsAndKeepsHonestyRules() {
   for (const name of AGENT_TOOL_NAMES) assert.ok(prompt.includes(name), `${name} must be listed for the model`);
   assert.match(prompt, /Facts come from two places only/);
   assert.match(prompt, /ABSTAIN/);
-  assert.match(prompt, /act inside this app in three ways/);
+  assert.match(prompt, /act inside this app through gated tools/);
   assert.match(prompt, /the user sees the exact change and clicks Apply or Refuse/);
-  assert.match(prompt, /You cannot place orders/);
+  assert.match(prompt, /never send a live broker order/);
   assert.match(prompt, /never override or reinterpret/);
   assert.match(prompt, /Attached ledger row/);
   assert.ok(!prompt.includes("undefined"));
+  assert.match(prompt, /prediction_health/);
   const noEvidence = buildAgentSystemPrompt([]);
   assert.match(noEvidence, /EVIDENCE: none supplied/);
 }
 
-const WRITE_TOOLS = ["train_model", "watchlist_add", "watchlist_remove", "acknowledge_alerts"];
+const WRITE_TOOLS = ["train_model", "watchlist_add", "watchlist_remove", "acknowledge_alerts", "option_paper_order"];
 
 /** A database stand-in that records every statement, so "nothing was written" is
  * an observation rather than a claim. */
@@ -362,7 +379,7 @@ async function testApprovalRegistryOnlyMarksRealWrites() {
   assert.equal(describeAgentWrite("run_backtest", { symbol: "NIFTY" }), null, "a read tool has nothing to approve");
   assert.match(describeAgentWrite("train_model", { symbol: "nifty", horizon: "3d" }), /Retrain the 3d model artifact for NIFTY/);
   assert.match(describeAgentWrite("acknowledge_alerts", { ids: [4, 4, 5] }), /Mark 2 radar row\(s\) as acknowledged: 4, 5/);
-  assert.match(describeAgentWrite("watchlist_remove", { symbol: "TATASTEEL" }), /not deleted/i);
+  assert.match(describeAgentWrite("watchlist_remove", { symbol: "TATASTEEL" }), /not deleted/i);\n  assert.match(describeAgentWrite("option_paper_order", { symbol: "NIFTY", expiry: "2026-10-08", strike: 25000, optionType: "CE", side: "BUY", lots: 1 }), /PAPER BUY.*NIFTY.*CE.*25000/i);\n  assert.equal(isWriteTool("option_chain"), false);
 
   const empty = await executeAgentTool({ pool: null, mlFetch: async () => ({ status: 200, body: {} }) }, "acknowledge_alerts", { ids: ["x"] });
   assert.equal(empty.ok, false);
@@ -389,7 +406,7 @@ async function testApprovalGateSettlesExactlyOnce() {
 
 const tests = [
   testLoopUsesRealToolsThenAnswersWithoutThem,
-  testModelAnsweringWithoutToolsStillStreamsNothingFake,
+  testModelAnsweringWithoutToolsFailsClosed,
   testStepsAndToolCallsAreCapped,
   testUnknownToolFailsWithoutFabricating,
   testProviderFailureSurfacesAsErrorNotInventedAnswer,
@@ -397,6 +414,8 @@ const tests = [
   testStoppedInvestigationReportsAbort,
   testToolArgumentValidation,
   testMlServiceFailureIsNotRewrittenAsZero,
+  testStatisticalBaselineIsExplicitlyNonMl,
+  testDecisionCandidateRequiresRealDatabase,
   testCoverageStaysSmallAndDeclared,
   testArgumentParsingIsInert,
   testPromptNamesOnlyRealToolsAndKeepsHonestyRules,

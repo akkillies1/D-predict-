@@ -3,10 +3,14 @@ import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { runAgent } from "./aiAgent.js";
+import { executeAgentTool } from "./aiTools.js";
 import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agentApprovals.js";
 import { mlFetch } from "./mlProxy.js";
+import { rankDecisionCandidates } from "./decisionEngine.js";
 import {
   DEFAULT_AI_BASE_URL,
+  DEFAULT_AI_MODEL,
+  normalizeModel,
   buildSystemPrompt,
   describeUpstreamError,
   looksLikeNvidiaKey,
@@ -61,7 +65,7 @@ async function effectiveConfig(pool: Pool | null): Promise<AiConfig> {
   return {
     apiKey,
     baseUrl: normalizeBaseUrl(saved?.baseUrl || process.env.NVIDIA_API_BASE_URL),
-    model: saved?.model || String(process.env.NVIDIA_MODEL ?? "").trim() || null,
+    model: normalizeModel(saved?.model || String(process.env.NVIDIA_MODEL ?? "").trim()) || DEFAULT_AI_MODEL,
     enabled: saved ? saved.enabled : true,
     source: saved?.apiKey?.trim() ? "saved" : envKey ? "env" : null,
   };
@@ -126,6 +130,37 @@ async function callUpstream(config: AiConfig, path: string, payload: unknown, ti
 
 export function createAiRouter(pool: Pool | null): Router {
   const router = Router();
+
+  router.get("/candidate", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const symbol = String(req.query.symbol ?? "").trim().toUpperCase().slice(0, 40);
+    const horizon = String(req.query.horizon ?? "1d").trim();
+    if (!symbol) return res.status(400).json({ ok: false, error: "CANDIDATE_SYMBOL_REQUIRED" });
+    try {
+      const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
+      return res.status(outcome.ok ? 200 : 422).json(outcome);
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: "CANDIDATE_FAILED", message: error instanceof Error ? error.message : "candidate_failed" });
+    }
+  });
+
+  router.get("/candidate-scan", async (req, res) => {
+    if (!isLoopbackRequest(req)) return refuseRemote(req, res);
+    const raw = String(req.query.symbols ?? "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
+    const horizon = String(req.query.horizon ?? "1d").trim();
+    if (!raw.length) return res.status(400).json({ ok: false, error: "CANDIDATE_SYMBOLS_REQUIRED" });
+    try {
+      const results = [];
+      for (const symbol of raw) {
+        const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
+        if (outcome.ok && outcome.data) results.push(outcome.data);
+      }
+      const ranked = rankDecisionCandidates(results as Array<ReturnType<typeof import("./decisionEngine.js").buildDecisionCandidate>>);
+      return res.json({ ok: true, horizon, count: ranked.length, candidates: ranked, disclaimer: "Ranked deterministic research/paper candidates only. No broker orders are sent." });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: "CANDIDATE_SCAN_FAILED", message: error instanceof Error ? error.message : "candidate_scan_failed" });
+    }
+  });
 
   router.get("/status", async (req, res) => {
     if (!isLoopbackRequest(req)) return refuseRemote(req, res);
@@ -230,7 +265,7 @@ export function createAiRouter(pool: Pool | null): Router {
     const config = await effectiveConfig(pool);
     if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "The assistant needs an NVIDIA API key. Open AI Assistant settings and paste your own key — it is stored locally on this machine." });
     if (!config.enabled) return res.status(400).json({ ok: false, error: "AI_DISABLED", message: "The assistant is switched off in AI Assistant settings." });
-    const model = String(body.model ?? "").trim().slice(0, 160) || config.model;
+    const model = normalizeModel(body.model) || config.model;
     if (!model) return res.status(400).json({ ok: false, error: "AI_MODEL_REQUIRED", message: "Choose a model in AI Assistant settings first (the picker lists what your own key can access)." });
 
     const payload = {
@@ -238,7 +273,8 @@ export function createAiRouter(pool: Pool | null): Router {
       messages: [{ role: "system", content: buildSystemPrompt(evidence, body.marketContext == null ? null : String(body.marketContext)) }, ...history, { role: "user", content: question }],
       temperature: Math.min(1, Math.max(0, Number(body.temperature ?? 0.2))),
       top_p: 0.95,
-      max_tokens: Math.min(2048, Math.max(64, Number(body.maxTokens ?? 700))),
+      max_tokens: Math.min(4096, Math.max(128, Number(body.maxTokens ?? 1200))),
+      extra_body: { chat_template_kwargs: { enable_thinking: true } },
       stream: body.stream !== false,
     };
 

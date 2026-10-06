@@ -11,11 +11,11 @@ import {
 } from "lucide-react";
 import {
   getOptionChain,
-  getOptionPaperTrades,
+  getOptionPaperTrades,\n  getOptionIntelligence,
   placeOptionPaperOrder,
   closeOptionPaperTrade,
   type OptionRow,
-  type PaperOptionTrade,
+  type PaperOptionTrade,\n  type OptionIntelligence,
 } from "@/lib/localApi";
 import { toast } from "sonner";
 
@@ -79,7 +79,7 @@ export default function OptionChainTradingPanel() {
     () => localStorage.getItem("dpredict:selected-symbol") || "NIFTY"
   );
   const [options, setOptions] = useState<OptionRow[]>([]);
-  const [trades, setTrades] = useState<PaperOptionTrade[]>([]);
+  const [trades, setTrades] = useState<PaperOptionTrade[]>([]);\n  const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -87,9 +87,10 @@ export default function OptionChainTradingPanel() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [chain, paperTrades] = await Promise.all([
+      const [chain, paperTrades, intelligence] = await Promise.all([
         getOptionChain(symbol),
         getOptionPaperTrades(),
+        getOptionIntelligence(symbol),
       ]);
       setOptions(chain);
       setTrades(paperTrades);
@@ -264,6 +265,53 @@ export default function OptionChainTradingPanel() {
             </div>
           </div>
         </div>
+        {intelligence ? (
+          <div className="border-b border-border/70 bg-background/40 px-5 py-5 md:px-6">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">D-PREDICT PREMIUM INTELLIGENCE</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold ring-1 ring-inset ${intelligence.status === "ACTIONABLE" ? "bg-emerald-500/10 text-emerald-400 ring-emerald-500/20" : intelligence.status === "ABSTAIN" ? "bg-rose-500/10 text-rose-400 ring-rose-500/20" : "bg-amber-500/10 text-amber-400 ring-amber-500/20"}`}>{intelligence.status}</span>
+                  <span className="font-mono text-xs font-semibold">{intelligence.recommendation.action}</span>
+                  <span className="text-xs text-muted-foreground">{intelligence.recommendation.direction} · {(intelligence.recommendation.confidence * 100).toFixed(0)}% confidence</span>
+                </div>
+                <p className="mt-2 max-w-3xl text-xs leading-5 text-muted-foreground">{intelligence.recommendation.rationale}</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                {[["PCR", intelligence.metrics.pcr], ["ATM IV", intelligence.metrics.atmIv], ["LIQUIDITY", intelligence.metrics.liquidityScore]].map(([label, value]) => (
+                  <div key={label} className="min-w-[82px] rounded-lg border border-border bg-card px-3 py-2">
+                    <div className="text-[8px] uppercase tracking-wider text-muted-foreground">{label}</div>
+                    <div className="mt-1 font-mono text-sm font-semibold">{value == null ? "—" : Number(value).toFixed(label === "LIQUIDITY" ? 0 : 2)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {intelligence.recommendation.contract ? (
+              <div className="mt-4 flex flex-col gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-[9px] uppercase tracking-wider text-muted-foreground">MODEL CANDIDATE · {intelligence.recommendation.contract.optionType}</div>
+                  <div className="mt-1 font-mono text-base font-bold">{intelligence.recommendation.contract.strike.toLocaleString("en-IN")} · {money(intelligence.recommendation.contract.price)} · {intelligence.recommendation.contract.expiry}</div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">{intelligence.recommendation.hedge ? `Hedge: ${intelligence.recommendation.hedge.optionType} ${intelligence.recommendation.hedge.strike.toLocaleString("en-IN")} at ${money(intelligence.recommendation.hedge.price)}` : "No hedge contract selected."}</div>
+                </div>
+                <button
+                  disabled={intelligence.status !== "ACTIONABLE"}
+                  onClick={() => {
+                    const candidate = intelligence.recommendation.contract;
+                    const row = options.find(r => r.expiry_date === candidate.expiry && r.strike === candidate.strike && r.option_type === candidate.optionType);
+                    if (row) void trade(row, "BUY");
+                    else toast.error("The recommended contract is not in the current chain snapshot.");
+                  }}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  PAPER BUY CANDIDATE
+                </button>
+              </div>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+              {intelligence.recommendation.evidence.slice(0, 4).map((item, index) => <span key={index} className="rounded-md border border-border bg-card px-2 py-1">{item}</span>)}
+            </div>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 border-b border-border/70 md:grid-cols-4">
           <div className="border-r border-border/70 px-5 py-3">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground">

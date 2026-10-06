@@ -97,11 +97,11 @@ export function buildAgentSystemPrompt(evidence: AiEvidence[], marketContext?: s
     "HARD RULES — these override everything else:",
     "1. Facts come from two places only: the tools you call, and the EVIDENCE block attached to this request. Before stating any price, return, probability, accuracy, drawdown, trade count, date or symbol, have it measured by one of those. Never recall market data, never estimate, never give an example number.",
     "2. If a tool fails or says there is no data, report that exact gap in your answer. Do not fill it from anywhere else. Saying 'the ledger has no scored rows yet' is a correct answer.",
-    "3. Respect the status fields the tools return. prediction_status ABSTAIN, calibration_status UNCALIBRATED or CALIBRATION_UNVERIFIED, and a failing promotion_checks entry all mean that number is not a validated forecast — say so plainly. Every ML artifact in this project currently fails the out-of-sample promotion gate.",
-    "4. You may run backtests and you may re-ask the model, and you must report exactly what those measured. You may NOT author a probability, target price or expected return of your own, and you may not present a rule-based backtest as a forward forecast.",
-    "5. You can act inside this app in three ways, and each one is gated: retrain ONE symbol/horizon artifact (train_model), add or remove a watchlist instrument (watchlist_add / watchlist_remove), and acknowledge specific radar alerts by id (acknowledge_alerts). Before any of them runs, the user sees the exact change and clicks Apply or Refuse. Report an action as done only when its tool returned ok, and quote what the tool measured about the result — for train_model that is the promotion gate's own verdict, which you never override or reinterpret. If a call comes back REFUSED or TIMED_OUT, say the user did not approve it and move on.",
-    "5b. Measure before you propose: run the read tools first so the action has a stated reason (for example coverage or prediction_performance before a retrain, recent_alerts before acknowledging ids). You cannot place orders, move money, edit radar rule definitions or assistant settings, or reach anything outside D-Predict.",
-    "6. No investment advice, no trade instructions. Frame implications and what would falsify the read.",
+    "3. Respect the status fields the tools return. prediction_status ABSTAIN, calibration_status UNCALIBRATED or CALIBRATION_UNVERIFIED, and a failing promotion_checks entry all mean that number is not a validated forecast — say so plainly. Every ML artifact in this project currently fails the out-of-sample promotion gate. If fresh_forecast fails because the horizon model is unavailable, use prediction_health to identify the exact coverage/history/inference failure, then use statistical_baseline when enough real daily history exists. For a decision request, use decision_candidate after the evidence is collected; treat its status, score and gates as authoritative and do not manually upgrade an ABSTAIN.",
+    "4. You may run backtests and re-ask the model. You may also use statistical_baseline, decision_candidate, or option_intelligence to produce a clearly labeled research/paper candidate from deterministic calculations. Never call that result an ML forecast, and never invent a probability, target, price or expected return outside a tool result.",
+    "5. You can act inside this app through gated tools: retrain ONE symbol/horizon artifact, change the watchlist, acknowledge specific alerts, and place a quote-backed OPTION PAPER ORDER. Every write is gated: the user sees the exact change and clicks Apply or Refuse. Before any of them runs, the user sees the exact change and clicks Apply or Refuse. Report an action as done only when its tool returned ok, and quote what the tool measured about the result — for train_model that is the promotion gate's own verdict, which you never override or reinterpret. If a call comes back REFUSED or TIMED_OUT, say the user did not approve it and move on.",
+    "5b. Measure before you propose: for options, use option_chain and option_intelligence (and option_candidate/payoff when useful) before option_paper_order. The option order is paper-only, quote-backed, and never reaches a broker. You cannot move money, edit radar rule definitions or assistant settings, or reach anything outside D-Predict.",
+    "6. You may present a D-Predict research/paper-trade suggestion when a tool explicitly returns one. Clearly label its provenance (ML CONFIRMED, ML UNAVAILABLE / STATISTICAL BASELINE, or OPTION INTELLIGENCE), include the measured invalidation/risk fields, and never send a live broker order.",
     "7. Never reveal, restate or discuss API keys or provider configuration.",
     "",
     "Method: plan the two or three tool calls that actually answer the question, call them, then answer. Quote the tool's number with the tool name next to it so the user can trace it. Prefer compare_forecast when the question is whether a stored signal is stale, and prediction_performance when the question is whether the model works at all.",
@@ -192,7 +192,7 @@ function toolOutcomeMessage(outcome: ToolOutcome, budgetLeft: number): { content
 
 export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
   const question = String(request.question ?? "").trim();
-  const maxSteps = Math.max(1, Math.min(MAX_STEPS_CEILING, Math.round(Number(request.maxSteps ?? DEFAULT_MAX_STEPS))));
+  // Agent mode must actually investigate before it is allowed to answer. A single-step\n  // run is therefore promoted to one tool turn plus the final synthesis turn.\n  const maxSteps = Math.max(2, Math.min(MAX_STEPS_CEILING, Math.round(Number(request.maxSteps ?? DEFAULT_MAX_STEPS))));
   const evidence = Array.isArray(request.evidence) ? request.evidence : [];
   const url = request.baseUrl.replace(/\/$/, "");
   const trace: AgentTraceEntry[] = [];
@@ -221,7 +221,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
         model: request.model,
         messages,
         tools: agentToolSpecs(),
-        tool_choice: "auto",
+        // The first turn is an investigation turn, not a chat turn. Force a real\n        // D-Predict tool call so Nemotron has to drive the machinery before deciding.\n        // Later turns remain autonomous: the model can choose another tool or finish.\n        tool_choice: step === 1 ? "required" : "auto",
         temperature: 0.1,
         top_p: 0.95,
         max_tokens: Math.min(1200, Math.max(128, Number(process.env.AGENT_STEP_MAX_TOKENS ?? 700))),
@@ -242,6 +242,7 @@ export async function runAgent(request: AgentRequest): Promise<AgentRunResult> {
     const content = typeof message?.content === "string" ? message.content.trim() : "";
 
     if (!rawCalls.length) {
+      if (step === 1) return fail("AGENT_TOOL_REQUIRED", "The investigation agent must call a D-Predict tool before answering.");
       // The model chose to answer instead of investigating further. That answer
       // is still only trustworthy if it came from tool results already shown.
       if (!content) return fail("AGENT_EMPTY_RESPONSE", "The model returned neither a tool request nor an answer.");

@@ -1,7 +1,6 @@
-// Agent tools. Every number a tool returns comes from the local Postgres store
-// or the local ML service — this file never computes a probability and never
-// falls back to an example or placeholder value. When data is missing the tool
-// says so; a failed tool is a failed tool.
+// Agent tools. Market/model facts come from the local Postgres store or the local ML service.
+// Deterministic analytics are explicitly labelled as such; this file never invents
+// missing observations or presents a fallback calculation as an ML prediction.
 // Four tools change app state (train, watchlist add/remove, alert ack). Each one
 // is gated: aiAgent.ts will not execute it until the user approves that exact
 // change in the dashboard, and it runs the same appActions.ts statements the
@@ -19,6 +18,8 @@ import {
   removeWatchlistItem,
   unreadAlertCount,
 } from "./appActions.js";
+import { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
+import { buildDecisionCandidate, type CandidateDirection } from "./decisionEngine.js";
 
 /** Anything longer is cut and the cut is declared inside the payload. Sized so a
  * full 26-instrument coverage report fits without losing its tail. */
@@ -403,6 +404,44 @@ async function recentAlertsTool(env: ToolEnv, args: Record<string, unknown>): Pr
   };
 }
 
+async function predictionHealthTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol.");
+  const horizon = horizonOf(args.horizon);
+  const coverageResponse = await env.mlFetch(`/training/coverage?horizons=${encodeURIComponent(horizon)}`, {}, 20_000);
+  if (coverageResponse.status < 200 || coverageResponse.status >= 300 || !coverageResponse.body) {
+    return fail("ML_COVERAGE_UNAVAILABLE", `${symbol} ${horizon}: training service coverage unavailable (HTTP ${coverageResponse.status}).`);
+  }
+  const instruments = Array.isArray(coverageResponse.body.instruments)
+    ? coverageResponse.body.instruments
+    : Array.isArray(coverageResponse.body.coverage) ? coverageResponse.body.coverage : [];
+  const matches = instruments.filter((entry: any) => String(entry.symbol ?? entry.instrument ?? entry.ticker ?? "").toUpperCase() === symbol);
+  const bundle = matches.find((entry: any) => String(entry.horizon ?? entry.target_horizon ?? horizon).toLowerCase() === horizon) ?? matches[0] ?? null;
+  let history: { observations: number; lastBar: string | null; dataStatus: string } | null = null;
+  if (env.pool) {
+    const loaded = await loadDailyBars(env.pool, symbol, 730);
+    history = { observations: loaded.bars.length, lastBar: loaded.lastTimestamp, dataStatus: loaded.fresh ? "FRESH" : loaded.bars.length ? "STALE" : "NO_DATA" };
+  }
+  const live = await callMlForecast(env, symbol, horizon);
+  const health = {
+    symbol, horizon,
+    history,
+    coverageReported: matches.length > 0,
+    bundle: bundle ?? null,
+    inference: live.ok
+      ? { status: "AVAILABLE", modelVersion: live.forecast.modelVersion, modelStatus: live.forecast.modelStatus, predictionStatus: live.forecast.predictionStatus, calibrationStatus: live.forecast.calibrationStatus, promotionChecks: live.forecast.promotionChecks }
+      : { status: "UNAVAILABLE", code: live.code, reason: live.reason },
+  };
+  const status = live.ok ? "AVAILABLE" : bundle ? "BUNDLE_REPORTED_BUT_INFERENCE_UNAVAILABLE" : "NO_HORIZON_BUNDLE_REPORTED";
+  return {
+    ok: true,
+    summary: live.ok
+      ? `${symbol} ${horizon}: ML inference AVAILABLE; model ${live.forecast.modelVersion ?? "version n/a"}.`
+      : `${symbol} ${horizon}: ML inference ${status}; ${history?.observations ?? 0} daily bars stored; reason: ${live.reason}.`,
+    data: { ...health, status },
+  };
+}
+
 async function modelCoverageTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
   const horizons = Array.isArray(args.horizons) ? args.horizons.map(String).join(",") : String(args.horizons ?? "").trim();
   const query = horizons ? `?horizons=${encodeURIComponent(horizons.slice(0, 32))}` : "";
@@ -417,6 +456,103 @@ async function modelCoverageTool(env: ToolEnv, args: Record<string, unknown>): P
       : `Model coverage reported: ${JSON.stringify(body).slice(0, 200)}`,
     data: body,
   };
+}
+
+async function optionChainTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide NIFTY or BANKNIFTY (or another stored index symbol).");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+    from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
+    where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
+    order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
+  if (!result.rows.length) return fail("NO_OPTION_CHAIN", `${symbol} has no persisted option-chain snapshot.`);
+  const rows = result.rows.map(r => ({ expiryDate: String(r.expiry_date), strike: Number(r.strike), optionType: String(r.option_type) as OptionType, timestamp: new Date(r.market_timestamp), ltp: round(r.ltp,2), bid: round(r.bid,2), ask: round(r.ask,2), oi: round(r.oi,0), oiChange: round(r.oi_change,0), iv: round(r.iv,2), volume: round(r.volume,0) }));
+  return { ok: true, summary: `${symbol}: ${rows.length} option contracts across ${new Set(rows.map(r=>r.expiryDate)).size} expiry snapshot(s).`, data: { symbol, rows } };
+}
+
+async function optionIntelligenceTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide the stored underlying symbol.");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const [spot, chain] = await Promise.all([
+    env.pool.query(`select close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 1`, [symbol]),
+    env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+      from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
+      where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
+      order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]),
+  ]);
+  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume) }));
+  const intelligence = analyzeOptionChain(symbol, rows, spot.rows.length ? finite(spot.rows[0].close) : null);
+  return { ok: intelligence.ok, summary: `${symbol}: ${intelligence.status} · ${intelligence.recommendation.action} · ${intelligence.recommendation.direction} · confidence ${(intelligence.recommendation.confidence*100).toFixed(0)}%.`, data: intelligence };
+}
+
+function finite(value: unknown): number | null {
+  const n = Number(value);
+  return value == null || !Number.isFinite(n) ? null : n;
+}
+
+async function optionCandidateTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide the underlying symbol.");
+  const intelligence = await optionIntelligenceTool(env, { symbol });
+  if (!intelligence.ok) return intelligence;
+  const data = intelligence.data as any;
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  const preferred = data?.recommendation?.contract;
+  if (!preferred) return fail("NO_OPTION_CANDIDATE", `${symbol}: no contract passed the current chain evidence gates.`);
+  return { ok: true, summary: `${symbol}: candidate ${preferred.optionType} ${preferred.strike} ${preferred.expiry} at ask ₹${preferred.ask}; action ${data.recommendation.action}.`, data: { symbol, recommendation: data.recommendation, gates: data.gates, topCandidates: candidates.slice(0,10), spot: data.spot, expiry: data.expiry } };
+}
+
+async function optionPaperOrderTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  const expiry = String(args.expiry ?? "").trim();
+  const optionType = String(args.optionType ?? "").trim().toUpperCase();
+  const side = String(args.side ?? "").trim().toUpperCase();
+  const strike = Number(args.strike);
+  const lots = intOf(args.lots, 1, 1, 1000);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide the underlying symbol.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return fail("INVALID_EXPIRY", "Use YYYY-MM-DD.");
+  if (optionType !== "CE" && optionType !== "PE") return fail("INVALID_OPTION_TYPE", "optionType must be CE or PE.");
+  if (side !== "BUY" && side !== "SELL") return fail("INVALID_SIDE", "side must be BUY or SELL.");
+  if (!Number.isFinite(strike) || strike <= 0) return fail("INVALID_STRIKE", "Provide a positive strike.");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  await env.pool.query(`create table if not exists option_paper_trades (id uuid primary key default gen_random_uuid(),contract_id uuid not null references option_contracts(contract_id),symbol text not null,expiry_date date not null,strike numeric(12,4) not null,option_type text not null check(option_type in ('CE','PE')),side text not null check(side in ('BUY','SELL')),status text not null default 'OPEN' check(status in ('OPEN','CLOSED')),lots integer not null check(lots>0),lot_size integer not null check(lot_size>0),quantity integer not null check(quantity>0),entry_price numeric(12,4) not null,entry_bid numeric(12,4),entry_ask numeric(12,4),entry_ltp numeric(12,4),entry_quote_timestamp timestamptz not null,entry_timestamp timestamptz not null default now(),current_price numeric(12,4),current_quote_timestamp timestamptz,unrealized_pnl numeric(14,2) not null default 0,realized_pnl numeric(14,2),exit_price numeric(12,4),exit_timestamp timestamptz,exit_reason text,entry_fees numeric(14,2) not null default 0,exit_fees numeric(14,2),created_at timestamptz not null default now(),updated_at timestamptz not null default now())`);
+  const cr = await env.pool.query(`select oc.contract_id, oc.expiry_date, oc.strike, oc.option_type, i.symbol, i.lot_size
+    from option_contracts oc join instruments i on i.instrument_id=oc.instrument_id
+    where i.symbol=$1 and oc.expiry_date=$2::date and oc.strike=$3 and oc.option_type=$4 limit 1`, [symbol, expiry, strike, optionType]);
+  if (!cr.rows.length) return fail("OPTION_CONTRACT_NOT_FOUND", `${symbol} ${expiry} ${strike} ${optionType} is not in the persisted chain.`);
+  const contract = cr.rows[0];
+  const q = await env.pool.query(`select market_timestamp, ltp, bid, ask from option_snapshots where contract_id=$1 order by market_timestamp desc limit 1`, [contract.contract_id]);
+  if (!q.rows.length) return fail("OPTION_QUOTE_MISSING", "No quote exists for the requested contract.");
+  const quote = q.rows[0];
+  const ts = new Date(quote.market_timestamp);
+  const age = Math.max(0, (Date.now()-ts.getTime())/1000);
+  const maxAge = Math.max(15, Number(process.env.SHADOW_MAX_QUOTE_AGE_SECONDS ?? 120));
+  if (age > maxAge) return fail("OPTION_QUOTE_STALE", `Quote is ${age.toFixed(0)}s old; maximum is ${maxAge}s.`);
+  const fill = side === "BUY" ? finite(quote.ask) : finite(quote.bid);
+  if (fill == null || fill <= 0) return fail(side === "BUY" ? "OPTION_ASK_UNAVAILABLE" : "OPTION_BID_UNAVAILABLE", "Executable quote side is unavailable.");
+  const lotSize = Math.max(1, Number(contract.lot_size));
+  const quantity = lotSize * lots;
+  const feeFixed = Math.max(0, Number(process.env.SHADOW_FEE_FIXED_PER_ORDER ?? 20));
+  const feeBps = Math.max(0, Number(process.env.SHADOW_FEE_BPS_PER_SIDE ?? 15));
+  const entryFees = Math.round((feeFixed + fill * quantity * feeBps / 10000) * 100) / 100;
+  const ins = await env.pool.query(`insert into option_paper_trades (contract_id,symbol,expiry_date,strike,option_type,side,status,lots,lot_size,quantity,entry_price,entry_bid,entry_ask,entry_ltp,entry_quote_timestamp,current_price,current_quote_timestamp,unrealized_pnl,entry_fees)
+    values ($1,$2,$3,$4,$5,$6,'OPEN',$7,$8,$9,$10,$11,$12,$13,$14,$10,$14,0,$15) returning id,entry_timestamp`,
+    [contract.contract_id,symbol,contract.expiry_date,Number(contract.strike),optionType,side,lots,lotSize,quantity,fill,finite(quote.bid),finite(quote.ask),finite(quote.ltp),ts,entryFees]);
+  return { ok:true, summary:`Paper ${side} ${symbol} ${optionType} ${Number(contract.strike)} ${contract.expiry_date} filled at ₹${fill} for ${quantity} units. No broker order was sent.`, data:{ id:ins.rows[0].id, symbol, expiry:contract.expiry_date, strike:Number(contract.strike), optionType, side, lots, quantity, fillPrice:fill, fees:entryFees, quoteTimestamp:ts.toISOString(), paperOnly:true } };
+}
+
+async function optionPayoffTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const optionType = String(args.optionType ?? "").toUpperCase();
+  if (optionType !== "CE" && optionType !== "PE") return fail("INVALID_OPTION_TYPE", "optionType must be CE or PE.");
+  const strike = Number(args.strike), premium = Number(args.premium), quantity = intOf(args.quantity, 1, 1, 1000000);
+  if (!Number.isFinite(strike) || strike <= 0 || !Number.isFinite(premium) || premium < 0) return fail("INVALID_PAYOFF_INPUT", "Provide positive strike and non-negative premium.");
+  const expirySpot = Number(args.expirySpot);
+  if (!Number.isFinite(expirySpot) || expirySpot < 0) return fail("INVALID_EXPIRY_SPOT", "Provide expirySpot.");
+  const intrinsic = optionType === "CE" ? Math.max(0, expirySpot-strike) : Math.max(0, strike-expirySpot);
+  const gross = (intrinsic-premium)*quantity;
+  return { ok:true, summary:`${optionType} ${strike}: expiry spot ₹${expirySpot} gives gross P&L ₹${gross.toFixed(2)} for ${quantity} units before costs.`, data:{optionType,strike,premium,expirySpot,quantity,intrinsic,grossPnl:gross,breakeven:optionType==="CE"?strike+premium:strike-premium} };
 }
 
 async function marketScanTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
@@ -549,7 +685,198 @@ const objectSchema = (properties: Record<string, unknown>, required: string[] = 
   additionalProperties: false,
 });
 
+async function statisticalBaselineTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol for the statistical baseline.");
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+  const horizonDays = intOf(args.horizonDays, 5, 1, 30);
+  const { bars, lastTimestamp, ageSeconds, fresh } = await loadDailyBars(env.pool, symbol, 730);
+  if (bars.length < 20) return fail("INSUFFICIENT_HISTORY", `${symbol} has ${bars.length} stored daily bars; the statistical baseline needs at least 20. No prediction was fabricated.`);
+  const closes = bars.map((bar) => bar.close);
+  const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index]));
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const volatility = std(returns);
+  const spot = closes[closes.length - 1];
+  const scale = volatility * Math.sqrt(horizonDays);
+  const expectedReturn = Math.exp(mean * horizonDays) - 1;
+  const probabilityAbove = 1 - normalCdf(-mean * Math.sqrt(horizonDays) / Math.max(volatility, 1e-9));
+  const probabilityBelow = 1 - probabilityAbove;
+  const edgeThreshold = Math.max(0.005, volatility * Math.sqrt(horizonDays) * 0.15);
+  const direction = Math.abs(expectedReturn) >= edgeThreshold
+    ? probabilityAbove >= 0.55 ? "LONG" : probabilityBelow >= 0.55 ? "SHORT" : "FLAT"
+    : "FLAT";
+  const p10 = spot * Math.exp(mean * horizonDays - 1.2816 * scale);
+  const p90 = spot * Math.exp(mean * horizonDays + 1.2816 * scale);
+  const data = {
+    symbol, asOf: lastTimestamp, dataFresh: fresh, dataAgeSeconds: ageSeconds == null ? null : round(ageSeconds, 1),
+    horizonDays, daysOfHistoryUsed: closes.length, spot: round(spot, 4),
+    dailyVolatility: round(volatility, 8), expectedReturn: round(expectedReturn, 6),
+    probabilityAboveSpot: round(probabilityAbove, 6), probabilityBelowSpot: round(probabilityBelow, 6),
+    forecastRange: { low: round(p10, 4), high: round(p90, 4) },
+    direction, status: direction === "FLAT" ? "WAIT" : "PAPER_CANDIDATE",
+    mlConfirmation: "UNAVAILABLE", methodology: "STATISTICAL_BASELINE",
+    rationale: direction === "FLAT"
+      ? "Historical drift does not clear the configured volatility-adjusted edge threshold."
+      : `${direction} is supported by stored daily-return drift and probability calculations; this is not an ML forecast.`,
+    paperSuggestion: direction === "FLAT" ? null : {
+      direction, entryReference: round(spot, 4), invalidation: round(direction === "LONG" ? p10 : p90, 4),
+      note: "Research/paper candidate only. No broker order is sent."
+    },
+    limitations: [
+      "Uses stored daily log returns, not the trained ML artifact.",
+      "Probability is a closed-form statistical calculation, not a calibrated ML probability.",
+      "News, gaps, liquidity and intraday structure are not modeled."
+    ]
+  };
+  return { ok: true, summary: `${symbol} statistical baseline ${horizonDays}d: ${direction}; ML confirmation unavailable; ${closes.length} daily bars measured.`, data };
+}
+
+function normalCdf(value: number): number {
+  const sign = value < 0 ? -1 : 1;
+  const magnitude = Math.abs(value) / Math.sqrt(2);
+  const tt = 1 / (1 + 0.3275911 * magnitude);
+  const polynomial = 1 - (((((1.061405429 * tt - 1.453152027) * tt) + 1.421413741) * tt - 0.284496736) * tt + 0.254829592) * tt * Math.exp(-magnitude * magnitude);
+  return 0.5 * (1 + sign * polynomial);
+}
+
+async function decisionCandidateTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol.");
+  const horizon = horizonOf(args.horizon);
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+
+  const history = await loadDailyBars(env.pool, symbol, 730);
+  if (history.bars.length < 20) {
+    return fail("INSUFFICIENT_HISTORY", `${symbol} has ${history.bars.length} stored daily bars; the decision engine needs at least 20. No candidate was fabricated.`);
+  }
+
+  const closes = history.bars.map(b => b.close);
+  const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+  const volatility = std(returns);
+  const spot = closes[closes.length - 1];
+  const recent = closes.length >= 21 ? Math.log(spot / closes[closes.length - 21]) : 0;
+  const momentumDirection: CandidateDirection = recent > volatility * 2 ? "LONG" : recent < -volatility * 2 ? "SHORT" : "ABSTAIN";
+
+  const live = await callMlForecast(env, symbol, horizon);
+  let direction: CandidateDirection = "ABSTAIN";
+  let provenance: "ML_CONFIRMED" | "STATISTICAL_BASELINE" = "STATISTICAL_BASELINE";
+  let modelConfidence: number | null = null;
+  let expectedReturn: number | null = null;
+  const reasons: string[] = [];
+
+  if (live.ok) {
+    const prediction = String(live.forecast.prediction ?? "").toUpperCase();
+    const actionStatus = String(live.forecast.actionStatus ?? "").toUpperCase();
+    const predictionStatus = String(live.forecast.predictionStatus ?? "").toUpperCase();
+    const mapped = prediction.includes("UP") || prediction.includes("LONG") || prediction.includes("BUY") ? "LONG"
+      : prediction.includes("DOWN") || prediction.includes("SHORT") || prediction.includes("SELL") ? "SHORT" : "ABSTAIN";
+    const allowed = !["ABSTAIN", "BLOCKED", "REJECTED"].includes(actionStatus) && !["ABSTAIN", "BLOCKED", "REJECTED"].includes(predictionStatus);
+    if (mapped !== "ABSTAIN" && allowed) {
+      direction = mapped;
+      provenance = "ML_CONFIRMED";
+      modelConfidence = finite(live.forecast.confidence);
+      expectedReturn = finite(live.forecast.expectedReturn);
+      reasons.push(`ML inference reports ${mapped}${modelConfidence == null ? "" : ` at ${(modelConfidence * 100).toFixed(1)}% confidence`}.`);
+    } else {
+      reasons.push(`ML inference is present but its action/prediction status is ${actionStatus || predictionStatus || "not actionable"}.`);
+    }
+  } else {
+    const baseline = await statisticalBaselineTool(env, { symbol, horizonDays: Number(horizon.replace("d", "")) });
+    if (baseline.ok) {
+      const b = baseline.data as any;
+      direction = b.direction === "LONG" || b.direction === "SHORT" ? b.direction : "ABSTAIN";
+      provenance = "STATISTICAL_BASELINE";
+      expectedReturn = finite(b.expectedReturn);
+      reasons.push("ML inference unavailable; deterministic statistical baseline was used.");
+    } else {
+      reasons.push(`ML inference unavailable (${live.code}) and statistical fallback failed (${(baseline.data as any)?.error ?? "unknown"}).`);
+    }
+  }
+
+  const freshnessGate = history.fresh;
+  const observationGate = history.bars.length >= 60;
+  const directionGate = direction !== "ABSTAIN";
+  const momentumGate = direction === "ABSTAIN" || momentumDirection === "ABSTAIN" || momentumDirection === direction;
+  const promotionGate = live.ok ? String(live.forecast.actionStatus ?? "").toUpperCase() !== "ABSTAIN" : false;
+  if (momentumDirection !== "ABSTAIN") reasons.push(`20-session momentum is ${momentumDirection}, measured from stored daily closes.`);
+  else reasons.push("20-session momentum does not clear the volatility threshold.");
+
+  const gates = [
+    { name: "DATA_FRESH", passed: freshnessGate, reason: freshnessGate ? "Newest stored daily bar is within the freshness window." : "Newest stored daily bar is stale." },
+    { name: "HISTORY_DEPTH", passed: observationGate, reason: `${history.bars.length} daily bars stored; 60 are required for this candidate gate.` },
+    { name: "DIRECTION", passed: directionGate, reason: directionGate ? `A ${direction} direction was measured.` : "No actionable direction was measured." },
+    { name: "MOMENTUM_ALIGNMENT", passed: momentumGate, reason: momentumGate ? "Momentum does not contradict the candidate direction." : `Momentum is ${momentumDirection}, which conflicts with ${direction}.` },
+    { name: "ML_ACTION_GATE", passed: !live.ok || promotionGate, reason: live.ok ? (promotionGate ? "ML action status permits consideration." : "ML action status abstains.") : "ML was unavailable; this gate is not used to manufacture ML confirmation." },
+  ];
+
+  let score = 0;
+  score += freshnessGate ? 20 : 0;
+  score += observationGate ? 15 : 0;
+  score += directionGate ? 25 : 0;
+  score += momentumGate ? 15 : 0;
+  score += provenance === "ML_CONFIRMED" ? 25 : 10;
+  if (modelConfidence != null) score += Math.round(Math.max(0, Math.min(10, modelConfidence * 10)));
+  score = Math.min(100, score);
+
+  const invalidation = direction === "LONG" ? spot * Math.exp(-Math.max(volatility, 0.005) * 1.5)
+    : direction === "SHORT" ? spot * Math.exp(Math.max(volatility, 0.005) * 1.5) : null;
+
+  const candidate = buildDecisionCandidate({
+    symbol, horizon, spot, direction, score, provenance, modelConfidence, expectedReturn,
+    volatility, dataFresh: freshnessGate, observations: history.bars.length, invalidation,
+    reasons, gates,
+  });
+  return {
+    ok: true,
+    summary: `${symbol} ${horizon}: ${candidate.status} · ${candidate.direction} · score ${candidate.score}/100 · ${candidate.provenance}.`,
+    data: candidate,
+  };
+}
+
 const TOOLS: ToolDefinition[] = [
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "decision_candidate",
+        description: "Build a deterministic D-Predict research/paper candidate from real stored history and live ML when available. Applies freshness, history-depth, direction, momentum and ML-action gates. Never sends an order and never turns a fallback into an ML forecast.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizon: { type: "string", enum: [...HORIZONS], description: "Decision horizon. Default 1d." },
+        }, ["symbol"]),
+      },
+    },
+    run: decisionCandidateTool,
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "prediction_health",
+        description: "Diagnose one symbol and horizon using real ML coverage, live inference, and stored daily history. Use this before falling back when fresh_forecast is unavailable.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizon: { type: "string", enum: ["1d", "3d", "5d"], description: "Prediction horizon." },
+        }, ["symbol"]),
+      },
+    },
+    run: predictionHealthTool,
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "statistical_baseline",
+        description: "When ML inference is unavailable, compute a clearly labeled statistical baseline from real stored daily bars. It may produce a research/paper candidate, but it is never an ML prediction.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizonDays: { type: "integer", description: "Forward horizon, 1-30. Default 5." },
+        }, ["symbol"]),
+      },
+    },
+    run: statisticalBaselineTool,
+  },
+
   {
     spec: {
       type: "function",
@@ -676,6 +1003,28 @@ const TOOLS: ToolDefinition[] = [
       },
     },
     run: marketScanTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_chain", description: "Read the latest persisted option chain for an underlying. Never invents a quote.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionChainTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_intelligence", description: "Run D-Predict deterministic option-chain intelligence over the latest persisted chain and spot. Read-only.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionIntelligenceTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_candidate", description: "Return the best option candidate and alternatives from D-Predict option intelligence. Read-only.", parameters: objectSchema({ symbol: { type: "string" } }, ["symbol"]) } },
+    run: optionCandidateTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_payoff", description: "Compute deterministic expiry payoff and breakeven for a CE or PE.", parameters: objectSchema({ optionType: { type: "string", enum: ["CE","PE"] }, strike: { type: "number" }, premium: { type: "number" }, expirySpot: { type: "number" }, quantity: { type: "integer" } }, ["optionType","strike","premium","expirySpot"]) } },
+    run: optionPayoffTool,
+  },
+  {
+    spec: { type: "function", function: { name: "option_paper_order", description: "Create a quote-backed paper-only option BUY or SELL. Never reaches a broker. Requires user approval.", parameters: objectSchema({ symbol: { type: "string" }, expiry: { type: "string" }, strike: { type: "number" }, optionType: { type: "string", enum: ["CE","PE"] }, side: { type: "string", enum: ["BUY","SELL"] }, lots: { type: "integer", minimum: 1, maximum: 100 } }, ["symbol","expiry","strike","optionType","side","lots"]) } },
+    write: true,
+    describeWrite: (args) => `PAPER ${String(args.side ?? "?").toUpperCase()} ${symbolOf(args.symbol) ?? String(args.symbol ?? "?").slice(0, 32).toUpperCase()} ${String(args.optionType ?? "?").toUpperCase()} ${Number(args.strike) || "?"} ${String(args.expiry ?? "?")} · ${Number(args.lots) || "?"} lot(s). No broker order will be sent.`,
+    run: optionPaperOrderTool,
   },
   {
     spec: {

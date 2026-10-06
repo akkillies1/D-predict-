@@ -16,8 +16,19 @@ import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
 import { createAiRouter } from "./aiRoutes.js";
 import { analyzeOptionChain } from "./optionIntelligence.js";
 
-dotenv.config();
+// Resolve runtime configuration from every supported local launch context.
+// Docker supplies DATABASE_URL explicitly; direct Windows launches must also see
+// the persisted installer configuration instead of silently creating a
+// database-less API process.
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
+const localStateEnv = process.env.LOCALAPPDATA
+  ? path.join(process.env.LOCALAPPDATA, "D-Predict", ".env")
+  : null;
+if (!process.env.DATABASE_URL && localStateEnv) {
+  dotenv.config({ path: localStateEnv });
+}
 const { Pool } = pg;
 const app = express();
 const port = Number(process.env.API_PORT ?? 4100);
