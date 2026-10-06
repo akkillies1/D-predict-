@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { Activity, Send } from "lucide-react";
-import { runDecisionAgent } from "@/lib/localApi";
+import { Activity, Check, Send, ShieldAlert, X } from "lucide-react";
+import { approveDecisionAgent, runDecisionAgent } from "@/lib/localApi";
 
 export default function DecisionCopilot({ model, symbol }: { model?: string | null; symbol: string }) {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [trace, setTrace] = useState<Array<{ event: string; data: unknown }>>([]);
   const [busy, setBusy] = useState(false);
+  const [approval, setApproval] = useState<{ runId: string; callId: string; tool: string; description: string } | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const run = async () => {
     const q = question.trim();
@@ -14,10 +16,17 @@ export default function DecisionCopilot({ model, symbol }: { model?: string | nu
     setBusy(true);
     setAnswer("");
     setTrace([]);
+    setApproval(null);
     try {
       await runDecisionAgent(q, model ?? null, {
         onText: delta => setAnswer(value => value + delta),
-        onEvent: (event, data) => setTrace(value => [...value, { event, data }].slice(-24)),
+        onEvent: (event, data) => {
+          setTrace(value => [...value, { event, data }].slice(-24));
+          if (event === "approval" && data?.runId && data?.callId) {
+            setApproval({ runId: data.runId, callId: data.callId, tool: data.tool ?? "write", description: data.description ?? "The agent wants to change D-Predict state." });
+          }
+          if (event === "approval_resolved") setApproval(null);
+        },
       });
     } catch (error) {
       setAnswer(error instanceof Error ? error.message : "Assistant unavailable.");
@@ -40,6 +49,22 @@ export default function DecisionCopilot({ model, symbol }: { model?: string | nu
         <input value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === "Enter") void run(); }} placeholder={`Ask why ${symbol} is actionable or blocked…`} className="min-w-0 flex-1 rounded-xl border border-[#29463b] bg-[#07100f] px-4 py-3 text-xs text-[#eaf4e9] outline-none placeholder:text-[#4e655c]" />
         <button onClick={() => void run()} disabled={busy || !question.trim()} className="inline-flex items-center gap-2 rounded-xl bg-[#c8f169] px-4 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40"><Send size={13}/>{busy ? "Running" : "Ask"}</button>
       </div>
+      {approval ? (
+        <div className="mt-4 rounded-xl border border-[#5b4b2b] bg-[#171209] p-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert size={17} className="mt-0.5 shrink-0 text-[#e5b55f]" />
+            <div className="min-w-0 flex-1">
+              <div className="font-mono-ui text-[9px] uppercase tracking-[.16em] text-[#e5b55f]">Approval required</div>
+              <div className="mt-1 text-xs font-semibold text-[#eff7ea]">{approval.tool}</div>
+              <p className="mt-1 text-[10px] leading-relaxed text-[#aebeb3]">{approval.description}</p>
+              <div className="mt-3 flex gap-2">
+                <button disabled={approvalBusy} onClick={async () => { setApprovalBusy(true); try { await approveDecisionAgent(approval.runId, approval.callId, true); } finally { setApprovalBusy(false); } }} className="inline-flex items-center gap-1.5 rounded-lg bg-[#c8f169] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40"><Check size={12}/> Approve</button>
+                <button disabled={approvalBusy} onClick={async () => { setApprovalBusy(true); try { await approveDecisionAgent(approval.runId, approval.callId, false); setApproval(null); } finally { setApprovalBusy(false); } }} className="inline-flex items-center gap-1.5 rounded-lg border border-[#633d38] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#ff9d91] disabled:opacity-40"><X size={12}/> Refuse</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_.8fr]">
         <div className="min-h-28 rounded-xl border border-[#1d332f] bg-[#07100f] p-4 text-xs leading-relaxed text-[#c7d5ca]">{answer || "The investigation response will appear here."}</div>
         <div className="max-h-48 space-y-1.5 overflow-auto rounded-xl border border-[#1d332f] bg-[#07100f] p-3">
