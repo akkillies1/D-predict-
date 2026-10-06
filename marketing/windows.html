@@ -12,13 +12,15 @@
 <body>
 <header><div class="wrap"><a class="brand" href="/">D<span>-Predict</span></a></div></header>
 <main><div class="wrap">
-  <div class="eyebrow">Windows 10/11 · x64 · D-Predict v2.1.2</div>
+  <div class="eyebrow">Windows 10/11 · x64 · <span id="version">D-Predict v2.1.2</span></div>
   <h1>Download D-Predict for Windows.</h1>
   <p class="lead">This page is the verified download entry point for the local D-Predict terminal. The installer provisions Docker Desktop, Python, Node.js, the local runtime, and the first-run database configuration.</p>
   <section class="panel">
     <h2>Installer</h2>
-    <p class="muted">Release asset: <strong>D-Predict-Setup-v2.1.2.exe</strong></p>
-    <a class="btn primary" href="https://github.com/akkillies1/D-predict-/releases/download/v2.1.2/D-Predict-Setup-v2.1.2.exe">Download the installer</a>
+    <p class="muted">Release asset: <strong id="asset-name">D-Predict-Setup-v2.1.2.exe</strong></p>
+    <p class="small" id="release-time">Release publication time: loading…</p>
+    <p class="small" id="asset-size">Installer size: loading…</p>
+    <a id="download-link" class="btn primary" href="https://github.com/akkillies1/D-predict-/releases/download/v2.1.2/D-Predict-Setup-v2.1.2.exe">Download the installer</a>
     <a class="btn" href="https://github.com/akkillies1/D-predict-/releases/tag/v2.1.2">View release notes</a>
     <p class="small">Source commit: <a href="https://github.com/akkillies1/D-predict-/commit/4ebe97b607f0dd68669574d27466c9b44c889412">4ebe97b</a> · Windows build workflow: <a href="https://github.com/akkillies1/D-predict-/actions/runs/37351038929">37351038929</a></p>
   </section>
@@ -34,7 +36,8 @@
     <p class="muted">After downloading in PowerShell, run:</p>
     <code class="hash">Get-FileHash .\D-Predict-Setup-v2.1.2.exe -Algorithm SHA256</code>
     <p class="muted">Expected SHA-256:</p>
-    <code class="hash">42f0ca2404a45831e52ed53256a25d3d9d247c00bcf9d2f1a4041723f2e584bf</code>
+    <code class="hash" id="sha256">42f0ca2404a45831e52ed53256a25d3d9d247c00bcf9d2f1a4041723f2e584bf</code>
+    <p class="small" id="verified-time">Release metadata verified: loading…</p>
   </section>
   <section class="panel warning">
     <h2>Smart App Control</h2>
@@ -53,5 +56,22 @@
   </section>
 </div></main>
 <footer><div class="wrap">© 2026 D-Predict · <a href="/">Back to the product page</a> · <a href="https://github.com/akkillies1/D-predict-">GitHub</a></div></footer>
+<script>
+(function(){
+  const API='https://api.github.com/repos/akkillies1/D-predict-/releases/latest';
+  const fmt=(s)=>new Intl.DateTimeFormat('en-IN',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Kolkata'}).format(new Date(s))+' IST';
+  fetch(API,{headers:{Accept:'application/vnd.github+json'}}).then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+    const asset=d.assets.find(a=>a.name.toLowerCase().endsWith('.exe'));
+    if(!asset) throw new Error('No Windows installer asset');
+    document.getElementById('version').textContent='D-Predict '+d.tag_name;
+    document.getElementById('asset-name').textContent=asset.name;
+    document.getElementById('asset-size').textContent='Installer size: '+(asset.size/1048576).toFixed(2)+' MB';
+    document.getElementById('release-time').textContent='Published: '+fmt(d.published_at);
+    document.getElementById('download-link').href=asset.browser_download_url;
+    document.getElementById('sha256').textContent=(asset.digest||'').replace(/^sha256:/,'')||'SHA-256 not supplied by GitHub release';
+    document.getElementById('verified-time').textContent='Release metadata verified '+fmt(new Date().toISOString())+' · GitHub release '+d.tag_name;
+  }).catch(()=>{document.getElementById('release-time').textContent='Release metadata unavailable — use the GitHub release page for the authoritative timestamp.';document.getElementById('verified-time').textContent='Verification metadata unavailable.'});
+})();
+</script>
 </body>
 </html>
