@@ -90,6 +90,7 @@ export default function OptionChainTradingPanel() {
       const [chain, paperTrades, intelligence] = await Promise.all([
         getOptionChain(symbol),
         getOptionPaperTrades(),
+        getOptionIntelligence(symbol),
       ]);
       setOptions(chain);
       setTrades(paperTrades);
