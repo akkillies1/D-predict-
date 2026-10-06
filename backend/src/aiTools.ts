@@ -19,6 +19,7 @@ import {
   unreadAlertCount,
 } from "./appActions.js";
 import { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
+import { buildDecisionCandidate, type CandidateDirection } from "./decisionEngine.js";
 
 /** Anything longer is cut and the cut is declared inside the payload. Sized so a
  * full 26-instrument coverage report fits without losing its tail. */
@@ -738,7 +739,116 @@ function normalCdf(value: number): number {
   return 0.5 * (1 + sign * polynomial);
 }
 
-const TOOLS: ToolDefinition[] = [  {
+async function decisionCandidateTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
+  const symbol = symbolOf(args.symbol);
+  if (!symbol) return fail("INVALID_SYMBOL", "Provide one stored symbol.");
+  const horizon = horizonOf(args.horizon);
+  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
+
+  const history = await loadDailyBars(env.pool, symbol, 730);
+  if (history.bars.length < 20) {
+    return fail("INSUFFICIENT_HISTORY", `${symbol} has ${history.bars.length} stored daily bars; the decision engine needs at least 20. No candidate was fabricated.`);
+  }
+
+  const closes = history.bars.map(b => b.close);
+  const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+  const volatility = std(returns);
+  const spot = closes[closes.length - 1];
+  const recent = closes.length >= 21 ? Math.log(spot / closes[closes.length - 21]) : 0;
+  const momentumDirection: CandidateDirection = recent > volatility * 2 ? "LONG" : recent < -volatility * 2 ? "SHORT" : "ABSTAIN";
+
+  const live = await callMlForecast(env, symbol, horizon);
+  let direction: CandidateDirection = "ABSTAIN";
+  let provenance: "ML_CONFIRMED" | "STATISTICAL_BASELINE" = "STATISTICAL_BASELINE";
+  let modelConfidence: number | null = null;
+  let expectedReturn: number | null = null;
+  const reasons: string[] = [];
+
+  if (live.ok) {
+    const prediction = String(live.forecast.prediction ?? "").toUpperCase();
+    const actionStatus = String(live.forecast.actionStatus ?? "").toUpperCase();
+    const predictionStatus = String(live.forecast.predictionStatus ?? "").toUpperCase();
+    const mapped = prediction.includes("UP") || prediction.includes("LONG") || prediction.includes("BUY") ? "LONG"
+      : prediction.includes("DOWN") || prediction.includes("SHORT") || prediction.includes("SELL") ? "SHORT" : "ABSTAIN";
+    const allowed = !["ABSTAIN", "BLOCKED", "REJECTED"].includes(actionStatus) && !["ABSTAIN", "BLOCKED", "REJECTED"].includes(predictionStatus);
+    if (mapped !== "ABSTAIN" && allowed) {
+      direction = mapped;
+      provenance = "ML_CONFIRMED";
+      modelConfidence = finite(live.forecast.confidence);
+      expectedReturn = finite(live.forecast.expectedReturn);
+      reasons.push(`ML inference reports ${mapped}${modelConfidence == null ? "" : ` at ${(modelConfidence * 100).toFixed(1)}% confidence`}.`);
+    } else {
+      reasons.push(`ML inference is present but its action/prediction status is ${actionStatus || predictionStatus || "not actionable"}.`);
+    }
+  } else {
+    const baseline = await statisticalBaselineTool(env, { symbol, horizonDays: Number(horizon.replace("d", "")) });
+    if (baseline.ok) {
+      const b = baseline.data as any;
+      direction = b.direction === "LONG" || b.direction === "SHORT" ? b.direction : "ABSTAIN";
+      provenance = "STATISTICAL_BASELINE";
+      expectedReturn = finite(b.expectedReturn);
+      reasons.push("ML inference unavailable; deterministic statistical baseline was used.");
+    } else {
+      reasons.push(`ML inference unavailable (${live.code}) and statistical fallback failed (${(baseline.data as any)?.error ?? "unknown"}).`);
+    }
+  }
+
+  const freshnessGate = history.fresh;
+  const observationGate = history.bars.length >= 60;
+  const directionGate = direction !== "ABSTAIN";
+  const momentumGate = direction === "ABSTAIN" || momentumDirection === "ABSTAIN" || momentumDirection === direction;
+  const promotionGate = live.ok ? String(live.forecast.actionStatus ?? "").toUpperCase() !== "ABSTAIN" : false;
+  if (momentumDirection !== "ABSTAIN") reasons.push(`20-session momentum is ${momentumDirection}, measured from stored daily closes.`);
+  else reasons.push("20-session momentum does not clear the volatility threshold.");
+
+  const gates = [
+    { name: "DATA_FRESH", passed: freshnessGate, reason: freshnessGate ? "Newest stored daily bar is within the freshness window." : "Newest stored daily bar is stale." },
+    { name: "HISTORY_DEPTH", passed: observationGate, reason: `${history.bars.length} daily bars stored; 60 are required for this candidate gate.` },
+    { name: "DIRECTION", passed: directionGate, reason: directionGate ? `A ${direction} direction was measured.` : "No actionable direction was measured." },
+    { name: "MOMENTUM_ALIGNMENT", passed: momentumGate, reason: momentumGate ? "Momentum does not contradict the candidate direction." : `Momentum is ${momentumDirection}, which conflicts with ${direction}.` },
+    { name: "ML_ACTION_GATE", passed: !live.ok || promotionGate, reason: live.ok ? (promotionGate ? "ML action status permits consideration." : "ML action status abstains.") : "ML was unavailable; this gate is not used to manufacture ML confirmation." },
+  ];
+
+  let score = 0;
+  score += freshnessGate ? 20 : 0;
+  score += observationGate ? 15 : 0;
+  score += directionGate ? 25 : 0;
+  score += momentumGate ? 15 : 0;
+  score += provenance === "ML_CONFIRMED" ? 25 : 10;
+  if (modelConfidence != null) score += Math.round(Math.max(0, Math.min(10, modelConfidence * 10)));
+  score = Math.min(100, score);
+
+  const invalidation = direction === "LONG" ? spot * Math.exp(-Math.max(volatility, 0.005) * 1.5)
+    : direction === "SHORT" ? spot * Math.exp(Math.max(volatility, 0.005) * 1.5) : null;
+
+  const candidate = buildDecisionCandidate({
+    symbol, horizon, spot, direction, score, provenance, modelConfidence, expectedReturn,
+    volatility, dataFresh: freshnessGate, observations: history.bars.length, invalidation,
+    reasons, gates,
+  });
+  return {
+    ok: true,
+    summary: `${symbol} ${horizon}: ${candidate.status} · ${candidate.direction} · score ${candidate.score}/100 · ${candidate.provenance}.`,
+    data: candidate,
+  };
+}
+
+const TOOLS: ToolDefinition[] = [
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "decision_candidate",
+        description: "Build a deterministic D-Predict research/paper candidate from real stored history and live ML when available. Applies freshness, history-depth, direction, momentum and ML-action gates. Never sends an order and never turns a fallback into an ML forecast.",
+        parameters: objectSchema({
+          symbol: { type: "string", description: "Stored instrument symbol." },
+          horizon: { type: "string", enum: [...HORIZONS], description: "Decision horizon. Default 1d." },
+        }, ["symbol"]),
+      },
+    },
+    run: decisionCandidateTool,
+  },
+  {
     spec: {
       type: "function",
       function: {
