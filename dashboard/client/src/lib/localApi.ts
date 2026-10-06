@@ -70,6 +70,32 @@ export async function getWatchlist(signal?: AbortSignal): Promise<WatchlistItem[
 export async function addToWatchlist(symbol: string, note?: string): Promise<WatchlistItem> { const payload = await json<{ item: WatchlistItem }>(`${API_BASE}/api/watchlist`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, note }) }); return payload.item; }
 export async function removeFromWatchlist(symbol: string): Promise<void> { await json(`${API_BASE}/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }); }
 export async function getLatestSignal(symbol: string, signal?: AbortSignal): Promise<Signal | null> { const payload = await json<{ ok: boolean; signal?: Signal | null }>(`${API_BASE}/api/signals/latest?symbol=${encodeURIComponent(symbol)}`, { signal }); if (!payload.ok || !payload.signal) return null; const signalRow = payload.signal; const parameters = signalRow.parameters ?? {}; const embedded = parameters.tradeThesis ?? parameters.trade_thesis; return { ...signalRow, tradeThesis: signalRow.tradeThesis ?? (embedded as TradeThesis | null | undefined) ?? null }; }
+export async function runDecisionAgent(question: string, model: string | null, handlers: { onText?: (text: string) => void; onEvent?: (event: string, data: any) => void }, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/ai/agent`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question, model: model || undefined, stream: true }), signal });
+  if (!response.ok || !response.body) throw new Error(`Agent request failed (${response.status})`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const lines = frame.split("\n");
+      const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim() || "message";
+      const dataLine = lines.find(line => line.startsWith("data:"));
+      if (!dataLine) continue;
+      try {
+        const data = JSON.parse(dataLine.slice(5).trim());
+        handlers.onEvent?.(event, data);
+        if (event === "text" && typeof data.text === "string") handlers.onText?.(data.text);
+      } catch { /* ignore malformed SSE frame */ }
+    }
+  }
+}
+
 export async function getDecisionCandidateScan(symbols: string[], horizon: "1d" | "3d" | "5d" = "1d", signal?: AbortSignal): Promise<{ ok: boolean; horizon: string; count: number; candidates: DecisionCandidate[]; disclaimer?: string }> {
   const clean = symbols.map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8);
   const params = new URLSearchParams({ symbols: clean.join(","), horizon });
