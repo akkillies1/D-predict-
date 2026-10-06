@@ -44,6 +44,10 @@ import {
   getMarketHistory,
   getMarketScan,
   getPredictionPerformance,
+  getPaperAnalytics,
+  runTraining,
+  type PaperAnalytics,
+  type TrainingRunReport,
   getDecisionCandidate,
   getDecisionCandidateScan,
   getOptionChain,
@@ -275,6 +279,9 @@ export default function DecisionDashboard() {
   const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [paperState, setPaperState] = useState<PaperState | null>(null);
+  const [paperAnalytics, setPaperAnalytics] = useState<PaperAnalytics | null>(null);
+  const [trainingRun, setTrainingRun] = useState<TrainingRunReport | null>(null);
+  const [trainingBusy, setTrainingBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -304,6 +311,9 @@ export default function DecisionDashboard() {
     },
     []
   );
+
+  const refreshPaperAnalytics = async () => { try { setPaperAnalytics(await getPaperAnalytics(30)); } catch { setPaperAnalytics(null); } };
+  const refreshTraining = async () => { try { setTrainingRun(await runTraining({ trigger: "DASHBOARD_MANUAL" })); } catch (error) { setTrainingRun({ ok: false, error: error instanceof Error ? error.message : "Training request failed" }); } };
 
   const refresh = useCallback(async () => {
     const requestId = ++refreshSequence.current;
@@ -1432,7 +1442,9 @@ export default function DecisionDashboard() {
         </section>
 
         <section
-          id="paper-lab"
+         <section className="mb-6 rounded-2xl border border-[#1d332f] bg-[#0b1714] p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-mono-ui text-[9px] uppercase tracking-[.16em] text-[#70887d]">Prediction & paper telemetry</div><h2 className="mt-1 font-display text-xl font-semibold text-[#eff7ea]">Performance Control</h2></div><div className="flex gap-2"><button onClick={() => void refreshPaperAnalytics()} className="rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.1em] text-[#aebeb3]">Refresh analytics</button><button disabled={trainingBusy} onClick={async () => { setTrainingBusy(true); await refreshTraining(); setTrainingBusy(false); }} className="rounded-lg bg-[#c8f169] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40">{trainingBusy ? "Training…" : "Run model check"}</button></div></div>{paperAnalytics ? <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4"><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">30D trades</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.trades}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Win rate</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.winRate == null ? "—" : (paperAnalytics.summary.winRate * 100).toFixed(1) + "%"}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Realized P&L</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">₹{paperAnalytics.summary.realizedPnl.toFixed(0)}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Actions</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.actions}</div></div></div> : <div className="mt-4 text-[10px] text-[#557067]">Paper analytics unavailable until the local paper ledger is initialized.</div>}{trainingRun ? <div className="mt-3 rounded-xl border border-[#1d332f] bg-[#07100f] p-3 text-[10px] text-[#aebeb3]">{trainingRun.ok ? "Training run " + (trainingRun.status ?? "completed") + " · " + (trainingRun.summary?.trained ?? 0) + " trained · " + (trainingRun.summary?.upToDate ?? 0) + " already current." : "Training request failed: " + (trainingRun.error ?? trainingRun.message ?? "unknown error")}</div> : null}</section>
+
+       id="paper-lab"
           className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-5 shadow-[0_18px_50px_rgba(0,0,0,.16)]"
         >
           <div className="flex flex-wrap items-end justify-between gap-3">
