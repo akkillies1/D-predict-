@@ -753,6 +753,31 @@ export default function DecisionDashboard() {
           </div>
         </Card>
       </section>
+      <section className="relative mx-auto w-full max-w-[1800px] px-0">
+        <Card className="p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <Label>Model health · selected instrument</Label>
+              <h2 className="mt-1 font-display text-base font-semibold text-[#eff7ea]">{symbol} artifact readiness</h2>
+            </div>
+            <span className="font-mono-ui text-[9px] uppercase tracking-[.14em] text-[#70887d]">{trainingCoverage?.summary.productionModels ?? 0} promoted across universe</span>
+          </div>
+          {trainingCoverage ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-3 lg:grid-cols-5">
+              {trainingCoverage.instruments.filter(row => row.symbol === symbol).map(row => (
+                <div key={row.horizon} className="rounded-xl border border-[#1d332f] bg-[#091512] p-3">
+                  <div className="flex items-center justify-between gap-2"><Label>{row.horizon}</Label><span className={`font-mono-ui text-[8px] ${row.promotion_ready ? "text-[#c8f169]" : "text-[#e5b55f]"}`}>{row.model_state.replaceAll("_"," ")}</span></div>
+                  <div className="mt-2 text-[10px] text-[#9fb4a8]">Bars <strong className="text-[#d7e8d9]">{row.daily_bars}/{row.bars_required}</strong></div>
+                  <div className="mt-1 text-[10px] text-[#9fb4a8]">Data <strong className="text-[#d7e8d9]">{row.data_status}</strong></div>
+                  <div className="mt-1 text-[10px] text-[#9fb4a8]">Version <strong className="text-[#d7e8d9]">{row.model_version ?? "—"}</strong></div>
+                  <div className="mt-2 text-[9px] leading-relaxed text-[#70887d]">{row.reason}</div>
+                </div>
+              ))}
+              {!trainingCoverage.instruments.some(row => row.symbol === symbol) ? <div className="md:col-span-3 lg:col-span-5 rounded-xl border border-dashed border-[#315045] p-4 text-center text-[10px] text-[#789087]">No horizon-specific coverage record exists for {symbol}.</div> : null}
+            </div>
+          ) : <Empty text="Model coverage unavailable." />}
+        </Card>
+      </section>
       <main className="relative mx-auto max-w-[1800px] space-y-5 px-4 py-5 lg:px-8">
         {isRefreshing ? <div className="flex items-center gap-3 rounded-xl border border-[#36513e] bg-[#0d211a] px-4 py-3 text-xs text-[#c8f169] animate-pulse"><Loader2 size={15} className="animate-spin" /><span>{loading ? <>Loading live data for <strong>{symbol}</strong>...</> : <>Finishing analysis for <strong>{symbol}</strong>...</>}</span><span className="ml-auto hidden text-[10px] text-[#789087] sm:inline">{loading ? "Core data first" : "Research and signals updating"}</span></div> : null}
         <section
