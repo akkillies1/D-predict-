@@ -256,6 +256,7 @@ export default function DecisionDashboard() {
   const [optionOrderMessage, setOptionOrderMessage] = useState<string | null>(null);
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -323,7 +324,7 @@ export default function DecisionDashboard() {
           skipPrediction ? Promise.resolve(null) : getLivePrediction(symbol, forecastHorizon),
           getOptionChain(symbol),
           getOptionIntelligence(symbol),
-          getDecisionCandidate(symbol, (String(forecastHorizon) + "d") as "1d" | "3d" | "5d"),
+          getDecisionCandidate(symbol, `${forecastHorizon}d` as "1d" | "3d" | "5d"),
         ]);
       if (requestId !== refreshSequence.current) return;
       if (!skipPrediction) {
@@ -391,7 +392,10 @@ export default function DecisionDashboard() {
     const connect = () => {
       try { socket = new WebSocket(paperLiveUrl()); } catch { return; }
       wsRef.current = socket;
-      socket.onopen = () => socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current }));
+      socket.onopen = () => {
+        setWsConnected(true);
+        socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current }));
+      };
       socket.onmessage = event => {
         let message: LiveMessage; try { message = JSON.parse(String(event.data)) as LiveMessage; } catch { return; }
         if (message.type === "quote") {
@@ -399,11 +403,21 @@ export default function DecisionDashboard() {
           if (envelope.symbol === symbolRef.current && envelope.quote?.ok) setLiveQuote(envelope.quote as MarketOverview);
         }
       };
-      socket.onclose = () => { wsRef.current = null; if (!closed) retry = window.setTimeout(connect, 4000); };
+      socket.onclose = () => {
+        wsRef.current = null;
+        setWsConnected(false);
+        if (!closed) retry = window.setTimeout(connect, 4000);
+      };
       socket.onerror = () => socket?.close();
     };
     connect();
-    return () => { closed = true; if (retry) window.clearTimeout(retry); socket?.close(); wsRef.current = null; };
+    return () => {
+      closed = true;
+      if (retry) window.clearTimeout(retry);
+      socket?.close();
+      wsRef.current = null;
+      setWsConnected(false);
+    };
   }, []);
   useEffect(() => {
     setLiveQuote(null);
@@ -665,7 +679,7 @@ export default function DecisionDashboard() {
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono-ui text-[9px] ${connected ? "border-[#3d5b38] bg-[#142419] text-[#c8f169]" : "border-[#5a4328] bg-[#21180e] text-[#e5b55f]"}`}
             >
               {connected ? <Wifi size={11} /> : <WifiOff size={11} />}{" "}
-              {connected ? "LOCAL LIVE" : "OFFLINE"}
+              {connected ? "LOCAL API" : "API OFFLINE"}
             </span>
             <button
               onClick={() => void refresh()}
