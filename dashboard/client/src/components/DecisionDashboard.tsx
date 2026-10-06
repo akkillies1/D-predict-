@@ -184,6 +184,12 @@ function Label({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+function statusTone(status: string) {
+  if (status === "PAPER_CANDIDATE" || status === "READY" || status === "LIVE") return "border-[#476238] bg-[#102016] text-[#c8f169]";
+  if (status === "ABSTAIN" || status === "BLOCKED" || status === "OFFLINE") return "border-[#633d38] bg-[#1b120f] text-[#ff9d91]";
+  return "border-[#5b4b2b] bg-[#21180e] text-[#e5b55f]";
+}
+
 function DecisionPill({
   decision,
   confidence,
