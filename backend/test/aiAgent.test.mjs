@@ -222,6 +222,12 @@ async function testToolArgumentValidation() {
   assert.match((await executeAgentTool(toolEnv, "market_scan", {})).summary, /DATABASE_UNAVAILABLE/);
 }
 
+async function testDecisionCandidateRequiresRealDatabase() {
+  const outcome = await executeAgentTool({ pool: null, mlFetch: async () => ({ status: 503, body: {} }) }, "decision_candidate", { symbol: "NIFTY", horizon: "1d" });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.data.error, "DATABASE_UNAVAILABLE");
+}
+
 async function testStatisticalBaselineIsExplicitlyNonMl() {
   const env = { pool: null, mlFetch: async () => ({ status: 503, body: { detail: "no trained artifact" } }) };
   const outcome = await executeAgentTool(env, "statistical_baseline", { symbol: "NIFTY", horizonDays: 5 });
@@ -409,6 +415,7 @@ const tests = [
   testToolArgumentValidation,
   testMlServiceFailureIsNotRewrittenAsZero,
   testStatisticalBaselineIsExplicitlyNonMl,
+  testDecisionCandidateRequiresRealDatabase,
   testCoverageStaysSmallAndDeclared,
   testArgumentParsingIsInert,
   testPromptNamesOnlyRealToolsAndKeepsHonestyRules,
