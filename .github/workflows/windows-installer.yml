@@ -2,6 +2,16 @@ name: Windows Installer
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'installer/**'
+      - 'install-dpredict.ps1'
+      - 'database-setup.ps1'
+      - 'bootstrap-windows.ps1'
+      - 'dp.ps1'
+      - 'run.ps1'
+      - 'launch-dpredict.ps1'
+      - '.github/workflows/windows-installer.yml'
   push:
     branches: [main]
     paths:
@@ -45,6 +55,20 @@ jobs:
           )
           foreach ($file in $required) {
             if (-not (Test-Path $file)) { throw "Missing installer input: $file" }
+          }
+
+      - name: Validate PowerShell installer scripts
+        shell: powershell
+        run: |
+          $scripts = @('install-dpredict.ps1','database-setup.ps1','bootstrap-windows.ps1')
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Host $_.ToString() }
+              throw "PowerShell parse validation failed: $script"
+            }
           }
 
       - name: Validate dashboard lockfile
