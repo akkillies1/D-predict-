@@ -122,6 +122,21 @@ function tradePnl(t: BlotterTrade) {
   return t.status === "OPEN" ? t.unrealizedPnl : (t.realizedPnl ?? 0);
 }
 
+type DatabaseRuntimeStatus = {
+  ok: boolean;
+  configured: boolean;
+  healthy: boolean;
+  mode: string | null;
+  error: string | null;
+};
+
+async function getDatabaseRuntimeStatus(): Promise<DatabaseRuntimeStatus> {
+  const response = await fetch(`${API}/api/system/database`, { cache: "no-store" });
+  const body = await response.json().catch(() => null) as DatabaseRuntimeStatus | null;
+  if (!response.ok || !body) throw new Error("Database status unavailable");
+  return body;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   const body = await response.json();
@@ -465,6 +480,12 @@ export default function ShadowTradingPanel() {
 
   const refresh = useCallback(async (days: string) => {
     try {
+      const runtime = await getDatabaseRuntimeStatus();
+      if (!runtime.configured || !runtime.healthy) {
+        setError(runtime.error ?? "Database is not ready. Open Data & Database and complete setup.");
+        setLoading(false);
+        return;
+      }
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
         getJson<{ summary: Summary }>(`${API}/api/shadow/portfolio`),
         getJson<{ trades: BlotterTrade[] }>(`${API}/api/shadow/blotter`),
