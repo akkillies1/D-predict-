@@ -143,6 +143,7 @@ end;
 ; install-dpredict.ps1 writes this handler so the dashboard can hand an "Update now"
 ; click back to the host. The key is only listed here so uninstalling removes it.
 Root: HKA; Subkey: "Software\Classes\dpredict-update"; ValueType: none; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\dpredict-database"; ValueType: none; Flags: uninsdeletekey
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"
