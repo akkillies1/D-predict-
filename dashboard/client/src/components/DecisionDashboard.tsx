@@ -67,7 +67,7 @@ import {
   type LivePredictionUnavailable,
   type PredictionPerformance,
   type DecisionCandidate,
-  type LivePredictionResult,
+  type LivePrediction,
   type TrainingCoverage,
   type AiStatus,
   type PaperState,
@@ -370,29 +370,22 @@ export default function DecisionDashboard() {
         ]);
       if (requestId !== refreshSequence.current) return;
       if (!skipPrediction) {
-        const value = livePredictionResult.status === "fulfilled" ? livePredictionResult.value : null;
-        if (value && value.ok === false) {
-          setLivePrediction(null);
-          setLivePredictionAvailability(value);
-          gate.wait = Math.min(300000, Math.max(15000, gate.key === predictionKey ? gate.wait : 15000) * 2);
-          gate.key = predictionKey;
-          gate.until = Date.now() + gate.wait;
-        } else if (value) {
-          setLivePrediction(value);
+        if (livePredictionResult.status === "fulfilled") {
+          setLivePrediction(livePredictionResult.value);
           setLivePredictionAvailability(null);
           gate.key = predictionKey;
           gate.wait = 15000;
           gate.until = 0;
         } else {
           setLivePrediction(null);
-          const failureReason = livePredictionResult.status === "rejected"
-            ? livePredictionResult.reason instanceof Error ? livePredictionResult.reason.message : String(livePredictionResult.reason)
-            : null;
+          const failure = livePredictionResult.reason;
+          const code = failure instanceof LocalApiError ? failure.code : "ML_INFERENCE_UNAVAILABLE";
+          const message = failure instanceof LocalApiError ? failure.message : failure instanceof Error ? failure.message : String(failure);
           setLivePredictionAvailability({
             ok: false,
             status: "NO_LIVE_PREDICTION",
-            error: "ML_INFERENCE_UNAVAILABLE",
-            reason: failureReason,
+            error: code,
+            reason: message,
             symbol,
             horizon: `${forecastHorizon}d` as "1d" | "3d" | "5d",
           });
