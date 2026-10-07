@@ -147,7 +147,39 @@ export async function ackAlert(id: number): Promise<{ ok: boolean; id: number }>
 export async function ackAllAlerts(): Promise<{ ok: boolean; acknowledged: number }> { return json(`${API_BASE}/api/alerts/ack-all`, { method: "POST" }); }
 export async function getMarketScan(limit = 5, signal?: AbortSignal): Promise<{ picks: MarketPick[]; excluded: Array<{ symbol: string; reason: string }>; asOf: string; methodology: string; disclaimer: string }> { return json(`${API_BASE}/api/market/scan?limit=${Math.max(1, Math.min(5, Math.round(limit)))}`, { signal }); }
 export async function getPredictionPerformance(days = 30, signal?: AbortSignal): Promise<PredictionPerformance> { return json<PredictionPerformance>(`${API_BASE}/api/predictions/performance?days=${Math.max(1, Math.min(365, Math.round(days)))}`, { signal }); }
-export async function getLivePrediction(symbol: string, horizon: 1 | 3 | 5 = 1, signal?: AbortSignal): Promise<LivePredictionResult> {\n  try {\n    const payload = await json<LivePrediction & { ok?: boolean; error?: string; reason?: string | null; message?: string }>(`${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`, { signal });\n    if (payload.ok === false) return { ok: false, symbol, horizon: `${horizon}d` as "1d" | "3d" | "5d", error: payload.error ?? "ML_INFERENCE_UNAVAILABLE", reason: payload.reason ?? null, message: payload.message ?? null };\n    return payload;\n  } catch (error) {\n    return { ok: false, symbol, horizon: `${horizon}d` as "1d" | "3d" | "5d", error: error instanceof Error ? error.message : "ML_INFERENCE_UNAVAILABLE", message: error instanceof Error ? error.message : "The ML inference service could not be reached." };\n  }\n}
+export type LivePredictionUnavailable = {
+  ok: false;
+  status: "NO_LIVE_PREDICTION";
+  error: "NO_PREDICTION_HISTORY" | "MODEL_NOT_READY" | "ML_INFERENCE_UNAVAILABLE" | string;
+  reason?: string | null;
+  message?: string | null;
+  symbol: string;
+  horizon: "1d" | "3d" | "5d";
+};
+
+export async function getLivePrediction(
+  symbol: string,
+  horizon: 1 | 3 | 5 = 1,
+  signal?: AbortSignal,
+): Promise<LivePrediction | LivePredictionUnavailable> {
+  const payload = await json<LivePrediction & Partial<LivePredictionUnavailable>>(
+    `${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`,
+    { signal },
+  );
+  if (payload.ok === false) {
+    return {
+      ok: false,
+      status: "NO_LIVE_PREDICTION",
+      error: String(payload.error ?? "ML_INFERENCE_UNAVAILABLE"),
+      reason: payload.reason ?? null,
+      message: payload.message ?? null,
+      symbol,
+      horizon: `${horizon}d` as "1d" | "3d" | "5d",
+    };
+  }
+  return payload as LivePrediction;
+}
+
 export type BacktestStrategy = "buy_hold" | "sma_trend" | "vol_expansion";
 export type BacktestTrade = { entryTimestamp: string; exitTimestamp: string; entryPrice: number; exitPrice: number; quantity: number; grossPnl: number; costs: number; netPnl: number; exitReason: "SIGNAL" | "END_OF_HISTORY" };
 export type BacktestResult = { ok: boolean; symbol: string; strategy: BacktestStrategy; bars: number; smaWindow: number; initialCapital: number; finalEquity: number; totalReturn: number; cagr: number; maxDrawdown: number; sharpePerTradeAnnualized: number | null; trades: number; wins: number; losses: number; winRate: number | null; profitFactor: number | null; totalCosts: number; equityCurve: Array<{ timestamp: string; equity: number; buyHold: number }>; tradeLog: BacktestTrade[] };
