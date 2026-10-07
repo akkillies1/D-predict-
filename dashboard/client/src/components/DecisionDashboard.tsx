@@ -1440,7 +1440,7 @@ export default function DecisionDashboard() {
             </div>
           ) : (
             <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
-              The ML inference path did not return a promoted prediction for this horizon. The authoritative decision engine remains the source of tradeability; no prediction is fabricated.
+              ML PREDICTION UNAVAILABLE: {livePredictionAvailability?.error ?? "UNKNOWN"}. {livePredictionAvailability?.reason ?? livePredictionAvailability?.message ?? "No promoted prediction was returned for this horizon."} The authoritative decision engine remains the only source of tradeability; no prediction is fabricated.
             </div>
           )}
         </section>
