@@ -17,15 +17,15 @@ import ModelCoveragePanel from "./components/ModelCoveragePanel";
 import TradingDesk from "./components/TradingDesk";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
-type View = "decision" | "evidence" | "validation" | "paper" | "ai" | "system";
+type View = "decision" | "evidence" | "validation" | "derivatives" | "paper" | "ai" | "system";
 
 const tabs: Array<{ key: View; label: string; icon: typeof Gauge; eyebrow: string }> = [
   { key: "decision", label: "Decision", icon: Gauge, eyebrow: "01" },
   { key: "evidence", label: "Evidence", icon: ChartNoAxesCombined, eyebrow: "02" },
-  { key: "validation", label: "Validation", icon: FlaskConical, eyebrow: "03" },
-  { key: "paper", label: "Paper Lab", icon: ShieldCheck, eyebrow: "04" },
-  { key: "ai", label: "AI", icon: BrainCircuit, eyebrow: "05" },
-  { key: "system", label: "System", icon: Settings2, eyebrow: "06" },
+  { key: "validation", label: "Validation", icon: FlaskConical, eyebrow: "03" },\n  { key: "derivatives", label: "Derivatives", icon: Layers3, eyebrow: "04" },
+  { key: "paper", label: "Paper Lab", icon: ShieldCheck, eyebrow: "05" },
+  { key: "ai", label: "AI", icon: BrainCircuit, eyebrow: "06" },
+  { key: "system", label: "System", icon: Settings2, eyebrow: "07" },
 ];
 
 function readInitialView(): View {
@@ -102,7 +102,7 @@ function App() {
                     {view === "decision" && "The backend decision candidate is authoritative; forecast, evidence and execution remain separate layers."}
                     {view === "evidence" && "Market context and research explain what the system sees without becoming an execution authority."}
                     {view === "validation" && "Model coverage and realized performance show whether the research stack is ready for promotion."}
-                    {view === "paper" && "Virtual execution only. Orders, positions and P&L are simulated and never reach a broker."}
+                    {view === "derivatives" && "Live NSE option-chain evidence with CE/PE contracts and quote-backed paper trading. No broker orders are sent."}\n                    {view === "paper" && "Virtual execution only. Orders, positions and P&L are simulated and never reach a broker."}
                     {view === "ai" && "Bounded local AI can explain D‑Predict evidence but cannot override deterministic gates."}
                     {view === "system" && "Runtime, database and model configuration. Missing state is surfaced instead of hidden."}
                   </p>
@@ -117,11 +117,11 @@ function App() {
 
             {view === "evidence" && (
               <section aria-label="Evidence" className="space-y-10">
-                <Research20Panel /><OptionChainTradingPanel /><ResearchPanel /><IPOAnalyzer />
+                <Research20Panel /><ResearchPanel /><IPOAnalyzer />
               </section>
             )}
 
-            {view === "validation" && <section aria-label="Validation"><ModelCoveragePanel /></section>}
+            {view === "validation" && <section aria-label="Validation"><ModelCoveragePanel /></section>}\n\n            {view === "derivatives" && <section aria-label="Derivatives" className="space-y-8 pb-12"><OptionChainTradingPanel /></section>}
 
             {view === "paper" && (
               <section aria-label="Paper Lab" className="space-y-10 pb-12">

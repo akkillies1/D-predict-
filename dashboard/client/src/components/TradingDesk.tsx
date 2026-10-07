@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Download, Plus, RefreshCw, Search, ShieldAlert, Trash2, Wallet, X } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Download, History, Plus, RefreshCw, Search, ShieldAlert, Trash2, Wallet, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   addInstrument,
@@ -223,7 +223,7 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
               ) : (
                 <button onClick={() => setShowFunds(true)} className="inline-flex items-center gap-1 rounded-lg border border-[#345346] px-2.5 py-1.5 text-[11px] font-semibold text-[#c8f169] hover:bg-[#142a25]"><Plus size={12} /> Add funds</button>
               )}
-              <button disabled={busy} onClick={() => void clearLedger()} className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 ${confirmReset ? "border-[#633d38] bg-[#291817] text-[#ff9d91]" : "border-[#345346] text-[#9fb4a8] hover:bg-[#142a25]"}`}><Trash2 size={12} /> {confirmReset ? "Confirm clear?" : "Clear ledger"}</button>
+              <button onClick={() => setTab("TRADE_BOOK")} className="inline-flex items-center gap-1 rounded-lg border border-[#345346] px-2.5 py-1.5 text-[11px] font-semibold text-[#c8f169] hover:bg-[#142a25]"><History size={12} /> Previous Trade{book.length ? ` · ${book.length}` : ""}</button>\n              <button disabled={busy} onClick={() => void clearLedger()} className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 ${confirmReset ? "border-[#633d38] bg-[#291817] text-[#ff9d91]" : "border-[#345346] text-[#9fb4a8] hover:bg-[#142a25]"}`}><Trash2 size={12} /> {confirmReset ? "Confirm clear?" : "Clear ledger"}</button>
             </div>
           </div>
 
