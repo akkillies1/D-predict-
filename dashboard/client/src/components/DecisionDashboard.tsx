@@ -731,6 +731,7 @@ export default function DecisionDashboard() {
     decisionEngineError ? `${decisionEngineError.code}: ${decisionEngineError.message}` : "Decision engine result unavailable",
   ];
   const isRefreshing = loading || enrichmentLoading;
+  const mlPrediction = livePrediction && livePrediction.ok !== false ? livePrediction : null;
 
   return (
     <div className="min-h-screen cockpit-shell text-[#eaf4e9]">
@@ -1389,7 +1390,7 @@ export default function DecisionDashboard() {
               <option value={5}>5 trading days</option>
             </select>
           </div>
-          {livePrediction ? (
+          {mlPrediction ? (
             <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
               <div className={`rounded-xl border ${mlPrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238]" : "border-[#5a432a]"} bg-[#09130f] p-4`}>
                 <div className="flex items-start justify-between gap-3">
