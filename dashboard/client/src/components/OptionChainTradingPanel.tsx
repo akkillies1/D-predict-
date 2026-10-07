@@ -88,6 +88,7 @@ export default function OptionChainTradingPanel() {
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [closeReason, setCloseReason] = useState<"MANUAL" | "STOP_LOSS" | "TARGET" | "EXPIRY">("MANUAL");
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -203,7 +204,7 @@ export default function OptionChainTradingPanel() {
   async function closeTrade(id: string) {
     setBusy(id);
     try {
-      const result = await closeOptionPaperTrade(id);
+      const result = await closeOptionPaperTrade(id, closeReason);
       toast.success(
         `Position closed at ${money(result.exitPrice)} · P&L ${money(result.realizedPnl)}`
       );
@@ -215,6 +216,13 @@ export default function OptionChainTradingPanel() {
     } finally {
       setBusy(null);
     }
+  }
+  function repeatLastOptionTrade() {
+    const last = trades[0];
+    if (!last) return toast.info("No previous option paper trade to repeat.");
+    const row = options.find(r => r.expiry_date === last.expiry_date && r.strike === Number(last.strike) && r.option_type === last.option_type);
+    if (!row) return toast.error("The previous contract is not in the current chain snapshot.");
+    void trade(row, last.side);
   }
   const openTrades = trades.filter(t => t.status === "OPEN");
   const visibleContracts = rows.reduce(
@@ -288,6 +296,7 @@ export default function OptionChainTradingPanel() {
                   className="w-10 bg-transparent text-center font-mono font-semibold text-foreground outline-none"
                 />
               </label>
+              <button onClick={repeatLastOptionTrade} className="h-9 rounded-lg border border-border bg-background px-3 text-[10px] font-semibold transition hover:bg-accent">Repeat last</button>
               <button
                 aria-label="Refresh option chain"
                 title="Refresh"
@@ -527,13 +536,21 @@ export default function OptionChainTradingPanel() {
                     >
                       {money(trade.unrealized_pnl)}
                     </span>
-                    <button
-                      onClick={() => void closeTrade(trade.id)}
-                      disabled={busy === trade.id}
-                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[10px] font-semibold transition hover:bg-accent disabled:opacity-40"
-                    >
-                      <X size={12} /> Close
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <select value={closeReason} onChange={e => setCloseReason(e.target.value as typeof closeReason)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-[9px] outline-none">
+                        <option value="MANUAL">Manual</option>
+                        <option value="STOP_LOSS">Stop loss</option>
+                        <option value="TARGET">Target</option>
+                        <option value="EXPIRY">Expiry</option>
+                      </select>
+                      <button
+                        onClick={() => void closeTrade(trade.id)}
+                        disabled={busy === trade.id}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[10px] font-semibold transition hover:bg-accent disabled:opacity-40"
+                      >
+                        <X size={12} /> Close
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
