@@ -14,7 +14,9 @@ import {
   getOptionPaperTrades,
   getOptionIntelligence,
   placeOptionPaperOrder,
+  placeOptionPaperStrategy,
   closeOptionPaperTrade,
+  getUnifiedPaperState,
   type OptionRow,
   type PaperOptionTrade,
   type OptionIntelligence,
@@ -83,20 +85,24 @@ export default function OptionChainTradingPanel() {
   const [options, setOptions] = useState<OptionRow[]>([]);
   const [trades, setTrades] = useState<PaperOptionTrade[]>([]);
   const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
+  const [unified, setUnified] = useState<Awaited<ReturnType<typeof getUnifiedPaperState>> | null>(null);
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [closeReason, setCloseReason] = useState<"MANUAL" | "STOP_LOSS" | "TARGET" | "EXPIRY">("MANUAL");
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [chain, paperTrades, intelligence] = await Promise.all([
+      const [chain, paperTrades, intelligence, unified] = await Promise.all([
         getOptionChain(symbol),
         getOptionPaperTrades(),
         getOptionIntelligence(symbol),
+        getUnifiedPaperState().catch(() => null),
       ]);
       setOptions(chain);
       setTrades(paperTrades);
+      setUnified(unified);
       const expiries = Array.from(
         new Set(chain.map(row => row.expiry_date))
       ).sort();
@@ -165,10 +171,44 @@ export default function OptionChainTradingPanel() {
       setBusy(null);
     }
   }
+  async function executeRecommendation() {
+    const recommendation = intelligence?.recommendation;
+    if (!recommendation?.contract) return;
+    const key = `MODEL-${recommendation.action}`;
+    setBusy(key);
+    try {
+      if ((recommendation.action === "CALL_VERTICAL" || recommendation.action === "PUT_VERTICAL") && recommendation.hedge) {
+        const primary = recommendation.contract;
+        const hedge = recommendation.hedge;
+        const primaryRow = options.find(r => r.expiry_date === primary.expiry && r.strike === primary.strike && r.option_type === primary.optionType);
+        const hedgeRow = options.find(r => r.expiry_date === hedge.expiry && r.strike === hedge.strike && r.option_type === hedge.optionType);
+        if (!primaryRow || !hedgeRow) throw new Error("One of the model-selected spread contracts is not in the current chain snapshot.");
+        const result = await placeOptionPaperStrategy({
+          symbol,
+          strategy: recommendation.action,
+          legs: [
+            { expiry: primaryRow.expiry_date, strike: primaryRow.strike, optionType: primaryRow.option_type, side: "BUY", lots },
+            { expiry: hedgeRow.expiry_date, strike: hedgeRow.strike, optionType: hedgeRow.option_type, side: "SELL", lots },
+          ],
+        });
+        toast.success(`${recommendation.action.replace("_", " ")} opened · max loss ${money(result.strategy.maxLoss)}`);
+      } else {
+        const row = options.find(r => r.expiry_date === recommendation.contract!.expiry && r.strike === recommendation.contract!.strike && r.option_type === recommendation.contract!.optionType);
+        if (!row) throw new Error("The recommended contract is not in the current chain snapshot.");
+        const result = await placeOptionPaperOrder({ symbol, expiry: row.expiry_date, strike: row.strike, optionType: row.option_type, side: "BUY", lots });
+        toast.success(`Model candidate filled at ${money(result.entryPrice)}`);
+      }
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Model paper strategy rejected");
+    } finally {
+      setBusy(null);
+    }
+  }
   async function closeTrade(id: string) {
     setBusy(id);
     try {
-      const result = await closeOptionPaperTrade(id);
+      const result = await closeOptionPaperTrade(id, closeReason);
       toast.success(
         `Position closed at ${money(result.exitPrice)} · P&L ${money(result.realizedPnl)}`
       );
@@ -180,6 +220,13 @@ export default function OptionChainTradingPanel() {
     } finally {
       setBusy(null);
     }
+  }
+  function repeatLastOptionTrade() {
+    const last = trades[0];
+    if (!last) return toast.info("No previous option paper trade to repeat.");
+    const row = options.find(r => r.expiry_date === last.expiry_date && r.strike === Number(last.strike) && r.option_type === last.option_type);
+    if (!row) return toast.error("The previous contract is not in the current chain snapshot.");
+    void trade(row, last.side);
   }
   const openTrades = trades.filter(t => t.status === "OPEN");
   const visibleContracts = rows.reduce(
@@ -253,6 +300,7 @@ export default function OptionChainTradingPanel() {
                   className="w-10 bg-transparent text-center font-mono font-semibold text-foreground outline-none"
                 />
               </label>
+              <button onClick={repeatLastOptionTrade} className="h-9 rounded-lg border border-border bg-background px-3 text-[10px] font-semibold transition hover:bg-accent">Repeat last</button>
               <button
                 aria-label="Refresh option chain"
                 title="Refresh"
@@ -298,16 +346,10 @@ export default function OptionChainTradingPanel() {
                 </div>
                 <button
                   disabled={intelligence.status !== "ACTIONABLE"}
-                  onClick={() => {
-                    const candidate = intelligence.recommendation?.contract;
-                    if (!candidate) return;
-                    const row = options.find(r => r.expiry_date === candidate.expiry && r.strike === candidate.strike && r.option_type === candidate.optionType);
-                    if (row) void trade(row, "BUY");
-                    else toast.error("The recommended contract is not in the current chain snapshot.");
-                  }}
+                  onClick={() => void executeRecommendation()}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  PAPER VALIDATE CANDIDATE
+                  PAPER VALIDATE {intelligence.recommendation.action === "CALL_VERTICAL" || intelligence.recommendation.action === "PUT_VERTICAL" ? "STRATEGY" : "CANDIDATE"}
                 </button>
               </div>
             ) : null}
@@ -316,7 +358,7 @@ export default function OptionChainTradingPanel() {
             </div>
           </div>
         ) : null}
-        <div className="grid grid-cols-2 border-b border-border/70 md:grid-cols-4">
+        <div className="grid grid-cols-2 border-b border-border/70 md:grid-cols-5">
           <div className="border-r border-border/70 px-5 py-3">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
               Expiry
@@ -340,6 +382,11 @@ export default function OptionChainTradingPanel() {
             <div className="mt-1 font-mono text-sm font-semibold">
               {openTrades.length}
             </div>
+          </div>
+          <div className="border-r border-border/70 px-5 py-3">
+            <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Unified cash</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{unified?.account ? money(unified.account.cash) : "—"}</div>
+            <div className="mt-1 text-[9px] text-muted-foreground">shared paper account</div>
           </div>
           <div className="px-5 py-3">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
@@ -498,13 +545,21 @@ export default function OptionChainTradingPanel() {
                     >
                       {money(trade.unrealized_pnl)}
                     </span>
-                    <button
-                      onClick={() => void closeTrade(trade.id)}
-                      disabled={busy === trade.id}
-                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[10px] font-semibold transition hover:bg-accent disabled:opacity-40"
-                    >
-                      <X size={12} /> Close
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <select value={closeReason} onChange={e => setCloseReason(e.target.value as typeof closeReason)} className="rounded-lg border border-border bg-background px-2 py-1.5 text-[9px] outline-none">
+                        <option value="MANUAL">Manual</option>
+                        <option value="STOP_LOSS">Stop loss</option>
+                        <option value="TARGET">Target</option>
+                        <option value="EXPIRY">Expiry</option>
+                      </select>
+                      <button
+                        onClick={() => void closeTrade(trade.id)}
+                        disabled={busy === trade.id}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[10px] font-semibold transition hover:bg-accent disabled:opacity-40"
+                      >
+                        <X size={12} /> Close
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}

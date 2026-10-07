@@ -149,7 +149,7 @@ function Invoke-Compose([string[]]$ComposeArgs) {
 function Compose([string[]]$ComposeArgs) { Invoke-Compose $ComposeArgs }
 function Start-Detached($name,$command) {
   Ensure-RunDir
-  $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-Command',$command -WorkingDirectory $Root -PassThru
+  $p = Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',$command -WorkingDirectory $Root -WindowStyle Hidden -PassThru
   Set-Content -Path (Join-Path $Run "$name.pid") -Value $p.Id
   Info "$name started (PID $($p.Id))"
 }

@@ -38,7 +38,8 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
   const [results, setResults] = useState<{ symbol: string; name?: string | null }[]>([]);
   const [quote, setQuote] = useState<MarketOverview | null>(null);
 
-  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [side, setSide] = useState<"BUY" | "SELL" | "HOLD">("BUY");
+  const [rationale, setRationale] = useState("");
   const [product, setProduct] = useState<PaperProduct>("CNC");
   const [orderType, setOrderType] = useState<OrderType>("MARKET");
   const [quantity, setQuantity] = useState("400");
@@ -105,7 +106,7 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
   const refPrice = orderType === "LIMIT" ? Number(limitPrice) : (quote?.close ?? 0);
   useEffect(() => {
     const qty = Number(quantity);
-    if (!Number.isInteger(qty) || qty <= 0 || !Number.isFinite(refPrice) || refPrice <= 0) { setEstimate(null); return; }
+    if (side === "HOLD" || !Number.isInteger(qty) || qty <= 0 || !Number.isFinite(refPrice) || refPrice <= 0) { setEstimate(null); return; }
     let cancelled = false;
     const t = window.setTimeout(async () => { try { const e = await getPaperEstimate({ side, product, quantity: qty, price: refPrice }); if (!cancelled) setEstimate(e.charges); } catch { if (!cancelled) setEstimate(null); } }, 250);
     return () => { cancelled = true; window.clearTimeout(t); };
@@ -155,11 +156,11 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
 
   const place = async () => {
     const qty = Number(quantity);
-    if (!Number.isInteger(qty) || qty <= 0) return toast.error("Quantity must be a positive whole number.");
+    if (side !== "HOLD" && (!Number.isInteger(qty) || qty <= 0)) return toast.error("Quantity must be a positive whole number.");
     if (orderType === "LIMIT" && !(Number(limitPrice) > 0)) return toast.error("Enter a limit price.");
     setBusy(true);
     try {
-      const result = await placePaperOrder({ symbol, side, product, quantity: qty, orderType, limitPrice: orderType === "LIMIT" ? Number(limitPrice) : undefined });
+      const result = await placePaperOrder({ symbol, side, product, quantity: side === "HOLD" ? 0 : qty, orderType: side === "HOLD" ? "MARKET" : orderType, limitPrice: side === "HOLD" ? undefined : (orderType === "LIMIT" ? Number(limitPrice) : undefined), note: rationale.trim() });
       toast.success(result.message);
       await refresh();
     } catch (error) { toast.error(error instanceof Error ? error.message : "Order failed."); }
@@ -169,6 +170,14 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
   const quickSell = (row: PaperOrder | { symbol: string; product: PaperProduct; quantity: number }) => {
     setSymbol(row.symbol); setSide("SELL"); setProduct(row.product); setQuantity(String(row.quantity));
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const repeatLast = () => {
+    const last = [...book].find(o => o.status === "FILLED" || o.status === "RECORDED");
+    if (!last) return toast.info("No previous paper action to repeat.");
+    setSymbol(last.symbol); setSide(last.side); setProduct(last.product); setOrderType(last.orderType);
+    setQuantity(String(last.quantity || 1)); setLimitPrice(last.limitPrice == null ? "" : String(last.limitPrice)); setRationale(last.rationale || last.note || "");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    toast.success(`Loaded previous ${last.side} action for ${last.symbol}.`);
   };
 
   const cancel = async (id: string) => {
@@ -223,7 +232,7 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
               ) : (
                 <button onClick={() => setShowFunds(true)} className="inline-flex items-center gap-1 rounded-lg border border-[#345346] px-2.5 py-1.5 text-[11px] font-semibold text-[#c8f169] hover:bg-[#142a25]"><Plus size={12} /> Add funds</button>
               )}
-              <button disabled={busy} onClick={() => void clearLedger()} className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 ${confirmReset ? "border-[#633d38] bg-[#291817] text-[#ff9d91]" : "border-[#345346] text-[#9fb4a8] hover:bg-[#142a25]"}`}><Trash2 size={12} /> {confirmReset ? "Confirm clear?" : "Clear ledger"}</button>
+              <button disabled={busy} onClick={() => void clearLedger()} className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold disabled:opacity-50 ${confirmReset ? "border-[#633d38] bg-[#291817] text-[#ff9d91]" : "border-[#345346] text-[#9fb4a8] hover:bg-[#142a25]"}`}><Trash2 size={12} /> {confirmReset ? "Confirm clear?" : "Clear ledger"}</button><button disabled={busy} onClick={repeatLast} className="inline-flex items-center gap-1 rounded-lg border border-[#345346] px-2.5 py-1.5 text-[11px] font-semibold text-[#9fb4a8] hover:bg-[#142a25]">Repeat last</button>
             </div>
           </div>
 
@@ -271,9 +280,10 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
               </div>
 
               {/* BUY / SELL */}
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-4 grid grid-cols-3 gap-2">
                 <button onClick={() => setSide("BUY")} className={`rounded-lg border py-2 text-sm font-semibold ${side === "BUY" ? "border-[#476238] bg-[#17301f] text-[#c8f169]" : "border-[#1d332f] text-[#789087]"}`}>BUY</button>
                 <button onClick={() => setSide("SELL")} className={`rounded-lg border py-2 text-sm font-semibold ${side === "SELL" ? "border-[#633d38] bg-[#291817] text-[#ff9d91]" : "border-[#1d332f] text-[#789087]"}`}>SELL</button>
+                <button onClick={() => setSide("HOLD")} className={`rounded-lg border py-2 text-sm font-semibold ${side === "HOLD" ? "border-[#6a5831] bg-[#2a2417] text-[#e5b55f]" : "border-[#1d332f] text-[#789087]"}`}>HOLD</button>
               </div>
 
               {/* product */}
@@ -304,8 +314,8 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
 
               {/* estimate */}
               <div className="mt-4 rounded-xl border border-[#1d332f] bg-[#09130f] p-3 text-[11px]">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-[#789087]">Order estimate · {num(refPrice)} × {quantity || "0"}</div>
-                {!estimate ? <div className="text-[#5c736a]">Enter a valid quantity and price to see charges.</div> : (
+                <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-[#789087]">{side === "HOLD" ? "Research action" : `Order estimate · ${num(refPrice)} × ${quantity || "0"}`}</div>
+                {side === "HOLD" ? <div className="text-[#c8b582]">HOLD records your current research decision without changing cash or positions.</div> : !estimate ? <div className="text-[#5c736a]">Enter a valid quantity and price to see charges.</div> : (
                   <div className="space-y-1">
                     <Row k="Gross value" v={money(refPrice * (Number(quantity) || 0))} />
                     <Row k="Brokerage" v={money(estimate.brokerage)} />
@@ -321,7 +331,10 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
                 )}
               </div>
 
-              <button disabled={busy || !estimate} onClick={() => void place()} className={`mt-4 w-full rounded-lg py-2.5 text-sm font-semibold text-[#08120f] transition-transform active:scale-[.99] disabled:opacity-50 ${side === "BUY" ? "bg-[#c8f169]" : "bg-[#ff9d91]"}`}>{busy ? "Placing…" : `${side} ${product} ${orderType} · ${symbol}`}</button>
+              <label className="mt-3 block text-[10px] uppercase tracking-[0.14em] text-[#789087]">Trade thesis / note
+                <textarea value={rationale} onChange={e => setRationale(e.target.value)} rows={2} maxLength={500} placeholder="Why are you taking this action?" className="mt-1 w-full resize-none rounded-lg border border-[#345346] bg-[#09130f] px-2 py-2 text-xs text-[#d7e8d9] outline-none focus:border-[#c8f169]" />
+              </label>
+              <button disabled={busy || (side !== "HOLD" && !estimate)} onClick={() => void place()} className={`mt-4 w-full rounded-lg py-2.5 text-sm font-semibold text-[#08120f] transition-transform active:scale-[.99] disabled:opacity-50 ${side === "BUY" ? "bg-[#c8f169]" : side === "SELL" ? "bg-[#ff9d91]" : "bg-[#e5b55f]"}`}>{busy ? "Recording…" : `${side} ${side === "HOLD" ? "RESEARCH" : product} ${side === "HOLD" ? "" : orderType + " · "} ${symbol}`}</button>
               <div className="mt-2 flex items-center gap-1 text-[9px] leading-relaxed text-[#5c736a]"><ShieldAlert size={11} className="shrink-0" /> Manual paper orders are separate from the authoritative Decision Candidate. They do not become a backend recommendation. Full cash is debited for every product (no leverage); fills use real persisted data.</div>
             </div>
 
