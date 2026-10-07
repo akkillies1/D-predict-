@@ -55,6 +55,7 @@ import {
   getOptionChain,
   getOptionIntelligence,
   placeOptionPaperOrder,
+  placeOptionPaperStrategy,
   getResearch,
   paperLiveUrl,
   type Forecast,
@@ -689,10 +690,29 @@ export default function DecisionDashboard() {
     }
   }, [symbol]);
   const paperValidateOption = useCallback(async () => {
-    const contract = optionIntelligence?.recommendation.contract;
-    const action = optionIntelligence?.recommendation.action;
-    if (optionIntelligence?.status !== "ACTIONABLE" || !contract || (action !== "BUY_CALL" && action !== "BUY_PUT")) return;
+    const recommendation = optionIntelligence?.recommendation;
+    const contract = recommendation?.contract;
+    const hedge = recommendation?.hedge;
+    const action = recommendation?.action;
+    if (optionIntelligence?.status !== "ACTIONABLE" || !contract) return;
     try {
+      if (action === "CALL_VERTICAL" || action === "PUT_VERTICAL") {
+        if (!hedge) throw new Error("The option engine requested a vertical but did not provide a hedge contract.");
+        const buy = action === "CALL_VERTICAL"
+          ? (contract.strike < hedge.strike ? contract : hedge)
+          : (contract.strike > hedge.strike ? contract : hedge);
+        const sell = buy === contract ? hedge : contract;
+        const result = await placeOptionPaperStrategy({
+          symbol, strategy: action,
+          legs: [
+            { expiry: buy.expiry, strike: buy.strike, optionType: buy.optionType, side: "BUY", lots: 1 },
+            { expiry: sell.expiry, strike: sell.strike, optionType: sell.optionType, side: "SELL", lots: 1 },
+          ],
+        });
+        setOptionOrderMessage(`${action.replace("_", " ")} opened · max loss ${price(result.strategy.maxLoss)} · max profit ${price(result.strategy.maxProfit)}. Virtual funds only.`);
+        return;
+      }
+      if (action !== "BUY_CALL" && action !== "BUY_PUT") return;
       const order = await placeOptionPaperOrder({ symbol, expiry: contract.expiry, strike: contract.strike, optionType: contract.optionType, side: "BUY", lots: 1 });
       setOptionOrderMessage(`Paper order recorded at ${price(order.entryPrice)}. Virtual funds only.`);
     } catch (error) {
@@ -1861,12 +1881,12 @@ export default function DecisionDashboard() {
                 <div className="mt-3 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-[10px] leading-relaxed text-[#c8b582]">
                   Risk: {optionIntelligence.recommendation.risks[0]}
                 </div>
-                {optionIntelligence.status === "ACTIONABLE" && optionIntelligence.recommendation.contract && (optionIntelligence.recommendation.action === "BUY_CALL" || optionIntelligence.recommendation.action === "BUY_PUT") ? (
+                {optionIntelligence.status === "ACTIONABLE" && optionIntelligence.recommendation.contract && ["BUY_CALL","BUY_PUT","CALL_VERTICAL","PUT_VERTICAL"].includes(optionIntelligence.recommendation.action) ? (
                   <button onClick={() => void paperValidateOption()} className="mt-3 rounded-lg border border-[#476238] bg-[#142a25] px-3 py-2 font-mono-ui text-[10px] uppercase tracking-[.08em] text-[#c8f169] hover:bg-[#1b3b31]">
-                    Paper validate {optionIntelligence.recommendation.contract.optionType} {optionIntelligence.recommendation.contract.strike}
+                    Paper validate {optionIntelligence.recommendation.action.replaceAll("_", " ")}
                   </button>
                 ) : null}
-                {optionOrderMessage ? <div className="mt-2 text-[10px] text-[#a9bbb0]">{optionOrderMessage}</div> : null}\n                {optionIntelligence.recommendation.contract && (optionIntelligence.recommendation.action === "BUY_CALL" || optionIntelligence.recommendation.action === "BUY_PUT") ? <div className="mt-2 text-[9px] leading-relaxed text-[#71877d]">This option paper validation is a simulation of the option-intelligence output; it is not a broker order and does not override the deterministic candidate gate.</div> : null}
+                {optionOrderMessage ? <div className="mt-2 text-[10px] text-[#a9bbb0]">{optionOrderMessage}</div> : null}\n                {optionIntelligence.recommendation.contract && ["BUY_CALL","BUY_PUT","CALL_VERTICAL","PUT_VERTICAL"].includes(optionIntelligence.recommendation.action) ? <div className="mt-2 text-[9px] leading-relaxed text-[#71877d]">This option paper validation is a simulation of the option-intelligence output; it is not a broker order and does not override the deterministic candidate gate.</div> : null}
                 <div className="mt-3 text-[9px] leading-relaxed text-[#71877d]">{optionIntelligence.disclaimer}</div>
               </div>
             )}
