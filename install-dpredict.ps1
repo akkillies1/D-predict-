@@ -108,7 +108,7 @@ function Show-BootstrapInstaller {
     })
 
     try {
-        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $BootstrapPath),'-InstallDir',('"{0}"' -f $InstallDirectory),'-InstallerMode','-SkipChecks','-SourceRef',('"{0}"' -f $ReleaseRef))
+        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $BootstrapPath),'-InstallDir',('"{0}"' -f $InstallDirectory),'-InstallerMode','-ElevatedChild','-SkipChecks','-SourceRef',('"{0}"' -f $ReleaseRef))
         $proc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $args -WorkingDirectory $InstallDirectory -WindowStyle Hidden -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
         $reader = New-Object System.IO.StreamReader($outFile); $errReader = New-Object System.IO.StreamReader($errFile)
         while (-not $proc.HasExited -and -not $script:InstallCancel) {
