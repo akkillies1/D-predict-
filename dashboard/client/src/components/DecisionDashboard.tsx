@@ -63,7 +63,7 @@ import {
   type MarketPick,
   type OptionRow,
   type OptionIntelligence,
-  type LivePrediction,
+
   type LivePredictionUnavailable,
   type PredictionPerformance,
   type DecisionCandidate,
