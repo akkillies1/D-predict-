@@ -78,6 +78,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> { const resp
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> { return json<LocalHealth>(`${API_BASE}/health`, { signal }); }
 export async function getSystemReadiness(signal?: AbortSignal): Promise<SystemReadiness> { const response = await fetch(`${API_BASE}/ready`, { signal }); return response.json() as Promise<SystemReadiness>; }
 export function localApiBaseUrl() { return API_BASE; }
+export async function getShadowResource<T>(path: string, init?: RequestInit): Promise<T> { return json<T>(`${API_BASE}/api/shadow${path}`, init); }
 export async function getMarketOverview(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview | null> { const payload = await json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/overview`, { signal }); return payload.ok ? payload : null; }
 export async function getLiveQuote(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview | null> { const payload = await json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/live`, { signal }); return payload.ok ? payload : null; }
 export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> { const payload = await json<{ instruments: Instrument[] }>(`${API_BASE}/api/instruments`, { signal }); return payload.instruments; }
