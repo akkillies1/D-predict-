@@ -30,7 +30,8 @@ export type PaperAnalytics = { ok: boolean; periodDays: number; since: string; s
 export type Coverage = { symbol: string; timeframe: string; status: "FRESH" | "STALE" | "NO_DATA"; observations: number; firstTimestamp: string | null; lastTimestamp: string | null; lastCollectedAt: string | null; source: string | null; ageSeconds: number | null };
 export type Performance = { symbol: string; period: string; timeframe: string; requestedDays: number; availableDays: number; coverage: number; metrics: { status: string; observations: number; startingPrice?: number; endingPrice?: number; absoluteReturn?: number; percentageReturn?: number; cagr?: number; volatility?: number; maxDrawdown?: number; bestDay?: number; worstDay?: number; positiveDayRatio?: number } };
 export type WatchlistItem = { symbol: string; position: number; note: string | null; price: number | null; timestamp: string | null; status: "AVAILABLE" | "NO_DATA" };
-export type DecisionCandidateUnavailable = { ok: false; error: string; message?: string; symbol?: string; horizon?: string };\nexport type DecisionCandidate = {
+export type DecisionCandidateUnavailable = { ok: false; error: string; message?: string; symbol?: string; horizon?: string };
+export type DecisionCandidate = {
   status: "PAPER_CANDIDATE" | "ABSTAIN";
   symbol: string;
   horizon: string;
@@ -54,9 +55,22 @@ export type DecisionCandidateUnavailable = { ok: false; error: string; message?:
 
 export type MarketPick = { symbol: string; name?: string | null; spot: number; expectedReturn: number; netExpectedReturn: number; confidence: number; horizon: string; dailyVolatility: number; momentum20d: number; momentum60d: number; maxDrawdown60d: number; dataDays: number; dataAsOf: string; dataStatus: "CURRENT" | "CLOSED_LAST_SESSION"; score: number; basis: "MODEL" | "EVIDENCE"; reasons: string[]; risks: string[] };
 export type PredictionPerformance = { periodDays: number; generatedAt: string; metrics: { scoredPredictions: number; pendingPredictions: number; accuracy: number | null; balancedAccuracy: number | null; directionalAccuracy: number | null; logLoss: number | null; brier: number | null; calibrationError: number | null; meanExpectedReturn: number | null; meanRealizedReturn: number | null; returnMae: number | null }; byHorizon: Array<{ horizon: string; scoredPredictions: number; accuracy: number | null; directionalAccuracy: number | null; logLoss: number | null; pendingPredictions: number }> };
-export type LivePrediction = { ok: boolean; symbol: string; timestamp: string; horizon: "1d" | "3d" | "5d"; prediction: "DOWN" | "FLAT" | "UP"; probabilities: { DOWN: number; FLAT: number; UP: number }; expected_return: number; confidence: number; probability_margin: number; return_interval: { p10: number; p50: number; p90: number }; probability_net_positive: number; calibration_status: "CALIBRATED" | "UNCALIBRATED"; prediction_status: "PROMOTION_READY" | "ABSTAIN"; action_status: "ACTIONABLE_LONG" | "ACTIONABLE_SHORT" | "WATCH_FLAT" | "WATCH_LOW_EDGE" | "ABSTAIN_MODEL_GATE"; action_reasons: string[]; promotion_checks: Record<string, boolean>; oos_metrics: { accuracy: number; majority_baseline: number; log_loss: number; directional_accuracy: number | null }; model_version: string; training_cutoff: string; validation_oos_examples: number };\nexport type LivePredictionUnavailable = { ok: false; symbol: string; horizon: "1d" | "3d" | "5d"; error: "NO_PREDICTION_HISTORY" | "MODEL_NOT_READY" | "ML_INFERENCE_UNAVAILABLE" | "ML_UPSTREAM_ERROR" | string; reason?: string | null; message?: string | null };\nexport type LivePredictionResult = LivePrediction | LivePredictionUnavailable;
+export type LivePrediction = { ok: boolean; symbol: string; timestamp: string; horizon: "1d" | "3d" | "5d"; prediction: "DOWN" | "FLAT" | "UP"; probabilities: { DOWN: number; FLAT: number; UP: number }; expected_return: number; confidence: number; probability_margin: number; return_interval: { p10: number; p50: number; p90: number }; probability_net_positive: number; calibration_status: "CALIBRATED" | "UNCALIBRATED"; prediction_status: "PROMOTION_READY" | "ABSTAIN"; action_status: "ACTIONABLE_LONG" | "ACTIONABLE_SHORT" | "WATCH_FLAT" | "WATCH_LOW_EDGE" | "ABSTAIN_MODEL_GATE"; action_reasons: string[]; promotion_checks: Record<string, boolean>; oos_metrics: { accuracy: number; majority_baseline: number; log_loss: number; directional_accuracy: number | null }; model_version: string; training_cutoff: string; validation_oos_examples: number };
+export type LivePredictionUnavailable = { ok: false; symbol: string; horizon: "1d" | "3d" | "5d"; error: "NO_PREDICTION_HISTORY" | "MODEL_NOT_READY" | "ML_INFERENCE_UNAVAILABLE" | "ML_UPSTREAM_ERROR" | string; reason?: string | null; message?: string | null };
+export type LivePredictionResult = LivePrediction | LivePredictionUnavailable;
 
-export class LocalApiError extends Error {\n  readonly code: string;\n  readonly status: number;\n  constructor(code: string, message: string, status: number) {\n    super(message);\n    this.name = "LocalApiError";\n    this.code = code;\n    this.status = status;\n  }\n}\n\nasync function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string } | null; throw new LocalApiError(body?.error ?? `HTTP_${response.status}`, body?.message ?? body?.error ?? `API returned ${response.status}`, response.status); } return response.json() as Promise<T>; }
+export class LocalApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "LocalApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string } | null; throw new LocalApiError(body?.error ?? `HTTP_${response.status}`, body?.message ?? body?.error ?? `API returned ${response.status}`, response.status); } return response.json() as Promise<T>; }
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> { return json<LocalHealth>(`${API_BASE}/health`, { signal }); }
 export async function getSystemReadiness(signal?: AbortSignal): Promise<SystemReadiness> { const response = await fetch(`${API_BASE}/ready`, { signal }); return response.json() as Promise<SystemReadiness>; }
 export function localApiBaseUrl() { return API_BASE; }
@@ -82,10 +96,13 @@ export async function runDecisionAgent(question: string, model: string | null, h
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
+    const frames = buffer.split("
+
+");
     buffer = frames.pop() ?? "";
     for (const frame of frames) {
-      const lines = frame.split("\n");
+      const lines = frame.split("
+");
       const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim() || "message";
       const dataLine = lines.find(line => line.startsWith("data:"));
       if (!dataLine) continue;
@@ -240,11 +257,13 @@ export async function streamAiChat(input: { question: string; evidence?: AiEvide
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("\n");
+    let newline = buffer.indexOf("
+");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).replace(/\r$/, "");
       buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
+      newline = buffer.indexOf("
+");
       if (line.startsWith("event:")) {
         if (line.slice(6).trim() === "aierror") failure = { error: "AI_STREAM_INTERRUPTED" };
         continue;
@@ -343,11 +362,13 @@ export async function runAiAgent(input: {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("\n");
+    let newline = buffer.indexOf("
+");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).replace(/\r$/, "");
       buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
+      newline = buffer.indexOf("
+");
       if (line.startsWith("event:")) { eventName = line.slice(6).trim(); continue; }
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
