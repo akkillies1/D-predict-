@@ -134,6 +134,15 @@ function Show-BootstrapInstaller {
         Remove-Item $outFile,$errFile -Force -ErrorAction SilentlyContinue; $form.Dispose()
     }
 }
+function Register-DatabaseProtocol([string]$SetupPath) {
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $key = 'HKCU:\Software\Classes\dpredict-database'
+    New-Item -Path "$key\shell\open\command" -Force | Out-Null
+    Set-ItemProperty -Path $key -Name '(Default)' -Value 'URL:D-Predict Database Setup Protocol'
+    Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
+    Set-ItemProperty -Path "$key\shell\open\command" -Name '(Default)' -Value ('"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"' -f $powershell, $SetupPath)
+}
+
 
 try {
     Ensure-InstallerElevation
@@ -219,6 +228,13 @@ try {
             Log 'Registered the dpredict-update: protocol handler.'
         } else {
             Log "Update handler was not registered because $updater is missing."
+        }
+        $databaseSetup = Join-Path $InstallDir 'database-setup.ps1'
+        if (Test-Path $databaseSetup) {
+            Register-DatabaseProtocol $databaseSetup
+            Log 'Registered the dpredict-database: protocol handler.'
+        } else {
+            Log "Database protocol handler was not registered because $databaseSetup is missing."
         }
     } catch {
         Log "Update-check registration failed (the installation itself is unaffected): $($_.Exception.Message)"
