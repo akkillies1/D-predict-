@@ -41,7 +41,7 @@ function App() {
   const select = (next: View) => {
     setView(next);
     localStorage.setItem("dpredict:view", next);
-    window.history.replaceState(null, "", \`#\${next}\`);
+    window.history.replaceState(null, "", `#${next}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -80,7 +80,7 @@ function App() {
                     const selected = view === tab.key;
                     return (
                       <button key={tab.key} type="button" aria-current={selected ? "page" : undefined} onClick={() => select(tab.key)}
-                        className={\`group flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-semibold transition-all sm:px-3 \${selected ? "bg-[#142a25] text-[#c8f169] shadow-[inset_0_0_0_1px_rgba(200,241,105,.14)]" : "text-[#718980] hover:bg-[#0e1d19] hover:text-[#d7e8d9]"}\`}>
+                        className={`group flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-semibold transition-all sm:px-3 ${selected ? "bg-[#142a25] text-[#c8f169] shadow-[inset_0_0_0_1px_rgba(200,241,105,.14)]" : "text-[#718980] hover:bg-[#0e1d19] hover:text-[#d7e8d9]"}`}>
                         <Icon className="size-3.5" /><span>{tab.label}</span>
                       </button>
                     );
