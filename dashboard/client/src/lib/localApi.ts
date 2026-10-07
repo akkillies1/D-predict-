@@ -165,21 +165,17 @@ export async function getLivePrediction(
   symbol: string,
   horizon: 1 | 3 | 5 = 1,
   signal?: AbortSignal,
-): Promise<LivePrediction | LivePredictionUnavailable> {
+): Promise<LivePrediction> {
   const payload = await json<LivePrediction & Partial<LivePredictionUnavailable>>(
     `${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`,
     { signal },
   );
   if (payload.ok === false) {
-    return {
-      ok: false,
-      status: "NO_LIVE_PREDICTION",
-      error: String(payload.error ?? "ML_INFERENCE_UNAVAILABLE"),
-      reason: payload.reason ?? null,
-      message: payload.message ?? null,
-      symbol,
-      horizon: `${horizon}d` as "1d" | "3d" | "5d",
-    };
+    throw new LocalApiError(
+      String(payload.error ?? "ML_INFERENCE_UNAVAILABLE"),
+      String(payload.reason ?? payload.message ?? "No live ML prediction is available."),
+      200,
+    );
   }
   return payload as LivePrediction;
 }
