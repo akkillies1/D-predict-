@@ -1677,7 +1677,7 @@ export default function DecisionDashboard() {
                   <Metric label="Expected return" value={decisionCandidate.expectedReturn == null ? "—" : pct(decisionCandidate.expectedReturn)} sub={decisionCandidate.horizon + " horizon · measured"} icon={Target} />
                   <Metric label="Invalidation" value={price(decisionCandidate.invalidation)} sub={String(decisionCandidate.dataQuality.observations) + " daily bars · " + (decisionCandidate.dataQuality.fresh ? "fresh" : "stale")} icon={ShieldAlert} />
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="mt-4 grid gap-3 lg:grid-cols-3">
                   <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
                     <Label>Decision gates</Label>
                     <div className="mt-3 space-y-2">
@@ -1690,10 +1690,23 @@ export default function DecisionDashboard() {
                     </div>
                   </div>
                   <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
-                    <Label>Evidence / blockers</Label>
+                    <Label>Evidence</Label>
                     <div className="mt-3 space-y-2 text-[10px] leading-relaxed">
-                      {decisionCandidate.reasons.slice(0, 5).map((reason, i) => <div key={i} className="text-[#aebeb3]">• {reason}</div>)}
+                      {decisionCandidate.evidence.map((item, i) => (
+                        <div key={`${item.name}-${i}`} className="rounded-lg border border-[#1d332f] bg-[#07100f] px-2.5 py-2">
+                          <div className="font-mono-ui text-[#d7e8d9]">{item.name}</div>
+                          <div className="mt-0.5 text-[#789087]">Value {String(item.value ?? "—")} · weight {item.weight.toFixed(2)} · contribution {item.contribution.toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-[#29463b] bg-[#09130f] p-4">
+                    <Label>Reasons / blockers / option context</Label>
+                    <div className="mt-3 space-y-2 text-[10px] leading-relaxed">
+                      {decisionCandidate.reasons.map((reason, i) => <div key={i} className="text-[#aebeb3]">• {reason}</div>)}
                       {decisionCandidate.blockers.length ? decisionCandidate.blockers.map(blocker => <div key={blocker.name} className="text-[#ffb0a7]">! {blocker.name}: {blocker.reason}</div>) : <div className="text-[#c8f169]">No blocking gate recorded.</div>}
+                      <div className="border-t border-[#1d332f] pt-2 text-[#789087]">Model confidence: {decisionCandidate.modelConfidence == null ? "—" : pct(decisionCandidate.modelConfidence)}</div>
+                      <div className="text-[#789087]">Option context: {decisionCandidate.option ? "available" : "none"}</div>
                     </div>
                   </div>
                 </div>
