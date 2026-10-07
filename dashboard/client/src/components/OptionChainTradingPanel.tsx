@@ -14,6 +14,7 @@ import {
   getOptionPaperTrades,
   getOptionIntelligence,
   placeOptionPaperOrder,
+  placeOptionPaperStrategy,
   closeOptionPaperTrade,
   type OptionRow,
   type PaperOptionTrade,
@@ -165,6 +166,40 @@ export default function OptionChainTradingPanel() {
       setBusy(null);
     }
   }
+  async function executeRecommendation() {
+    const recommendation = intelligence?.recommendation;
+    if (!recommendation?.contract) return;
+    const key = `MODEL-${recommendation.action}`;
+    setBusy(key);
+    try {
+      if ((recommendation.action === "CALL_VERTICAL" || recommendation.action === "PUT_VERTICAL") && recommendation.hedge) {
+        const primary = recommendation.contract;
+        const hedge = recommendation.hedge;
+        const primaryRow = options.find(r => r.expiry_date === primary.expiry && r.strike === primary.strike && r.option_type === primary.optionType);
+        const hedgeRow = options.find(r => r.expiry_date === hedge.expiry && r.strike === hedge.strike && r.option_type === hedge.optionType);
+        if (!primaryRow || !hedgeRow) throw new Error("One of the model-selected spread contracts is not in the current chain snapshot.");
+        const result = await placeOptionPaperStrategy({
+          symbol,
+          strategy: recommendation.action,
+          legs: [
+            { expiry: primaryRow.expiry_date, strike: primaryRow.strike, optionType: primaryRow.option_type, side: "BUY", lots },
+            { expiry: hedgeRow.expiry_date, strike: hedgeRow.strike, optionType: hedgeRow.option_type, side: "SELL", lots },
+          ],
+        });
+        toast.success(`${recommendation.action.replace("_", " ")} opened · max loss ${money(result.strategy.maxLoss)}`);
+      } else {
+        const row = options.find(r => r.expiry_date === recommendation.contract!.expiry && r.strike === recommendation.contract!.strike && r.option_type === recommendation.contract!.optionType);
+        if (!row) throw new Error("The recommended contract is not in the current chain snapshot.");
+        const result = await placeOptionPaperOrder({ symbol, expiry: row.expiry_date, strike: row.strike, optionType: row.option_type, side: "BUY", lots });
+        toast.success(`Model candidate filled at ${money(result.entryPrice)}`);
+      }
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Model paper strategy rejected");
+    } finally {
+      setBusy(null);
+    }
+  }
   async function closeTrade(id: string) {
     setBusy(id);
     try {
@@ -298,16 +333,10 @@ export default function OptionChainTradingPanel() {
                 </div>
                 <button
                   disabled={intelligence.status !== "ACTIONABLE"}
-                  onClick={() => {
-                    const candidate = intelligence.recommendation?.contract;
-                    if (!candidate) return;
-                    const row = options.find(r => r.expiry_date === candidate.expiry && r.strike === candidate.strike && r.option_type === candidate.optionType);
-                    if (row) void trade(row, "BUY");
-                    else toast.error("The recommended contract is not in the current chain snapshot.");
-                  }}
+                  onClick={() => void executeRecommendation()}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  PAPER VALIDATE CANDIDATE
+                  PAPER VALIDATE ${intelligence.recommendation.action === "CALL_VERTICAL" || intelligence.recommendation.action === "PUT_VERTICAL" ? "STRATEGY" : "CANDIDATE"}
                 </button>
               </div>
             ) : null}
