@@ -390,11 +390,12 @@ export function createPaperRouter(pool: Pool | null): Router {
       const client = await pool.connect();
       try {
         await client.query("begin");
-        const optionTable = await client.query(`select to_regclass('public.option_paper_trades') as name`);
+        const optionTable = await client.query(`select to_regclass('public.option_paper_trades') as name, to_regclass('public.paper_option_strategies') as strategies`);
         if (mode === "all") {
           await client.query(`delete from paper_orders where account_id=$1`, [ACCOUNT_ID]);
           await client.query(`delete from paper_positions where account_id=$1`, [ACCOUNT_ID]);
           if (optionTable.rows[0]?.name) await client.query(`delete from option_paper_trades`);
+          if (optionTable.rows[0]?.strategies) await client.query(`delete from paper_option_strategies`);
           await client.query(`delete from paper_accounts where id=$1`, [ACCOUNT_ID]);
         } else {
           const account = await client.query(`select starting_capital from paper_accounts where id=$1 for update`, [ACCOUNT_ID]);
