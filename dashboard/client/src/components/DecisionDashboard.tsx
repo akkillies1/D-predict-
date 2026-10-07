@@ -39,6 +39,7 @@ import {
   getLiveQuote,
   getLocalHealth,
   getSystemReadiness,
+  LocalApiError,
   getTrainingCoverage,
   getAiStatus,
   getLivePrediction,
@@ -278,6 +279,7 @@ export default function DecisionDashboard() {
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
   const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof getSystemReadiness>> | null>(null);
+  const [decisionEngineError, setDecisionEngineError] = useState<{ code: string; message: string } | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
@@ -400,7 +402,16 @@ export default function DecisionDashboard() {
       );
       setOptions(chainResult.status === "fulfilled" ? chainResult.value : []);
       setOptionIntelligence(intelligenceResult.status === "fulfilled" ? intelligenceResult.value : null);
-      setDecisionCandidate(candidateResult.status === "fulfilled" ? candidateResult.value : null);
+      if (candidateResult.status === "fulfilled") {
+        setDecisionCandidate(candidateResult.value);
+        setDecisionEngineError(null);
+      } else {
+        setDecisionCandidate(null);
+        const error = candidateResult.reason;
+        setDecisionEngineError(error instanceof LocalApiError
+          ? { code: error.code, message: error.message }
+          : { code: "CANDIDATE_UNAVAILABLE", message: error instanceof Error ? error.message : "The decision engine did not return a candidate." });
+      }
       setLastUpdate(new Date().toISOString());
     } finally {
       if (requestId === refreshSequence.current) setLoading(false);
@@ -1717,8 +1728,15 @@ export default function DecisionDashboard() {
                 </div>
               </>
             ) : (
-              <div className="mt-4 rounded-xl border border-dashed border-[#315045] p-6 text-center text-xs text-[#789087]">
-                Candidate engine unavailable for this symbol/horizon. No candidate is fabricated.
+              <div className="mt-4 rounded-xl border border-dashed border-[#633d38] bg-[#120e0d] p-6">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[#ff9d91]" />
+                  <div>
+                    <div className="font-mono-ui text-[10px] font-bold uppercase tracking-[.14em] text-[#ff9d91]">Decision engine unavailable</div>
+                    <p className="mt-2 text-xs leading-relaxed text-[#b89b96]">No candidate is fabricated. The backend failure state is preserved so the remediation path remains explicit.</p>
+                    {decisionEngineError ? <div className="mt-3 rounded-lg border border-[#4b2d29] bg-[#1a110f] px-3 py-2 font-mono-ui text-[10px] text-[#d8b3ac]"><span className="text-[#ff9d91]">{decisionEngineError.code}</span><span className="mx-2 text-[#6f514b]">·</span>{decisionEngineError.message}</div> : null}
+                  </div>
+                </div>
               </div>
             )}
           </Card>
@@ -2009,7 +2027,7 @@ export default function DecisionDashboard() {
           <Metric
             label="Execution gate"
             value={tradeReady ? "READY" : "BLOCKED"}
-            sub={tradeReady ? "thesis says executable" : "forecast ≠ trade"}
+            sub={tradeReady ? "backend candidate is paper-eligible" : "backend candidate is not paper-eligible"}
             icon={CheckCircle2}
           />
           <Metric
