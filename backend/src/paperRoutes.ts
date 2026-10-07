@@ -273,36 +273,72 @@ export async function matchRestingOrders(pool: Pool): Promise<boolean> {
 // Canonical paper-desk snapshot (account + live-marked positions + orders). Read-only:
 // advancing resting orders is the scheduler's job (see liveHub), never a side effect of a
 // GET, so merely viewing the desk cannot execute trades.
+async function buildOptionPaperSnapshot(pool: Pool): Promise<{ trades: any[]; unrealizedPnl: number; marginReserved: number }> {
+  const exists = await pool.query(`select to_regclass('public.option_paper_trades') as name`);
+  if (!exists.rows[0]?.name) return { trades: [], unrealizedPnl: 0, marginReserved: 0 };
+  await pool.query(`alter table option_paper_trades add column if not exists margin_reserved numeric(16,2) not null default 0`);
+  const result = await pool.query(`select pt.*, oc.contract_id as contract_id from option_paper_trades pt join option_contracts oc on oc.contract_id=pt.contract_id order by pt.entry_timestamp desc limit 500`);
+  const now = new Date(); let unrealizedPnl = 0; let marginReserved = 0; const trades: any[] = [];
+  for (const row of result.rows) {
+    let currentPrice = row.current_price == null ? null : Number(row.current_price);
+    let currentTimestamp = row.current_quote_timestamp;
+    let unrealized = Number(row.unrealized_pnl ?? 0);
+    if (row.status === "OPEN") {
+      const quote = await pool.query(`select market_timestamp as timestamp, ltp, bid, ask from option_snapshots where contract_id=$1 order by market_timestamp desc limit 1`, [row.contract_id]);
+      if (quote.rows.length) {
+        const q = quote.rows[0], timestamp = new Date(q.timestamp);
+        const age = now.getTime() - timestamp.getTime();
+        if (age >= 0 && age <= 120000) {
+          const raw = row.side === "BUY" ? (q.bid ?? q.ltp) : (q.ask ?? q.ltp);
+          const mark = Number(raw);
+          if (Number.isFinite(mark) && mark > 0) { currentPrice = mark; currentTimestamp = timestamp; unrealized = row.side === "BUY" ? (mark - Number(row.entry_price)) * Number(row.quantity) : (Number(row.entry_price) - mark) * Number(row.quantity); }
+        }
+      }
+      marginReserved += Number(row.margin_reserved ?? 0); unrealizedPnl += unrealized;
+    }
+    trades.push({
+      id: row.id, symbol: row.symbol, expiry_date: row.expiry_date, strike: Number(row.strike), option_type: row.option_type,
+      side: row.side, status: row.status, lots: Number(row.lots), lot_size: Number(row.lot_size), quantity: Number(row.quantity),
+      entry_price: Number(row.entry_price), entry_bid: row.entry_bid == null ? null : Number(row.entry_bid), entry_ask: row.entry_ask == null ? null : Number(row.entry_ask),
+      entry_ltp: row.entry_ltp == null ? null : Number(row.entry_ltp), entry_quote_timestamp: row.entry_quote_timestamp, entry_timestamp: row.entry_timestamp,
+      current_price: currentPrice, current_quote_timestamp: currentTimestamp, unrealized_pnl: Math.round(unrealized * 100) / 100,
+      realized_pnl: row.realized_pnl == null ? null : Number(row.realized_pnl), exit_price: row.exit_price == null ? null : Number(row.exit_price),
+      exit_timestamp: row.exit_timestamp, exit_reason: row.exit_reason, entry_fees: Number(row.entry_fees ?? 0), exit_fees: row.exit_fees == null ? null : Number(row.exit_fees),
+      margin_reserved: Number(row.margin_reserved ?? 0), cash_entry_delta: Number(row.cash_entry_delta ?? 0),
+    });
+  }
+  return { trades, unrealizedPnl: Math.round(unrealizedPnl * 100) / 100, marginReserved: Math.round(marginReserved * 100) / 100 };
+}
+
 export async function buildPaperState(pool: Pool): Promise<Record<string, unknown>> {
   const accountResult = await pool.query(`select id, starting_capital, cash, realized_pnl, total_costs, created_at, updated_at from paper_accounts where id=$1`, [ACCOUNT_ID]);
-  if (!accountResult.rows.length) return { ok: true, mode: "PAPER_RESEARCH", account: null, positions: [], orders: [], marketLive: false, disclaimer: "Research simulation only. No broker or live order is connected." };
+  if (!accountResult.rows.length) return { ok: true, mode: "PAPER_RESEARCH", account: null, positions: [], optionTrades: [], orders: [], marketLive: false, disclaimer: "Research simulation only. No broker or live order is connected." };
   const account = accountResult.rows[0];
   const positionsResult = await pool.query(`select symbol, product, quantity, average_price, cost_net, realized_pnl, current_price, mark_timestamp, entered_on from paper_positions where account_id=$1 order by product, symbol`, [ACCOUNT_ID]);
-  const ordersResult = await pool.query(`select id, symbol, product, side, order_type, quantity, limit_price, fill_price, notional, gross_amount, net_amount, costs, realized_pnl, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 200`, [ACCOUNT_ID]);
-  let unrealizedPnl = 0;
-  let marketLive = false;
-  const positions = [];
+  const ordersResult = await pool.query(`select id, symbol, product, side, order_type, quantity, limit_price, fill_price, notional, gross_amount, net_amount, costs, realized_pnl, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 200`);
+  let unrealizedPnl = 0, marketLive = false; const positions = [];
   for (const row of positionsResult.rows) {
-    const quote = await bestQuote(pool, row.symbol);
-    const currentPrice = quote?.close ?? (row.current_price == null ? null : Number(row.current_price));
+    const quote = await bestQuote(pool, row.symbol); const currentPrice = quote?.close ?? (row.current_price == null ? null : Number(row.current_price));
     if (quote && (Date.now() - quote.timestamp.getTime()) <= LIVE_WINDOW_SECONDS * 1000) marketLive = true;
-    const quantity = Number(row.quantity);
-    const costNet = Number(row.cost_net ?? 0);
+    const quantity = Number(row.quantity), costNet = Number(row.cost_net ?? 0);
     const positionUnrealized = currentPrice == null ? null : Math.round((currentPrice * quantity - costNet) * 100) / 100;
     if (positionUnrealized != null) unrealizedPnl += positionUnrealized;
     positions.push({ symbol: row.symbol, product: row.product, section: row.product === "CNC" ? "HOLDINGS" : "POSITIONS", quantity, averagePrice: Number(row.average_price), costNet, realizedPnl: Number(row.realized_pnl ?? 0), currentPrice, currentTimestamp: quote?.timestamp ?? row.mark_timestamp, unrealizedPnl: positionUnrealized });
   }
-  // If there is no portfolio yet, decide "live" from any resting order's instrument feed.
-  if (!positions.length) {
-    const watched = ordersResult.rows.filter(row => row.status === "OPEN").map(row => row.symbol);
-    for (const symbol of watched) { const live = await liveMarketPrice(pool, symbol); if (live) { marketLive = true; break; } }
-  }
-  const startingCapital = Number(account.starting_capital);
-  const cash = Number(account.cash);
-  const equity = Math.round((cash + positions.reduce((sum, position) => sum + (position.currentPrice == null ? position.costNet : position.currentPrice * position.quantity), 0)) * 100) / 100;
-  return { ok: true, mode: "PAPER_RESEARCH", marketLive, account: { id: Number(account.id), startingCapital, cash, realizedPnl: Number(account.realized_pnl), totalCosts: Number(account.total_costs ?? 0), unrealizedPnl: Math.round(unrealizedPnl * 100) / 100, equity, returnPct: startingCapital ? (equity / startingCapital) - 1 : 0, openPositions: positions.length, updatedAt: account.updated_at }, positions, orders: ordersResult.rows.map(row => ({ id: row.id, symbol: row.symbol, product: row.product, side: row.side, orderType: row.order_type, quantity: Number(row.quantity), limitPrice: row.limit_price == null ? null : Number(row.limit_price), fillPrice: row.fill_price == null ? null : Number(row.fill_price), notional: Number(row.notional), grossAmount: Number(row.gross_amount), netAmount: Number(row.net_amount), costs: row.costs ?? {}, realizedPnl: Number(row.realized_pnl ?? 0), fillTimestamp: row.fill_timestamp, status: row.status, note: row.note, rationale: row.rationale, signalSnapshot: row.signal_snapshot ?? {}, createdAt: row.created_at })), marketStatus: "LIVE_1M_ONLY_FOR_FILLS", disclaimer: "Research simulation only. Orders fill exclusively against live 1-minute market data; an order placed while the market feed is closed stays queued and executes when the market reopens and its price trigger is met. No broker or live order is connected." };
+  if (!positions.length) for (const symbol of ordersResult.rows.filter(row => row.status === "OPEN").map(row => row.symbol)) { const live = await liveMarketPrice(pool, symbol); if (live) { marketLive = true; break; } }
+  const optionSnapshot = await buildOptionPaperSnapshot(pool);
+  const startingCapital = Number(account.starting_capital), cash = Number(account.cash);
+  const equityMarketValue = positions.reduce((sum, p) => sum + (p.currentPrice == null ? p.costNet : p.currentPrice * p.quantity), 0);
+  const totalUnrealized = Math.round((unrealizedPnl + optionSnapshot.unrealizedPnl) * 100) / 100;
+  const equity = Math.round((cash + equityMarketValue + optionSnapshot.unrealizedPnl) * 100) / 100;
+  return {
+    ok: true, mode: "PAPER_RESEARCH", unified: true, marketLive,
+    account: { id: Number(account.id), startingCapital, cash, realizedPnl: Number(account.realized_pnl), totalCosts: Number(account.total_costs ?? 0), unrealizedPnl: totalUnrealized, equity, returnPct: startingCapital ? (equity / startingCapital) - 1 : 0, openPositions: positions.length + optionSnapshot.trades.filter(t => t.status === "OPEN").length, optionMarginReserved: optionSnapshot.marginReserved, updatedAt: account.updated_at },
+    positions, optionTrades: optionSnapshot.trades,
+    orders: ordersResult.rows.map(row => ({ id: row.id, symbol: row.symbol, product: row.product, side: row.side, orderType: row.order_type, quantity: Number(row.quantity), limitPrice: row.limit_price == null ? null : Number(row.limit_price), fillPrice: row.fill_price == null ? null : Number(row.fill_price), notional: Number(row.notional), grossAmount: Number(row.gross_amount), netAmount: Number(row.net_amount), costs: row.costs ?? {}, realizedPnl: Number(row.realized_pnl ?? 0), fillTimestamp: row.fill_timestamp, status: row.status, note: row.note, rationale: row.rationale, signalSnapshot: row.signal_snapshot ?? {}, createdAt: row.created_at })),
+    marketStatus: "LIVE_1M_ONLY_FOR_FILLS", disclaimer: "Research simulation only. Equity and option paper orders share one simulated cash account. No broker or live order is connected."
+  };
 }
-
 export function createPaperRouter(pool: Pool | null): Router {
   const router = Router();
 
@@ -354,15 +390,18 @@ export function createPaperRouter(pool: Pool | null): Router {
       const client = await pool.connect();
       try {
         await client.query("begin");
+        const optionTable = await client.query(`select to_regclass('public.option_paper_trades') as name`);
         if (mode === "all") {
           await client.query(`delete from paper_orders where account_id=$1`, [ACCOUNT_ID]);
           await client.query(`delete from paper_positions where account_id=$1`, [ACCOUNT_ID]);
+          if (optionTable.rows[0]?.name) await client.query(`delete from option_paper_trades`);
           await client.query(`delete from paper_accounts where id=$1`, [ACCOUNT_ID]);
         } else {
           const account = await client.query(`select starting_capital from paper_accounts where id=$1 for update`, [ACCOUNT_ID]);
           if (!account.rows.length) { await client.query("rollback"); return errorResponse(res, 409, "PAPER_ACCOUNT_NOT_INITIALIZED"); }
           await client.query(`delete from paper_orders where account_id=$1`, [ACCOUNT_ID]);
           await client.query(`delete from paper_positions where account_id=$1`, [ACCOUNT_ID]);
+          if (optionTable.rows[0]?.name) await client.query(`delete from option_paper_trades`);
           await client.query(`update paper_accounts set cash=starting_capital, realized_pnl=0, total_costs=0, updated_at=now() where id=$1`, [ACCOUNT_ID]);
         }
         await client.query("commit");
