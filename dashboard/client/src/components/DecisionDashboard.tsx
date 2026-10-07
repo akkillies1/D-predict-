@@ -659,7 +659,7 @@ export default function DecisionDashboard() {
   const paperValidateOption = useCallback(async () => {
     const contract = optionIntelligence?.recommendation.contract;
     const action = optionIntelligence?.recommendation.action;
-    if (!contract || (action !== "BUY_CALL" && action !== "BUY_PUT")) return;
+    if (optionIntelligence?.status !== "ACTIONABLE" || !contract || (action !== "BUY_CALL" && action !== "BUY_PUT")) return;
     try {
       const order = await placeOptionPaperOrder({ symbol, expiry: contract.expiry, strike: contract.strike, optionType: contract.optionType, side: "BUY", lots: 1 });
       setOptionOrderMessage(`Paper order recorded at ${price(order.entryPrice)}. Virtual funds only.`);
@@ -1822,7 +1822,7 @@ export default function DecisionDashboard() {
                 <div className="mt-3 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-[10px] leading-relaxed text-[#c8b582]">
                   Risk: {optionIntelligence.recommendation.risks[0]}
                 </div>
-                {optionIntelligence.recommendation.contract && (optionIntelligence.recommendation.action === "BUY_CALL" || optionIntelligence.recommendation.action === "BUY_PUT") ? (
+                {optionIntelligence.status === "ACTIONABLE" && optionIntelligence.recommendation.contract && (optionIntelligence.recommendation.action === "BUY_CALL" || optionIntelligence.recommendation.action === "BUY_PUT") ? (
                   <button onClick={() => void paperValidateOption()} className="mt-3 rounded-lg border border-[#476238] bg-[#142a25] px-3 py-2 font-mono-ui text-[10px] uppercase tracking-[.08em] text-[#c8f169] hover:bg-[#1b3b31]">
                     Paper validate {optionIntelligence.recommendation.contract.optionType} {optionIntelligence.recommendation.contract.strike}
                   </button>
