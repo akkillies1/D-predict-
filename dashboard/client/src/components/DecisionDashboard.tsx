@@ -1371,9 +1371,9 @@ export default function DecisionDashboard() {
         >
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <Label>Horizon-aware ML inference</Label>
+              <Label>Horizon-aware ML evidence</Label>
               <h2 className="mt-1 font-display text-xl font-semibold">
-                {symbol} model decision
+                {symbol} raw model output
               </h2>
               <p className="mt-1 text-xs text-[#789087]">
                 Each horizon uses its own forward label, purge period, model cache, calibration, and promotion gate. This panel reports model evidence only; the deterministic candidate engine below is the sole paper-trade authorization.
