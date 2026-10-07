@@ -166,7 +166,7 @@ export async function getLivePrediction(
   horizon: 1 | 3 | 5 = 1,
   signal?: AbortSignal,
 ): Promise<LivePrediction> {
-  const payload = await json<LivePrediction & { error?: string; reason?: string | null; message?: string | null }>(
+  const payload = await json<LivePredictionResult>(
     `${API_BASE}/api/predictions/live?symbol=${encodeURIComponent(symbol)}&horizon=${horizon}d`,
     { signal },
   );
