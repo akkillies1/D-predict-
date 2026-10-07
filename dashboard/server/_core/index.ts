@@ -32,12 +32,37 @@ function databaseStatePath() {
 
 function databaseStatus() {
   const statePath = databaseStatePath();
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    return { configured: true, mode: state.mode ?? null, dataRoot: state.dataRoot ?? null, configPath: statePath };
-  } catch {
-    return { configured: false, mode: null, dataRoot: null, configPath: statePath };
+  const envCandidates = [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "..", ".env"),
+    path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "D-Predict", ".env"),
+  ];
+  let state: Record<string, unknown> | null = null;
+  try { state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>; } catch { /* fall back to persisted env */ }
+
+  if (state?.mode) {
+    return { configured: true, mode: state.mode, dataRoot: state.dataRoot ?? null, configPath: statePath };
   }
+
+  for (const envPath of envCandidates) {
+    try {
+      const lines = fs.readFileSync(envPath, "utf8").split(/\\r?\\n/);
+      const values = new Map(lines.map(line => {
+        const index = line.indexOf("=");
+        return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] as const : ["", ""] as const;
+      }));
+      const mode = values.get("DATABASE_MODE");
+      if (!mode) continue;
+      return {
+        configured: true,
+        mode,
+        dataRoot: values.get("D_PREDICT_DATA_DIR") ?? null,
+        configPath: envPath,
+      };
+    } catch { /* try the next supported location */ }
+  }
+
+  return { configured: false, mode: null, dataRoot: null, configPath: statePath };
 }
 
 function databaseSetupScript() {
@@ -64,7 +89,7 @@ async function startServer() {
         cwd: path.dirname(script),
         detached: true,
         stdio: "ignore",
-        windowsHide: false,
+        windowsHide: true,
       });
       child.unref();
       return res.json({ ok: true, launched: true });
