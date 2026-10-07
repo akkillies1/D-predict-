@@ -6,6 +6,7 @@ on:
     paths:
       - 'installer/**'
       - 'install-dpredict.ps1'
+      - 'update-dpredict.ps1'
       - 'database-setup.ps1'
       - 'bootstrap-windows.ps1'
       - 'dp.ps1'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'installer/**'
       - 'install-dpredict.ps1'
+      - 'update-dpredict.ps1'
       - 'bootstrap-windows.ps1'
       - 'dp.ps1'
       - 'run.ps1'
@@ -30,7 +32,7 @@ jobs:
   build-installer:
     runs-on: windows-latest
     env:
-      INSTALLER_VERSION: '2.1.4'
+      INSTALLER_VERSION: '2.1.5'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,6 +47,7 @@ jobs:
           $required = @(
             'installer/D-predict.iss',
             'install-dpredict.ps1',
+            'update-dpredict.ps1',
             'bootstrap-windows.ps1',
             'dp.ps1',
             'run.ps1',
@@ -60,7 +63,7 @@ jobs:
       - name: Validate PowerShell installer scripts
         shell: powershell
         run: |
-          $scripts = @('install-dpredict.ps1','database-setup.ps1','bootstrap-windows.ps1')
+          $scripts = @('install-dpredict.ps1','update-dpredict.ps1','database-setup.ps1','bootstrap-windows.ps1')
           foreach ($script in $scripts) {
             $tokens = $null
             $errors = $null

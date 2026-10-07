@@ -10,6 +10,7 @@ import IPOAnalyzer from "./components/IPOAnalyzer";
 import OptionChainTradingPanel from "./components/OptionChainTradingPanel";
 import ResearchPanel from "./components/ResearchPanel";
 import ShadowTradingPanel from "./components/ShadowTradingPanel";
+import UpdateBanner from "./components/UpdateBanner";
 import Research20Panel from "./components/Research20Panel";
 import ModelCoveragePanel from "./components/ModelCoveragePanel";
 import TradingDesk from "./components/TradingDesk";
@@ -35,6 +36,7 @@ function App() {
               </nav>
             </div>
           </header>
+          <UpdateBanner />
           {view === "trade" ? (
             <TradingDesk />
           ) : (

@@ -15,6 +15,7 @@ import { TRAIN_TIMEOUT_MS, acknowledgeAllAlerts, addWatchlistItem, retrainSymbol
 import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
 import { createAiRouter } from "./aiRoutes.js";
 import { analyzeOptionChain } from "./optionIntelligence.js";
+import { getUpdateStatus } from "./updateService.js";
 
 // Resolve runtime configuration from every supported local launch context.
 // Docker supplies DATABASE_URL explicitly; direct Windows launches must also see
@@ -337,6 +338,13 @@ app.use("/api/shadow", createShadowRouter(pool));
 app.use("/api/paper", createPaperRouter(pool));
 // Optional bring-your-own-key assistant; loopback-only, key never leaves as-is.
 app.use("/api/ai", createAiRouter(pool));
+// Read-only: reports whether a newer public release exists. Applying an update
+// is a host-side action the api container cannot perform.
+app.get("/api/updates/status", async (_req, res) => {
+  try {
+    return res.json(await getUpdateStatus());
+  } catch (error) { return res.status(500).json({ ok: false, error: "UPDATE_CHECK_FAILED", message: error instanceof Error ? error.message : "check_failed" }); }
+});
 
 function normalCdf(value: number): number {
   const sign = value < 0 ? -1 : 1;

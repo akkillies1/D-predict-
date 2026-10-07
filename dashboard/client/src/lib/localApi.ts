@@ -361,3 +361,24 @@ export async function resolveAgentApproval(runId: string, callId: string, approv
   const body = (await response.json().catch(() => null)) as { resolved?: boolean } | null;
   return body?.resolved === true;
 }
+
+export type UpdateStatus = {
+  ok: boolean;
+  enabled: boolean;
+  state: "CURRENT" | "UPDATE_AVAILABLE" | "UNKNOWN_VERSION" | "DISABLED" | "CHECK_FAILED";
+  current: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+  downloadUrl: string | null;
+  releaseUrl: string | null;
+  publishedAt: string | null;
+  sizeBytes: number | null;
+  sha256: string | null;
+  checkedAt: string | null;
+  reason: string | null;
+  disclaimer: string;
+};
+
+/** Read-only: the local API compares the stamped install version with the newest
+ * public release. Applying an update happens on the host, never in this browser. */
+export async function getUpdateStatus(signal?: AbortSignal): Promise<UpdateStatus> { return json<UpdateStatus>(`${API_BASE}/api/updates/status`, { signal }); }

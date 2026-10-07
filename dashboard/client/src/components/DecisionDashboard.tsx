@@ -336,7 +336,7 @@ export default function DecisionDashboard() {
       setForecast(
         forecastResult.status === "fulfilled" ? forecastResult.value : null
       );
-      setTrainingCoverage(coverageResult.status === "fulfilled" ? coverageResult.value : null);
+      setTrainingCoverage(coverageResult.status === "fulfilled" && coverageResult.value.summary ? coverageResult.value : null);
       setAiStatus(aiResult.status === "fulfilled" ? aiResult.value : null);
       setLastUpdate(new Date().toISOString());
       setLoading(false);

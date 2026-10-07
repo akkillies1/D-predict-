@@ -1,6 +1,6 @@
 #define MyAppName "D-Predict"
 #ifndef MyAppVersion
-#define MyAppVersion "2.1.4"
+#define MyAppVersion "2.1.5"
 #endif
 #ifndef MyAppSourceRef
 #define MyAppSourceRef "main"
@@ -52,6 +52,7 @@ Name: "startmenu";  Description: "Create a &Start Menu group";  GroupDescription
 
 [Files]
 Source: "..\install-dpredict.ps1";   DestDir: "{app}"; Flags: ignoreversion
+Source: "..\update-dpredict.ps1";    DestDir: "{app}"; Flags: ignoreversion
 Source: "..\bootstrap-windows.ps1";  DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dp.ps1";                 DestDir: "{app}"; Flags: ignoreversion
 Source: "..\run.ps1";                DestDir: "{app}"; Flags: ignoreversion
@@ -69,11 +70,11 @@ Source: "..\WINDOWS.md";             DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\dpredict-icon.ico";  DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; StatusMsg: "Configuring D-Predict and installing prerequisites..."; Flags: waituntilterminated runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"" -AppVersion ""{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Configuring D-Predict and installing prerequisites..."; Flags: waituntilterminated runhidden
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait runhidden; Check: IsDpredictReady
 
 [Icons]
-Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"; IconFilename: "{app}\assets\dpredict-icon.ico"
+Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"" -AppVersion ""{#MyAppVersion}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"; IconFilename: "{app}\assets\dpredict-icon.ico"
 Name: "{group}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; IconFilename: "{app}\assets\dpredict-icon.ico"
 Name: "{group}\D-Predict Repair & Check"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\run.ps1"" doctor"; WorkingDir: "{app}"; Comment: "Check D-Predict installation"; IconFilename: "{app}\assets\dpredict-icon.ico"
 Name: "{userdesktop}\D-Predict"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; Comment: "Start D-Predict"; Tasks: desktopicon; IconFilename: "{app}\assets\dpredict-icon.ico"
@@ -137,6 +138,11 @@ begin
     end;
   end;
 end;
+
+[Registry]
+; install-dpredict.ps1 writes this handler so the dashboard can hand an "Update now"
+; click back to the host. The key is only listed here so uninstalling removes it.
+Root: HKA; Subkey: "Software\Classes\dpredict-update"; ValueType: none; Flags: uninsdeletekey
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.run"

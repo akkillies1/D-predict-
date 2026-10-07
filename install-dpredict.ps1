@@ -1,6 +1,7 @@
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\D-Predict'),
-    [string]$SourceRef = 'main'
+    [string]$SourceRef = 'main',
+    [string]$AppVersion = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,34 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 function Log([string]$Message) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
     $line | Tee-Object -FilePath $logFile -Append
+}
+
+# docker-compose starts the api container with `env_file: .env`, and that container
+# has no host access, so the installed version reaches the update check only
+# through this file.
+function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
+    $lines = @()
+    if (Test-Path $Path) { $lines = @(Get-Content $Path -ErrorAction SilentlyContinue) }
+    $pattern = "^\s*${Key}\s*="
+    $found = @($lines | Where-Object { $_ -match $pattern }).Count -gt 0
+    if ($found) {
+        $lines = @($lines | ForEach-Object { if ($_ -match $pattern) { "${Key}=${Value}" } else { $_ } })
+    } else {
+        $lines = @($lines) + "${Key}=${Value}"
+    }
+    $lines | Set-Content -Path $Path -Encoding UTF8
+}
+
+# Lets the dashboard's "Update now" button hand off to the host updater without a
+# resident watcher; the launcher exits once the dashboard is up.
+function Register-UpdateProtocol([string]$UpdaterPath) {
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $key = 'HKCU:\Software\Classes\dpredict-update'
+    New-Item -Path "$key\shell\open\command" -Force | Out-Null
+    Set-ItemProperty -Path $key -Name '(Default)' -Value 'URL:D-Predict Update Protocol'
+    Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
+    Set-ItemProperty -Path "$key\shell\open\command" -Name '(Default)' -Value `
+        ('"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" -Action Apply' -f $powershell, $UpdaterPath)
 }
 
 try {
@@ -79,6 +108,29 @@ try {
     if ($SourceRef) {
         Set-Content -Path (Join-Path $stateRoot 'source-ref.txt') -Value $SourceRef -Encoding UTF8
     }
+
+    # Stamping the version is what makes the in-app update check possible. Neither
+    # step can break a working install, so a failure here is logged and ignored.
+    try {
+        $version = $AppVersion -replace '^[vV]', ''
+        if ($version -match '^\d+\.\d+\.\d+$') {
+            Set-Content -Path (Join-Path $stateRoot 'version.txt') -Value $version -Encoding UTF8
+            Set-EnvValue -Path $projectEnvFile -Key 'D_PREDICT_VERSION' -Value $version
+            Log "Recorded installed version $version in $stateRoot\version.txt and $projectEnvFile."
+        } else {
+            Log "No usable version was supplied by the setup package (got '$AppVersion'); the update check will report the version as unknown."
+        }
+        $updater = Join-Path $InstallDir 'update-dpredict.ps1'
+        if (Test-Path $updater) {
+            Register-UpdateProtocol $updater
+            Log 'Registered the dpredict-update: protocol handler.'
+        } else {
+            Log "Update handler was not registered because $updater is missing."
+        }
+    } catch {
+        Log "Update-check registration failed (the installation itself is unaffected): $($_.Exception.Message)"
+    }
+
     Log 'D-Predict setup completed successfully.'
     exit 0
 }
