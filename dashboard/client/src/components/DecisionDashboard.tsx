@@ -521,7 +521,8 @@ export default function DecisionDashboard() {
 
   const thesis = signal?.tradeThesis; // legacy signal evidence only; never an execution authority
   const coverageSummary = trainingCoverage?.summary;
-  const mlReady = (coverageSummary?.productionModels ?? 0) > 0;
+  const currentCoverage = trainingCoverage?.instruments.find(row => row.symbol === symbol && row.horizon === `${forecastHorizon}d`) ?? null;
+  const mlReady = currentCoverage?.model_state === "UP_TO_DATE" && currentCoverage.promotion_ready === true;
   const liveActive = liveQuote?.status === "LIVE" && liveQuote.close != null && !!liveQuote.timestamp;
   const displayBars = useMemo(() => {
     const base = chartTimeframe === "1w" || chartTimeframe === "1mo" ? resampleBars(history, chartTimeframe === "1w" ? "week" : "month") : history;
