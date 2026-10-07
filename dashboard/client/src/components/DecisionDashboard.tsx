@@ -2055,8 +2055,8 @@ export default function DecisionDashboard() {
 
         <section id="risk" className="grid gap-4 md:grid-cols-3">
           <Metric
-            label="Execution gate"
-            value={tradeReady ? "READY" : "BLOCKED"}
+            label="Paper-candidate gate"
+            value={tradeReady ? "AUTHORIZED" : "ABSTAIN"}
             sub={tradeReady ? "backend candidate is paper-eligible" : "backend candidate is not paper-eligible"}
             icon={CheckCircle2}
           />
