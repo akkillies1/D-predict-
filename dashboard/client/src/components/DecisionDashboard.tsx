@@ -64,6 +64,7 @@ import {
   type OptionRow,
   type OptionIntelligence,
   type LivePrediction,
+  type LivePredictionUnavailable,
   type PredictionPerformance,
   type DecisionCandidate,\n  type LivePredictionResult,
   type TrainingCoverage,
