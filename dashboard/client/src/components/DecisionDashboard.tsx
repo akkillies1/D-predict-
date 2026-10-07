@@ -685,7 +685,7 @@ export default function DecisionDashboard() {
       timestamp,
     };
   }, [options, market?.close]);
-  const decision = decisionCandidate?.status ?? "ABSTAIN";
+  const decision = decisionCandidate?.status ?? "NO DECISION";
   const dataStatus = market?.status ?? "OFFLINE";
   const tradeReady = decisionCandidate?.status === "PAPER_CANDIDATE";
   const saveToWatchlist = useCallback(async () => {
@@ -727,7 +727,7 @@ export default function DecisionDashboard() {
     }
   }, [forecastHorizon]);
   const blockers = decisionCandidate?.blockers.map(item => `${item.name}: ${item.reason}`) ?? [
-    "Decision engine result unavailable",
+    decisionEngineError ? `${decisionEngineError.code}: ${decisionEngineError.message}` : "Decision engine result unavailable",
   ];
   const isRefreshing = loading || enrichmentLoading;
 
