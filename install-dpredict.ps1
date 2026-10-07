@@ -43,6 +43,84 @@ function Register-UpdateProtocol([string]$UpdaterPath) {
         ('"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" -Action Apply' -f $powershell, $UpdaterPath)
 }
 
+
+function Show-BootstrapInstaller {
+    param([string]$BootstrapPath, [string]$InstallDirectory, [string]$ReleaseRef)
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $outFile = Join-Path $env:TEMP ("dpredict-install-" + [Guid]::NewGuid().ToString("N") + ".out")
+    $errFile = Join-Path $env:TEMP ("dpredict-install-" + [Guid]::NewGuid().ToString("N") + ".err")
+    $script:InstallCancel = $false
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'D-Predict Installation'; $form.ClientSize = New-Object System.Drawing.Size(680,430)
+    $form.StartPosition = 'CenterScreen'; $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.MaximizeBox = $false; $form.MinimizeBox = $false; $form.BackColor = [System.Drawing.Color]::FromArgb(8,18,15); $form.TopMost = $true
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = 'D-PREDICT'; $title.Font = New-Object System.Drawing.Font('Segoe UI',14,[System.Drawing.FontStyle]::Bold); $title.ForeColor = [System.Drawing.Color]::FromArgb(200,241,105); $title.Location = New-Object System.Drawing.Point(28,24); $title.AutoSize = $true
+    $subtitle = New-Object System.Windows.Forms.Label
+    $subtitle.Text = 'Decision Intelligence Terminal'; $subtitle.Font = New-Object System.Drawing.Font('Segoe UI',9); $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(120,144,135); $subtitle.Location = New-Object System.Drawing.Point(30,52); $subtitle.AutoSize = $true
+    $status = New-Object System.Windows.Forms.Label
+    $status.Text = 'Installing D-Predict'; $status.Font = New-Object System.Drawing.Font('Segoe UI',11,[System.Drawing.FontStyle]::Bold); $status.ForeColor = [System.Drawing.Color]::FromArgb(237,245,233); $status.Location = New-Object System.Drawing.Point(28,90); $status.Size = New-Object System.Drawing.Size(620,26)
+    $detail = New-Object System.Windows.Forms.Label
+    $detail.Text = 'Preparing prerequisites...'; $detail.Font = New-Object System.Drawing.Font('Segoe UI',9); $detail.ForeColor = [System.Drawing.Color]::FromArgb(159,180,168); $detail.Location = New-Object System.Drawing.Point(28,118); $detail.Size = New-Object System.Drawing.Size(620,40)
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee; $bar.Location = New-Object System.Drawing.Point(28,164); $bar.Size = New-Object System.Drawing.Size(620,18)
+    $logBox = New-Object System.Windows.Forms.TextBox
+    $logBox.Multiline = $true; $logBox.ReadOnly = $true; $logBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical; $logBox.Font = New-Object System.Drawing.Font('Consolas',8.5); $logBox.BackColor = [System.Drawing.Color]::FromArgb(13,26,22); $logBox.ForeColor = [System.Drawing.Color]::FromArgb(143,167,156); $logBox.BorderStyle = [System.Windows.Forms.BorderStyle]::None; $logBox.Location = New-Object System.Drawing.Point(28,198); $logBox.Size = New-Object System.Drawing.Size(620,165)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel installation'; $cancel.Location = New-Object System.Drawing.Point(510,378); $cancel.Size = New-Object System.Drawing.Size(138,32)
+    $form.Controls.AddRange(@($title,$subtitle,$status,$detail,$bar,$logBox,$cancel))
+    $proc = $null; $reader = $null; $errReader = $null
+
+    function Set-Stage([string]$line) {
+        $text = $line.Trim()
+        if (-not $text) { return }
+        $logBox.AppendText($text + [Environment]::NewLine); $logBox.SelectionStart = $logBox.TextLength; $logBox.ScrollToCaret()
+        if ($text -match 'Docker') { $status.Text = 'Preparing Docker runtime' }
+        elseif ($text -match 'Synchronizing D-Predict source|Downloading D-Predict source') { $status.Text = 'Synchronizing D-Predict source' }
+        elseif ($text -match 'Python|collector') { $status.Text = 'Preparing Python environment' }
+        elseif ($text -match 'backend dependencies') { $status.Text = 'Installing backend dependencies' }
+        elseif ($text -match 'Corepack|pnpm') { $status.Text = 'Installing dashboard dependencies' }
+        elseif ($text -match 'completed successfully') { $status.Text = 'Installation complete' }
+        $detail.Text = if ($text.Length -gt 120) { $text.Substring(0,120) } else { $text }
+    }
+
+    $cancel.Add_Click({
+        $script:InstallCancel = $true; $cancel.Enabled = $false; $status.Text = 'Cancelling installation...'; $detail.Text = 'Stopping the installer and prerequisite processes safely.'
+        if ($proc -and -not $proc.HasExited) { try { & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null } catch { } }
+    })
+    $form.Add_FormClosing({
+        if ($proc -and -not $proc.HasExited -and -not $script:InstallCancel) { $script:InstallCancel = $true; try { & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null } catch { } }
+    })
+
+    try {
+        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $BootstrapPath),'-InstallDir',('"{0}"' -f $InstallDirectory),'-InstallerMode','-SkipChecks','-SourceRef',('"{0}"' -f $ReleaseRef))
+        $proc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $args -WorkingDirectory $InstallDirectory -WindowStyle Hidden -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
+        $reader = New-Object System.IO.StreamReader($outFile); $errReader = New-Object System.IO.StreamReader($errFile)
+        while (-not $proc.HasExited -and -not $script:InstallCancel) {
+            [System.Windows.Forms.Application]::DoEvents()
+            foreach ($rdr in @($reader,$errReader)) {
+                while (-not $rdr.EndOfStream) { $line = $rdr.ReadLine(); if ($line) { Log "bootstrap: $line"; Set-Stage $line } }
+            }
+            Start-Sleep -Milliseconds 150
+        }
+        if ($script:InstallCancel) {
+            try { if ($proc -and -not $proc.HasExited) { & taskkill.exe /PID $proc.Id /T /F 2>&1 | Out-Null } } catch { }
+            throw 'INSTALL_CANCELLED'
+        }
+        foreach ($rdr in @($reader,$errReader)) {
+            while (-not $rdr.EndOfStream) { $line = $rdr.ReadLine(); if ($line) { Log "bootstrap: $line"; Set-Stage $line } }
+        }
+        if ($proc.ExitCode -ne 0) { throw "D-Predict prerequisite setup failed (exit code $($proc.ExitCode)). See $logFile" }
+        $status.Text = 'D-Predict installation complete'; $detail.Text = 'All prerequisites and application dependencies were installed successfully.'; $bar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous; $bar.Value = 100
+        [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 350
+        return 0
+    } finally {
+        try { $reader.Dispose() } catch { }; try { $errReader.Dispose() } catch { }
+        Remove-Item $outFile,$errFile -Force -ErrorAction SilentlyContinue; $form.Dispose()
+    }
+}
+
 try {
     Log "D-Predict installer starting. InstallDir=$InstallDir SourceRef=$SourceRef"
     if (-not (Test-Path $InstallDir)) {
@@ -89,9 +167,9 @@ try {
     }
 
     Log 'Starting the D-Predict bootstrap after database configuration.'
-    & powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $bootstrap -InstallDir $InstallDir -InstallerMode -SkipChecks -SourceRef $SourceRef -RefreshSource *>&1 | Tee-Object -FilePath $logFile -Append
-    $exitCode = $LASTEXITCODE
+    $exitCode = Show-BootstrapInstaller -BootstrapPath $bootstrap -InstallDirectory $InstallDir -ReleaseRef $SourceRef
     if ($exitCode -ne 0) {
+        if ($exitCode -eq 2) { throw 'INSTALL_CANCELLED' }
         throw "D-Predict prerequisite setup failed (exit code $exitCode). See $logFile"
     }
 
