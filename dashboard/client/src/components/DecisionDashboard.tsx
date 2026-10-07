@@ -394,7 +394,7 @@ export default function DecisionDashboard() {
             error: "ML_INFERENCE_UNAVAILABLE",
             reason: failureReason,
             symbol,
-            horizon: String(forecastHorizon) + "d",
+            horizon: `${forecastHorizon}d` as "1d" | "3d" | "5d",
           });
           gate.wait = Math.min(300000, Math.max(15000, gate.key === predictionKey ? gate.wait : 15000) * 2);
           gate.key = predictionKey;
