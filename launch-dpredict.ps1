@@ -88,7 +88,14 @@ function Open-DashboardBrowser([string]$Url) {
   foreach ($exe in (Resolve-BrowserExe)) {
     if (-not (Test-Path $exe)) { continue }
     try {
-      Start-Process -FilePath $exe -ArgumentList @('--new-window', "`"$Url`"") -ErrorAction Stop
+      $fileName = [IO.Path]::GetFileName($exe).ToLowerInvariant()
+      if ($fileName -eq 'msedge.exe' -or $fileName -eq 'chrome.exe') {
+        Start-Process -FilePath $exe -ArgumentList @('--app', "`"$Url`"") -ErrorAction Stop
+        Log "Opened $Url as a standalone D-Predict app window using $fileName."
+      } else {
+        Start-Process -FilePath $exe -ArgumentList @('--new-window', "`"$Url`"") -ErrorAction Stop
+        Log "Opened $Url in a new $fileName window."
+      }
       Log "Opened $Url in a new $([IO.Path]::GetFileName($exe)) window."
       return
     } catch {
