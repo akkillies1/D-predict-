@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 type DatabaseStatus = {
   configured: boolean;
-  mode: "local_postgres" | "supabase_cloud" | "self_hosted_supabase" | null;
+  mode: "local_postgres" | "supabase_cloud" | "supabase_self_hosted" | null;
   dataRoot: string | null;
   configPath: string | null;
 };
@@ -12,7 +12,7 @@ type DatabaseStatus = {
 const modeLabel: Record<NonNullable<DatabaseStatus["mode"]>, string> = {
   local_postgres: "Local PostgreSQL",
   supabase_cloud: "Supabase Cloud",
-  self_hosted_supabase: "Self-hosted Supabase",
+  supabase_self_hosted: "Self-hosted Supabase",
 };
 
 export default function DatabaseSettings() {
@@ -32,7 +32,6 @@ export default function DatabaseSettings() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => { if (status && !status.configured) setOpen(true); }, [status]);
 
   async function openSetup() {
     setBusy(true);
@@ -53,10 +52,28 @@ export default function DatabaseSettings() {
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-white/10 bg-black/80 px-4 py-3 text-sm font-medium text-white shadow-xl backdrop-blur hover:bg-black">
-        <Settings2 className="size-4" />
-        Data & Database
-      </button>
+      <section className="mx-auto max-w-[1540px] px-4 sm:px-6 lg:px-8">
+        <div className="rounded-2xl border border-[#29483d] bg-[#0c1b17] p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              {status?.mode === "local_postgres" ? <HardDrive className="mt-0.5 size-5 text-[#c8f169]" /> : <Database className="mt-0.5 size-5 text-[#c8f169]" />}
+              <div>
+                <div className="font-mono-ui text-[9px] uppercase tracking-[.18em] text-[#789087]">Data & Database</div>
+                <div className="mt-1 font-display text-lg font-semibold text-[#edf5e9]">{configured && status?.mode ? modeLabel[status.mode] : "Configuration not detected"}</div>
+                <p className="mt-1 text-xs text-[#70887d]">
+                  {status?.dataRoot ? `Local PostgreSQL data: ${status.dataRoot}` : "D-Predict uses the configured local or PostgreSQL-compatible deployment."}
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button onClick={() => setOpen(true)} disabled={busy}><Settings2 />{configured ? "Manage database" : "Set up database"}</Button>
+              <Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw />Refresh</Button>
+            </div>
+          </div>
+          {!configured && <div className="mt-4 rounded-lg border border-[#5a4530] bg-[#2a2116] px-3 py-2 text-xs text-[#d7b989]">The dashboard could not find the saved database state. Refresh after installation; if it remains missing, run Setup & Repair.</div>}
+          {message && <p className="mt-3 text-xs text-[#8da59a]">{message}</p>}
+        </div>
+      </section>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
