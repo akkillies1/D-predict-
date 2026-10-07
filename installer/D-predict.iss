@@ -71,7 +71,7 @@ Source: "assets\dpredict-icon.ico";  DestDir: "{app}\assets"; Flags: ignoreversi
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"" -AppVersion ""{#MyAppVersion}"""; WorkingDir: "{app}"; StatusMsg: "Opening D-Predict installer..."; Flags: waituntilterminated runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait runhidden; Check: IsDpredictReady
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\launch-dpredict.ps1"""; WorkingDir: "{app}"; StatusMsg: "Starting D-Predict..."; Flags: postinstall nowait runhidden runasoriginaluser; Check: IsDpredictReady
 
 [Icons]
 Name: "{group}\D-Predict Setup & Repair"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-dpredict.ps1"" -InstallDir ""{app}"" -SourceRef ""{#MyAppSourceRef}"" -AppVersion ""{#MyAppVersion}"""; WorkingDir: "{app}"; Comment: "Install or repair D-Predict prerequisites"; IconFilename: "{app}\assets\dpredict-icon.ico"
