@@ -16,6 +16,7 @@ import {
   placeOptionPaperOrder,
   placeOptionPaperStrategy,
   closeOptionPaperTrade,
+  getUnifiedPaperState,
   type OptionRow,
   type PaperOptionTrade,
   type OptionIntelligence,
@@ -84,6 +85,7 @@ export default function OptionChainTradingPanel() {
   const [options, setOptions] = useState<OptionRow[]>([]);
   const [trades, setTrades] = useState<PaperOptionTrade[]>([]);
   const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
+  const [unified, setUnified] = useState<Awaited<ReturnType<typeof getUnifiedPaperState>> | null>(null);
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -92,13 +94,15 @@ export default function OptionChainTradingPanel() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [chain, paperTrades, intelligence] = await Promise.all([
+      const [chain, paperTrades, intelligence, unified] = await Promise.all([
         getOptionChain(symbol),
         getOptionPaperTrades(),
         getOptionIntelligence(symbol),
+        getUnifiedPaperState().catch(() => null),
       ]);
       setOptions(chain);
       setTrades(paperTrades);
+      setUnified(unified);
       const expiries = Array.from(
         new Set(chain.map(row => row.expiry_date))
       ).sort();
@@ -354,7 +358,7 @@ export default function OptionChainTradingPanel() {
             </div>
           </div>
         ) : null}
-        <div className="grid grid-cols-2 border-b border-border/70 md:grid-cols-4">
+        <div className="grid grid-cols-2 border-b border-border/70 md:grid-cols-5">
           <div className="border-r border-border/70 px-5 py-3">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
               Expiry
@@ -378,6 +382,11 @@ export default function OptionChainTradingPanel() {
             <div className="mt-1 font-mono text-sm font-semibold">
               {openTrades.length}
             </div>
+          </div>
+          <div className="border-r border-border/70 px-5 py-3">
+            <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Unified cash</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{unified?.account ? money(unified.account.cash) : "—"}</div>
+            <div className="mt-1 text-[9px] text-muted-foreground">shared paper account</div>
           </div>
           <div className="px-5 py-3">
             <div className="text-[9px] uppercase tracking-wider text-muted-foreground">
