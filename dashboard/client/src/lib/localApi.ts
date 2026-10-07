@@ -164,16 +164,6 @@ export async function ackAlert(id: number): Promise<{ ok: boolean; id: number }>
 export async function ackAllAlerts(): Promise<{ ok: boolean; acknowledged: number }> { return json(`${API_BASE}/api/alerts/ack-all`, { method: "POST" }); }
 export async function getMarketScan(limit = 5, signal?: AbortSignal): Promise<{ picks: MarketPick[]; excluded: Array<{ symbol: string; reason: string }>; asOf: string; methodology: string; disclaimer: string }> { return json(`${API_BASE}/api/market/scan?limit=${Math.max(1, Math.min(5, Math.round(limit)))}`, { signal }); }
 export async function getPredictionPerformance(days = 30, signal?: AbortSignal): Promise<PredictionPerformance> { return json<PredictionPerformance>(`${API_BASE}/api/predictions/performance?days=${Math.max(1, Math.min(365, Math.round(days)))}`, { signal }); }
-export type LivePredictionUnavailable = {
-  ok: false;
-  status: "NO_LIVE_PREDICTION";
-  error: "NO_PREDICTION_HISTORY" | "MODEL_NOT_READY" | "ML_INFERENCE_UNAVAILABLE" | string;
-  reason?: string | null;
-  message?: string | null;
-  symbol: string;
-  horizon: "1d" | "3d" | "5d";
-};
-
 export async function getLivePrediction(
   symbol: string,
   horizon: 1 | 3 | 5 = 1,
