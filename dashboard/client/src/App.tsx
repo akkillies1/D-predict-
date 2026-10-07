@@ -30,7 +30,7 @@ function App() {
             <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between px-4 py-2.5 lg:px-8">
               <div className="font-display text-sm font-semibold tracking-wide text-[#c8f169]">D‑PREDICT</div>
               <nav className="flex gap-1 text-xs font-semibold">
-                {([["trade", "Trade"], ["decision", "Decision"]] as [View, string][]).map(([key, label]) => (
+                {([["trade", "Paper Lab"], ["decision", "Decision"]] as [View, string][]).map(([key, label]) => (
                   <button key={key} onClick={() => select(key)} className={`rounded-lg px-4 py-1.5 transition-colors ${view === key ? "bg-[#142a25] text-[#c8f169]" : "text-[#789087] hover:text-[#d7e8d9]"}`}>{label}</button>
                 ))}
               </nav>
