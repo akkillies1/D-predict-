@@ -40,7 +40,12 @@ export default function DatabaseSettings() {
       const response = await fetch("/api/system/database/setup", { method: "POST" });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error ?? "Could not open database setup");
-      setMessage("Database setup opened. Finish the setup window, then refresh this panel.");
+      if (typeof payload.launchUrl === "string") {
+        window.location.href = payload.launchUrl;
+        setMessage("Opening the native database setup window...");
+      } else {
+        setMessage("Database setup is ready. Finish the setup window, then refresh this panel.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not open database setup");
     } finally {

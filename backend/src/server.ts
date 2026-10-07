@@ -338,6 +338,58 @@ app.use("/api/shadow", createShadowRouter(pool));
 app.use("/api/paper", createPaperRouter(pool));
 // Optional bring-your-own-key assistant; loopback-only, key never leaves as-is.
 app.use("/api/ai", createAiRouter(pool));
+// Runtime database status is intentionally read-only. The host installer owns
+// configuration; this endpoint exposes the state already supplied to the API container.
+app.get("/api/system/database", async (_req, res) => {
+  const modeValue = String(process.env.DATABASE_MODE ?? "").trim();
+  const mode = modeValue === "local_postgres" || modeValue === "supabase_cloud" || modeValue === "supabase_self_hosted" ? modeValue : null;
+  const configured = Boolean(mode && process.env.DATABASE_URL);
+  if (!configured) {
+    return res.json({
+      ok: true,
+      configured: false,
+      healthy: false,
+      mode,
+      dataRoot: process.env.D_PREDICT_DATA_DIR ?? null,
+      configPath: process.env.DPREDICT_CONFIG_PATH ?? null,
+      error: "DATABASE_NOT_CONFIGURED",
+    });
+  }
+  try {
+    await pool?.query("select 1");
+    return res.json({
+      ok: true,
+      configured: true,
+      healthy: true,
+      mode,
+      dataRoot: mode === "local_postgres" ? (process.env.D_PREDICT_DATA_DIR ?? null) : null,
+      configPath: process.env.DPREDICT_CONFIG_PATH ?? null,
+      error: null,
+    });
+  } catch (error) {
+    return res.json({
+      ok: true,
+      configured: true,
+      healthy: false,
+      mode,
+      dataRoot: mode === "local_postgres" ? (process.env.D_PREDICT_DATA_DIR ?? null) : null,
+      configPath: process.env.DPREDICT_CONFIG_PATH ?? null,
+      error: error instanceof Error ? error.message : "DATABASE_UNHEALTHY",
+    });
+  }
+});
+
+// The API runs inside Docker and cannot directly open a Windows PowerShell
+// window. The browser therefore receives a host protocol URI; the installer
+// registers dpredict-database:// to launch database-setup.ps1 on Windows.
+app.post("/api/system/database/setup", (_req, res) => {
+  return res.json({
+    ok: true,
+    launchUrl: "dpredict-database://open",
+    message: "Opening the native D-Predict database setup window.",
+  });
+});
+
 // Read-only: reports whether a newer public release exists. Applying an update
 // is a host-side action the api container cannot perform.
 app.get("/api/updates/status", async (_req, res) => {
