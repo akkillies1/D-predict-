@@ -244,6 +244,10 @@ try {
     exit 0
 }
 catch {
+    if ($_.Exception.Message -eq 'INSTALL_CANCELLED') {
+        Log 'D-Predict installation cancelled by the user.'
+        exit 2
+    }
     Log "ERROR: $($_.Exception.Message)"
     Write-Host "`nD-Predict setup failed." -ForegroundColor Red
     Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Red
