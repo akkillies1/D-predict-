@@ -261,6 +261,7 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
               <div className="mt-4 flex items-start justify-between">
                 <div>
                   <div className="font-mono-ui text-lg font-semibold">{symbol}</div>
+              <div className="mt-1 font-mono-ui text-[8px] uppercase tracking-[.14em] text-[#e5b55f]">MANUAL PAPER ORDER · NOT DECISION ENGINE APPROVED</div>
                   <div className="text-[10px] text-[#789087]">{quote?.status === "LIVE" ? "live 1-min bar" : quote?.status === "CACHED" ? "recent bar" : quote?.status === "STALE" ? "stale — market may be closed" : "awaiting data"}</div>
                 </div>
                 <div className="text-right">
@@ -321,7 +322,7 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
               </div>
 
               <button disabled={busy || !estimate} onClick={() => void place()} className={`mt-4 w-full rounded-lg py-2.5 text-sm font-semibold text-[#08120f] transition-transform active:scale-[.99] disabled:opacity-50 ${side === "BUY" ? "bg-[#c8f169]" : "bg-[#ff9d91]"}`}>{busy ? "Placing…" : `${side} ${product} ${orderType} · ${symbol}`}</button>
-              <div className="mt-2 flex items-center gap-1 text-[9px] leading-relaxed text-[#5c736a]"><ShieldAlert size={11} className="shrink-0" /> Full cash is debited for every product (no leverage) so the ledger stays honest. Fills use real persisted data.</div>
+              <div className="mt-2 flex items-center gap-1 text-[9px] leading-relaxed text-[#5c736a]"><ShieldAlert size={11} className="shrink-0" /> Manual paper orders are separate from the authoritative Decision Candidate. They do not become a backend recommendation. Full cash is debited for every product (no leverage); fills use real persisted data.</div>
             </div>
 
             {/* Right: tabs */}
