@@ -19,8 +19,8 @@ import { Card, CardContent } from "./ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { getShadowResource } from "@/lib/localApi";
 
-const API = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:4100";
 const POLL_MS = 15_000;
 
 type BlotterTrade = {
@@ -131,17 +131,11 @@ type DatabaseRuntimeStatus = {
 };
 
 async function getDatabaseRuntimeStatus(): Promise<DatabaseRuntimeStatus> {
-  const response = await fetch(`${API}/api/system/database`, { cache: "no-store" });
-  const body = await response.json().catch(() => null) as DatabaseRuntimeStatus | null;
-  if (!response.ok || !body) throw new Error("Database status unavailable");
-  return body;
-}
-
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  const body = await response.json();
-  if (!response.ok || body.ok === false) throw new Error(body.message ?? body.error ?? `Request failed: ${url}`);
-  return body as T;
+  return fetch(`${import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:4100"}/api/system/database`, { cache: "no-store" }).then(async response => {
+    const body = await response.json().catch(() => null) as DatabaseRuntimeStatus | null;
+    if (!response.ok || !body) throw new Error("Database status unavailable");
+    return body;
+  });
 }
 
 function StatCard({ label, value, tone, sub }: { label: string; value: string; tone?: string; sub?: string }) {
@@ -389,7 +383,7 @@ function DetailDialog({ tradeId, source, onClose }: { tradeId: string | null; so
     setDetail(null);
     setError(null);
     if (!tradeId) return;
-    void getJson<Detail>(`${API}/api/shadow/trades/${tradeId}?source=${source}`)
+    void getShadowResource<Detail>("/trades/${tradeId}?source=${source}")
       .then(setDetail)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load trade"));
   }, [tradeId, source]);
@@ -486,10 +480,10 @@ export default function ShadowTradingPanel() {
         return;
       }
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
-        getJson<{ summary: Summary }>(`${API}/api/shadow/portfolio`),
-        getJson<{ trades: BlotterTrade[] }>(`${API}/api/shadow/blotter`),
-        getJson<{ points: CurvePoint[] }>(`${API}/api/shadow/equity-curve?days=${days}`),
-        getJson<Stats>(`${API}/api/shadow/stats?days=${days}`),
+        getShadowResource<{ summary: Summary }>("/portfolio"),
+        getShadowResource<{ trades: BlotterTrade[] }>("/blotter"),
+        getShadowResource<{ points: CurvePoint[] }>("/equity-curve?days=${days}"),
+        getShadowResource<Stats>("/stats?days=${days}"),
       ]);
       setSummary(portfolio.summary);
       setTrades(blotter.trades);
@@ -511,10 +505,8 @@ export default function ShadowTradingPanel() {
   async function closeTrade(t: BlotterTrade) {
     setBusy(t.id);
     try {
-      const url = t.source === "MANUAL" ? `${API}/api/shadow/paper-trades/${t.id}/close` : `${API}/api/shadow/trades/${t.id}/close`;
-      const response = await fetch(url, { method: "POST" });
-      const body = await response.json();
-      if (!response.ok || body.ok === false) throw new Error(body.message ?? body.error ?? "Could not close trade");
+      const url = t.source === "MANUAL" ? `/paper-trades/${t.id}/close` : `/trades/${t.id}/close`;
+      const body = await getShadowResource<any>(url.replace(/^.*\/api\/shadow/, ""), { method: "POST" });
       await refresh(range);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not close trade");
