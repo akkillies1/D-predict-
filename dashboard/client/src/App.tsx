@@ -49,7 +49,7 @@ function App() {
             </section>
           ) : (
             <div className="space-y-10">
-              <section id="decision" aria-labelledby="decision-section-title">
+              <section id="decision-lifecycle" aria-labelledby="decision-section-title">
                 <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
                   <div className="flex items-end justify-between gap-4">
                     <div>
@@ -83,7 +83,7 @@ function App() {
                 <ModelCoveragePanel />
               </section>
 
-              <section id="paper-lab" aria-labelledby="paper-section-title">
+              <section id="paper-lab-section" aria-labelledby="paper-section-title">
                 <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
                   <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">04 / Paper Lab</div>
                   <h2 id="paper-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">Paper execution & shadow state</h2>
