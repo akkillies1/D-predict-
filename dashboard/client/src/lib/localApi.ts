@@ -58,7 +58,7 @@ export type LivePrediction = { ok: boolean; symbol: string; timestamp: string; h
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string } | null; throw new Error(body?.message ?? body?.error ?? `API returned ${response.status}`); } return response.json() as Promise<T>; }
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> { return json<LocalHealth>(`${API_BASE}/health`, { signal }); }
-export async function getSystemReadiness(signal?: AbortSignal): Promise<SystemReadiness> { return json<SystemReadiness>(`${API_BASE}/ready`, { signal }); }
+export async function getSystemReadiness(signal?: AbortSignal): Promise<SystemReadiness> { const response = await fetch(`${API_BASE}/ready`, { signal }); return response.json() as Promise<SystemReadiness>; }
 export function localApiBaseUrl() { return API_BASE; }
 export async function getMarketOverview(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview | null> { const payload = await json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/overview`, { signal }); return payload.ok ? payload : null; }
 export async function getLiveQuote(symbol = "NIFTY", signal?: AbortSignal): Promise<MarketOverview | null> { const payload = await json<MarketOverview>(`${API_BASE}/api/market/${encodeURIComponent(symbol)}/live`, { signal }); return payload.ok ? payload : null; }
