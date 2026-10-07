@@ -349,7 +349,7 @@ export default function OptionChainTradingPanel() {
                   onClick={() => void executeRecommendation()}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  PAPER VALIDATE ${intelligence.recommendation.action === "CALL_VERTICAL" || intelligence.recommendation.action === "PUT_VERTICAL" ? "STRATEGY" : "CANDIDATE"}
+                  PAPER VALIDATE {intelligence.recommendation.action === "CALL_VERTICAL" || intelligence.recommendation.action === "PUT_VERTICAL" ? "STRATEGY" : "CANDIDATE"}
                 </button>
               </div>
             ) : null}
