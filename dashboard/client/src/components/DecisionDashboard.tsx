@@ -66,7 +66,8 @@ import {
   type LivePrediction,
   type LivePredictionUnavailable,
   type PredictionPerformance,
-  type DecisionCandidate,\n  type LivePredictionResult,
+  type DecisionCandidate,
+  type LivePredictionResult,
   type TrainingCoverage,
   type AiStatus,
   type PaperState,
@@ -268,7 +269,8 @@ export default function DecisionDashboard() {
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
-  const [livePrediction, setLivePrediction] = useState<LivePredictionResult | null>(null);\n  const [candidateError, setCandidateError] = useState<{ error: string; message?: string; status?: number } | null>(null);
+  const [livePrediction, setLivePrediction] = useState<LivePredictionResult | null>(null);
+  const [candidateError, setCandidateError] = useState<{ error: string; message?: string; status?: number } | null>(null);
   const [decisionCandidate, setDecisionCandidate] = useState<DecisionCandidate | null>(null);
   const [rankedCandidates, setRankedCandidates] = useState<DecisionCandidate[]>([]);
   const [candidateScanLoading, setCandidateScanLoading] = useState(false);
