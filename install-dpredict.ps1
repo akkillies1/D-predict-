@@ -1,7 +1,8 @@
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\D-Predict'),
     [string]$SourceRef = 'main',
-    [string]$AppVersion = ''
+    [string]$AppVersion = '',
+    [switch]$ElevatedChild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,19 @@ function Log([string]$Message) {
 # docker-compose starts the api container with `env_file: .env`, and that container
 # has no host access, so the installed version reaches the update check only
 # through this file.
+
+function Ensure-InstallerElevation {
+    if ($ElevatedChild) { return }
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return }
+    $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $PSCommandPath),
+        '-InstallDir',('"{0}"' -f $InstallDir),'-SourceRef',('"{0}"' -f $SourceRef),
+        '-AppVersion',('"{0}"' -f $AppVersion),'-ElevatedChild')
+    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList $args -WorkingDirectory (Split-Path -Parent $PSCommandPath) -Wait -PassThru
+    exit $child.ExitCode
+}
+
 function Set-EnvValue([string]$Path, [string]$Key, [string]$Value) {
     $lines = @()
     if (Test-Path $Path) { $lines = @(Get-Content $Path -ErrorAction SilentlyContinue) }
@@ -122,6 +136,7 @@ function Show-BootstrapInstaller {
 }
 
 try {
+    Ensure-InstallerElevation
     Log "D-Predict installer starting. InstallDir=$InstallDir SourceRef=$SourceRef"
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
