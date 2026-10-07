@@ -96,13 +96,10 @@ export async function runDecisionAgent(question: string, model: string | null, h
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("
-
-");
+    const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
     for (const frame of frames) {
-      const lines = frame.split("
-");
+      const lines = frame.split("\n");
       const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim() || "message";
       const dataLine = lines.find(line => line.startsWith("data:"));
       if (!dataLine) continue;
@@ -247,13 +244,11 @@ export async function streamAiChat(input: { question: string; evidence?: AiEvide
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("
-");
+    let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).replace(/\r$/, "");
       buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("
-");
+      newline = buffer.indexOf("\n");
       if (line.startsWith("event:")) {
         if (line.slice(6).trim() === "aierror") failure = { error: "AI_STREAM_INTERRUPTED" };
         continue;
@@ -352,13 +347,11 @@ export async function runAiAgent(input: {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("
-");
+    let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).replace(/\r$/, "");
       buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("
-");
+      newline = buffer.indexOf("\n");
       if (line.startsWith("event:")) { eventName = line.slice(6).trim(); continue; }
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
