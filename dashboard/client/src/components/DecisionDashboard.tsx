@@ -38,6 +38,7 @@ import {
   getLatestSignal,
   getLiveQuote,
   getLocalHealth,
+  getSystemReadiness,
   getTrainingCoverage,
   getAiStatus,
   getLivePrediction,
@@ -245,7 +246,8 @@ export default function DecisionDashboard() {
     () => localStorage.getItem(STORAGE_KEY) || "NIFTY"
   );
   const [instrumentName, setInstrumentName] = useState<string | null>(null);
-  const [forecastHorizon, setForecastHorizon] = useState<1 | 3 | 5>(5);
+  const [forecastHorizon, setForecastHorizon] = useState<1 | 3 | 5>(5); // ML horizon: backend supports only 1d/3d/5d
+  const [statisticalHorizon, setStatisticalHorizon] = useState<1 | 3 | 5 | 10 | 20 | 30>(5);
   const [market, setMarket] = useState<MarketOverview | null>(null);
   const [history, setHistory] = useState<PriceBar[]>([]);
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>(() => {
@@ -275,6 +277,7 @@ export default function DecisionDashboard() {
   const [optionOrderMessage, setOptionOrderMessage] = useState<string | null>(null);
   const [watchlistSaved, setWatchlistSaved] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof getSystemReadiness>> | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [trainingCoverage, setTrainingCoverage] = useState<TrainingCoverage | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
@@ -313,23 +316,25 @@ export default function DecisionDashboard() {
   );
 
   const refreshPaperAnalytics = async () => { try { setPaperAnalytics(await getPaperAnalytics(30)); } catch { setPaperAnalytics(null); } };
-  const refreshTraining = async () => { try { setTrainingRun(await runTraining({ trigger: "DASHBOARD_MANUAL" })); } catch (error) { setTrainingRun({ ok: false, error: error instanceof Error ? error.message : "Training request failed" }); } };
+  const refreshTraining = async () => { try { setTrainingRun(await runTraining({ trigger: "MANUAL" })); } catch (error) { setTrainingRun({ ok: false, error: error instanceof Error ? error.message : "Training request failed" }); } };
 
   const refresh = useCallback(async () => {
     const requestId = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [health, live, bars, latest, forecastResult, coverageResult, aiResult] = await Promise.allSettled([
+      const [health, ready, live, bars, latest, forecastResult, coverageResult, aiResult] = await Promise.allSettled([
         getLocalHealth(),
+        getSystemReadiness(),
         getLiveQuote(symbol),
         getMarketHistory(symbol, chartTimeframe === "1m" ? "1m" : "1d", undefined, chartTimeframe === "1m" ? 400 : chartTimeframe === "1d" ? 140 : 520),
         getLatestSignal(symbol),
-        getForecast(symbol, forecastHorizon),
+        getForecast(symbol, statisticalHorizon),
         getTrainingCoverage(),
         getAiStatus(),
       ]);
       if (requestId !== refreshSequence.current) return;
       setConnected(health.status === "fulfilled" && health.value.ok);
+      setReadiness(ready.status === "fulfilled" ? ready.value : null);
       setMarket(live.status === "fulfilled" ? live.value : null);
       setHistory(bars.status === "fulfilled" ? bars.value : []);
       setSignal(latest.status === "fulfilled" ? latest.value : null);
@@ -401,7 +406,7 @@ export default function DecisionDashboard() {
       if (requestId === refreshSequence.current) setLoading(false);
       if (requestId === refreshSequence.current) setEnrichmentLoading(false);
     }
-  }, [chartTimeframe, forecastHorizon, symbol]);
+  }, [chartTimeframe, forecastHorizon, statisticalHorizon, symbol]);
 
   useEffect(() => {
     void refresh();
@@ -640,9 +645,9 @@ export default function DecisionDashboard() {
       timestamp,
     };
   }, [options, market?.close]);
-  const decision = thesis?.decision ?? signal?.direction;
+  const decision = decisionCandidate?.status ?? "ABSTAIN";
   const dataStatus = market?.status ?? "OFFLINE";
-  const tradeReady = thesis?.decision === "EXECUTABLE";
+  const tradeReady = decisionCandidate?.status === "PAPER_CANDIDATE";
   const saveToWatchlist = useCallback(async () => {
     try {
       await addToWatchlist(symbol);
@@ -681,16 +686,9 @@ export default function DecisionDashboard() {
       setScanLoading(false);
     }
   }, [forecastHorizon]);
-  const blockers = [
-    !signal ? "No stored model signal" : null,
-    signal && !thesis ? "Trade thesis unavailable" : null,
-    thesis && thesis.distributionStatus !== "CALIBRATED"
-      ? `Distribution: ${thesis.distributionStatus ?? "unknown"}`
-      : null,
-    dataStatus === "STALE" || dataStatus === "OFFLINE"
-      ? `Market data ${dataStatus.toLowerCase()}`
-      : null,
-  ].filter(Boolean) as string[];
+  const blockers = decisionCandidate?.blockers.map(item => `${item.name}: ${item.reason}`) ?? [
+    "Decision engine result unavailable",
+  ];
   const isRefreshing = loading || enrichmentLoading;
 
   return (
@@ -1079,7 +1077,7 @@ export default function DecisionDashboard() {
               <div>
                 <Label>Statistical baseline forecast / {instrumentName ?? symbol}</Label>
                 <h2 className="mt-1 flex flex-wrap items-center gap-2 font-display text-xl font-semibold">
-                  Next {forecastHorizon} trading days
+                  Next {statisticalHorizon} trading days
                   {forecast?.status === "STATISTICAL_BASELINE" ? (
                     <span
                       className="rounded-md border border-[#4e4226] bg-[#211d12] px-2 py-0.5 font-mono-ui text-[9px] tracking-[.12em] text-[#e5b55f]"
@@ -1091,16 +1089,18 @@ export default function DecisionDashboard() {
                 </h2>
               </div>
               <select
-                value={forecastHorizon}
+                value={statisticalHorizon}
                 onChange={event =>
-                  setForecastHorizon(Number(event.target.value) as 1 | 3 | 5)
+                  setStatisticalHorizon(Number(event.target.value) as 1 | 3 | 5 | 10 | 20 | 30)
                 }
                 className="rounded-lg border border-[#26453a] bg-[#10211c] px-3 py-2 font-mono-ui text-[10px] text-[#d7e8d9] outline-none"
               >
+                <option value={1}>1 day</option>
                 <option value={3}>3 days</option>
                 <option value={5}>5 days</option>
                 <option value={10}>10 days</option>
                 <option value={20}>20 days</option>
+                <option value={30}>30 days</option>
               </select>
             </div>
             {forecast ? (
@@ -1443,7 +1443,7 @@ export default function DecisionDashboard() {
           )}
         </section>
 
-        <section className="mb-6 rounded-2xl border border-[#1d332f] bg-[#0b1714] p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-mono-ui text-[9px] uppercase tracking-[.16em] text-[#70887d]">Prediction & paper telemetry</div><h2 className="mt-1 font-display text-xl font-semibold text-[#eff7ea]">Performance Control</h2></div><div className="flex gap-2"><button onClick={() => void refreshPaperAnalytics()} className="rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.1em] text-[#aebeb3]">Refresh analytics</button><button disabled={trainingBusy} onClick={async () => { setTrainingBusy(true); await refreshTraining(); setTrainingBusy(false); }} className="rounded-lg bg-[#c8f169] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40">{trainingBusy ? "Training…" : "Run model check"}</button></div></div>{paperAnalytics ? <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4"><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">30D trades</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.trades}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Win rate</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.winRate == null ? "—" : (paperAnalytics.summary.winRate * 100).toFixed(1) + "%"}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Realized P&L</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">₹{paperAnalytics.summary.realizedPnl.toFixed(0)}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Actions</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.actions}</div></div></div> : <div className="mt-4 text-[10px] text-[#557067]">Paper analytics unavailable until the local paper ledger is initialized.</div>}{trainingRun ? <div className="mt-3 rounded-xl border border-[#1d332f] bg-[#07100f] p-3 text-[10px] text-[#aebeb3]">{trainingRun.ok ? "Training run " + (trainingRun.status ?? "completed") + " · " + (trainingRun.summary?.trained ?? 0) + " trained · " + (trainingRun.summary?.upToDate ?? 0) + " already current." : "Training request failed: " + (trainingRun.error ?? trainingRun.message ?? "unknown error")}</div> : null}</section>
+        <section className="mb-6 rounded-2xl border border-[#1d332f] bg-[#0b1714] p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-mono-ui text-[9px] uppercase tracking-[.16em] text-[#70887d]">Prediction & paper telemetry</div><h2 className="mt-1 font-display text-xl font-semibold text-[#eff7ea]">Performance Control</h2></div><div className="flex gap-2"><button onClick={() => void refreshPaperAnalytics()} className="rounded-lg border border-[#29463b] px-3 py-2 font-mono-ui text-[9px] uppercase tracking-[.1em] text-[#aebeb3]">Refresh analytics</button><button disabled={trainingBusy} onClick={async () => { setTrainingBusy(true); await refreshTraining(); setTrainingBusy(false); }} className="rounded-lg bg-[#c8f169] px-3 py-2 font-mono-ui text-[9px] font-bold uppercase tracking-[.1em] text-[#10200b] disabled:opacity-40">{trainingBusy ? "Training…" : "Run training"}</button></div></div>{paperAnalytics ? <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4"><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">30D trades</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.trades}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Win rate</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.winRate == null ? "—" : (paperAnalytics.summary.winRate * 100).toFixed(1) + "%"}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Realized P&L</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">₹{paperAnalytics.summary.realizedPnl.toFixed(0)}</div></div><div className="rounded-xl border border-[#1d332f] bg-[#07100f] p-3"><div className="text-[9px] text-[#70887d]">Actions</div><div className="mt-1 text-lg font-semibold text-[#eff7ea]">{paperAnalytics.summary.actions}</div></div></div> : <div className="mt-4 text-[10px] text-[#557067]">Paper analytics unavailable until the local paper ledger is initialized.</div>}{trainingRun ? <div className="mt-3 rounded-xl border border-[#1d332f] bg-[#07100f] p-3 text-[10px] text-[#aebeb3]">{trainingRun.ok ? "Training run " + (trainingRun.status ?? "completed") + " · " + (trainingRun.summary?.trained ?? 0) + " trained · " + (trainingRun.summary?.upToDate ?? 0) + " already current." : "Training request failed: " + (trainingRun.error ?? trainingRun.message ?? "unknown error")}</div> : null}</section>
 
         <section
           id="paper-lab"
