@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Activity, BrainCircuit, ChartNoAxesCombined, FlaskConical, Gauge, Layers3, Settings2, ShieldCheck } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -16,102 +17,132 @@ import ModelCoveragePanel from "./components/ModelCoveragePanel";
 import TradingDesk from "./components/TradingDesk";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
-type View = "trade" | "decision";
+type View = "decision" | "evidence" | "validation" | "paper" | "ai" | "system";
+
+const tabs: Array<{ key: View; label: string; icon: typeof Gauge; eyebrow: string }> = [
+  { key: "decision", label: "Decision", icon: Gauge, eyebrow: "01" },
+  { key: "evidence", label: "Evidence", icon: ChartNoAxesCombined, eyebrow: "02" },
+  { key: "validation", label: "Validation", icon: FlaskConical, eyebrow: "03" },
+  { key: "paper", label: "Paper Lab", icon: ShieldCheck, eyebrow: "04" },
+  { key: "ai", label: "AI", icon: BrainCircuit, eyebrow: "05" },
+  { key: "system", label: "System", icon: Settings2, eyebrow: "06" },
+];
+
+function readInitialView(): View {
+  const hash = window.location.hash.replace(/^#/, "") as View;
+  if (tabs.some(tab => tab.key === hash)) return hash;
+  const stored = localStorage.getItem("dpredict:view") as View | null;
+  return tabs.some(tab => tab.key === stored) ? stored! : "decision";
+}
 
 function App() {
-  const [view, setView] = useState<View>(() => (localStorage.getItem("dpredict:view") as View) || "decision");
-  const select = (next: View) => { setView(next); localStorage.setItem("dpredict:view", next); };
+  const [view, setView] = useState<View>(readInitialView);
+
+  const select = (next: View) => {
+    setView(next);
+    localStorage.setItem("dpredict:view", next);
+    window.history.replaceState(null, "", \`#\${next}\`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace(/^#/, "") as View;
+      if (tabs.some(tab => tab.key === hash)) setView(hash);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  const active = tabs.find(tab => tab.key === view) ?? tabs[0];
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <header className="sticky top-0 z-30 border-b border-[#1d332f] bg-[#08120f]/95 backdrop-blur">
-            <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between px-4 py-2.5 lg:px-8">
-              <div className="font-display text-sm font-semibold tracking-wide text-[#c8f169]">D‑PREDICT</div>
-              <nav className="flex gap-1 text-xs font-semibold">
-                {([["trade", "Paper Lab"], ["decision", "Decision"]] as [View, string][]).map(([key, label]) => (
-                  <button key={key} onClick={() => select(key)} className={`rounded-lg px-4 py-1.5 transition-colors ${view === key ? "bg-[#142a25] text-[#c8f169]" : "text-[#789087] hover:text-[#d7e8d9]"}`}>{label}</button>
-                ))}
-              </nav>
+          <header className="sticky top-0 z-30 border-b border-[#1d332f] bg-[#08120f]/95 backdrop-blur-xl">
+            <div className="mx-auto max-w-[1600px] px-3 sm:px-5 lg:px-8">
+              <div className="flex min-h-[58px] items-center justify-between gap-4">
+                <button type="button" onClick={() => select("decision")} className="flex shrink-0 items-center gap-3 text-left">
+                  <span className="grid size-8 place-items-center rounded-lg border border-[#355447] bg-[#0d211b] text-[#c8f169]">
+                    <Activity className="size-4" />
+                  </span>
+                  <span>
+                    <span className="block font-display text-sm font-bold tracking-[.12em] text-[#c8f169]">D‑PREDICT</span>
+                    <span className="hidden text-[9px] uppercase tracking-[.18em] text-[#668077] sm:block">Decision intelligence terminal</span>
+                  </span>
+                </button>
+
+                <nav aria-label="Primary" className="flex min-w-0 flex-1 justify-end gap-1 overflow-x-auto py-1">
+                  {tabs.map(tab => {
+                    const Icon = tab.icon;
+                    const selected = view === tab.key;
+                    return (
+                      <button key={tab.key} type="button" aria-current={selected ? "page" : undefined} onClick={() => select(tab.key)}
+                        className={\`group flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-semibold transition-all sm:px-3 \${selected ? "bg-[#142a25] text-[#c8f169] shadow-[inset_0_0_0_1px_rgba(200,241,105,.14)]" : "text-[#718980] hover:bg-[#0e1d19] hover:text-[#d7e8d9]"}\`}>
+                        <Icon className="size-3.5" /><span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              </div>
             </div>
           </header>
+
           <UpdateBanner />
-          {view === "trade" ? (
-            <section aria-label="Paper Lab" id="paper-lab">
-              <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                <div className="rounded-xl border border-[#29483d] bg-[#0c1b17] px-4 py-3">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.18em] text-[#c8f169]">Paper Lab</div>
-                  <p className="mt-1 text-xs text-[#8da59a]">Simulation and research only. No broker orders are sent.</p>
+
+          <main className="min-h-[calc(100vh-58px)]">
+            <div className="mx-auto max-w-[1540px] px-4 pt-5 sm:px-6 lg:px-8">
+              <div className="mb-5 flex items-end justify-between gap-4">
+                <div>
+                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">{active.eyebrow} / {active.label}</div>
+                  <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-[#edf5e9]">{active.label}</h1>
+                  <p className="mt-1 max-w-3xl text-xs text-[#70887d]">
+                    {view === "decision" && "The backend decision candidate is authoritative; forecast, evidence and execution remain separate layers."}
+                    {view === "evidence" && "Market context and research explain what the system sees without becoming an execution authority."}
+                    {view === "validation" && "Model coverage and realized performance show whether the research stack is ready for promotion."}
+                    {view === "paper" && "Virtual execution only. Orders, positions and P&L are simulated and never reach a broker."}
+                    {view === "ai" && "Bounded local AI can explain D‑Predict evidence but cannot override deterministic gates."}
+                    {view === "system" && "Runtime, database and model configuration. Missing state is surfaced instead of hidden."}
+                  </p>
+                </div>
+                <div className="hidden items-center gap-2 rounded-full border border-[#29483d] bg-[#0c1b17] px-3 py-1.5 text-[10px] text-[#8da59a] md:flex">
+                  <Layers3 className="size-3.5 text-[#c8f169]" /> LOCAL · PAPER ONLY
                 </div>
               </div>
-              <TradingDesk />
-            </section>
-          ) : (
-            <div className="space-y-10">
-              <section id="decision-lifecycle" aria-labelledby="decision-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="flex items-end justify-between gap-4">
-                    <div>
-                      <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">01 / Decision</div>
-                      <h2 id="decision-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">Authoritative decision</h2>
-                      <p className="mt-1 text-xs text-[#70887d]">The backend candidate is the only source of paper eligibility.</p>
-                    </div>
+            </div>
+
+            {view === "decision" && <DecisionDashboard />}
+
+            {view === "evidence" && (
+              <section aria-label="Evidence" className="space-y-10">
+                <Research20Panel /><OptionChainTradingPanel /><ResearchPanel /><IPOAnalyzer />
+              </section>
+            )}
+
+            {view === "validation" && <section aria-label="Validation"><ModelCoveragePanel /></section>}
+
+            {view === "paper" && (
+              <section aria-label="Paper Lab" className="space-y-10 pb-12">
+                <div className="mx-auto max-w-[1540px] px-4 sm:px-6 lg:px-8">
+                  <div className="rounded-xl border border-[#29483d] bg-[#0c1b17] px-4 py-3">
+                    <div className="font-mono-ui text-[9px] uppercase tracking-[.18em] text-[#c8f169]">Research execution boundary</div>
+                    <p className="mt-1 text-xs text-[#8da59a]">Paper simulation only. No broker connection or exchange order submission exists.</p>
                   </div>
                 </div>
-                <DecisionDashboard />
+                <ShadowTradingPanel /><TradingDesk />
               </section>
+            )}
 
-              <section id="evidence" aria-labelledby="evidence-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">02 / Evidence</div>
-                  <h2 id="evidence-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">Evidence & market context</h2>
-                  <p className="mt-1 text-xs text-[#70887d]">Signals, options, research and market context explain the decision; they do not override it.</p>
-                </div>
-                <Research20Panel />
-                <OptionChainTradingPanel />
-                <ResearchPanel />
-                <IPOAnalyzer />
-              </section>
+            {view === "ai" && <section aria-label="AI" className="space-y-8"><AiAssistant /></section>}
 
-              <section id="validation" aria-labelledby="validation-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">03 / Validation</div>
-                  <h2 id="validation-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">Validation & model readiness</h2>
-                  <p className="mt-1 text-xs text-[#70887d]">Coverage and realized performance validate the system; neither creates a trade recommendation.</p>
-                </div>
-                <ModelCoveragePanel />
+            {view === "system" && (
+              <section aria-label="System" className="space-y-8 pb-12">
+                <DatabaseSettings /><AiSettings />
               </section>
-
-              <section id="paper-lab-section" aria-labelledby="paper-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">04 / Paper Lab</div>
-                  <h2 id="paper-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">Paper execution & shadow state</h2>
-                  <p className="mt-1 text-xs text-[#70887d]">All orders, positions and P&L are simulated. No broker execution exists.</p>
-                </div>
-                <ShadowTradingPanel />
-              </section>
-
-              <section id="ai" aria-labelledby="ai-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">05 / AI</div>
-                  <h2 id="ai-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">AI explanation & controls</h2>
-                  <p className="mt-1 text-xs text-[#70887d]">AI can explain backend evidence, but cannot override decision gates.</p>
-                </div>
-                <AiAssistant />
-              </section>
-
-              <section id="system" aria-labelledby="system-section-title">
-                <div className="mx-auto max-w-[1540px] px-4 pb-3 sm:px-6 lg:px-8">
-                  <div className="font-mono-ui text-[9px] uppercase tracking-[.2em] text-[#789087]">06 / System</div>
-                  <h2 id="system-section-title" className="mt-1 font-display text-xl font-semibold text-[#edf5e9]">System configuration</h2>
-                  <p className="mt-1 text-xs text-[#70887d]">Database and model configuration affect readiness; they never manufacture evidence.</p>
-                </div>
-                <DatabaseSettings />
-                <AiSettings />
-              </section>
-            </div>
-          )}
+            )}
+          </main>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
