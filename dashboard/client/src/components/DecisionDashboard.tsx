@@ -269,7 +269,7 @@ export default function DecisionDashboard() {
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [marketPicks, setMarketPicks] = useState<MarketPick[]>([]);
   const [predictionPerformance, setPredictionPerformance] = useState<PredictionPerformance | null>(null);
-  const [livePrediction, setLivePrediction] = useState<LivePredictionResult | null>(null);
+  const [livePrediction, setLivePrediction] = useState<LivePrediction | null>(null);
   const [livePredictionAvailability, setLivePredictionAvailability] = useState<LivePredictionUnavailable | null>(null);
   const [decisionCandidate, setDecisionCandidate] = useState<DecisionCandidate | null>(null);
   const [rankedCandidates, setRankedCandidates] = useState<DecisionCandidate[]>([]);
@@ -731,7 +731,7 @@ export default function DecisionDashboard() {
     decisionEngineError ? `${decisionEngineError.code}: ${decisionEngineError.message}` : "Decision engine result unavailable",
   ];
   const isRefreshing = loading || enrichmentLoading;
-  const mlPrediction = livePrediction && livePrediction.ok !== false ? livePrediction : null;
+  const livePrediction = livePrediction && livePrediction.ok !== false ? livePrediction : null;
 
   return (
     <div className="min-h-screen cockpit-shell text-[#eaf4e9]">
@@ -1390,51 +1390,51 @@ export default function DecisionDashboard() {
               <option value={5}>5 trading days</option>
             </select>
           </div>
-          {mlPrediction ? (
+          {livePrediction ? (
             <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-              <div className={`rounded-xl border ${mlPrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238]" : "border-[#5a432a]"} bg-[#09130f] p-4`}>
+              <div className={`rounded-xl border ${livePrediction.prediction_status === "PROMOTION_READY" ? "border-[#476238]" : "border-[#5a432a]"} bg-[#09130f] p-4`}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <Label>Model output · {mlPrediction.horizon}</Label>
-                    <div className={`mt-2 font-display text-3xl font-semibold ${mlPrediction.prediction === "UP" ? "text-[#c8f169]" : mlPrediction.prediction === "DOWN" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>
-                      {mlPrediction.prediction}
+                    <Label>Model output · {livePrediction.horizon}</Label>
+                    <div className={`mt-2 font-display text-3xl font-semibold ${livePrediction.prediction === "UP" ? "text-[#c8f169]" : livePrediction.prediction === "DOWN" ? "text-[#ff9d91]" : "text-[#e5b55f]"}`}>
+                      {livePrediction.prediction}
                     </div>
                   </div>
-                  <span className={`rounded-full border px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] ${mlPrediction.action_status.startsWith("ACTIONABLE") ? "border-[#476238] text-[#c8f169]" : "border-[#5a432a] text-[#c8b582]"}`}>
-                    {mlPrediction.action_status.replaceAll("_", " ")}
+                  <span className={`rounded-full border px-3 py-1 font-mono-ui text-[9px] uppercase tracking-[.12em] ${livePrediction.action_status.startsWith("ACTIONABLE") ? "border-[#476238] text-[#c8f169]" : "border-[#5a432a] text-[#c8b582]"}`}>
+                    {livePrediction.action_status.replaceAll("_", " ")}
                   </span>
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
                   {(["DOWN", "FLAT", "UP"] as const).map(label => (
                     <div key={label} className="rounded-lg border border-[#1d332f] bg-[#0b1714] p-3">
                       <Label>{label}</Label>
-                      <div className="mt-1 text-[#d7e8d9]">{pct(mlPrediction.probabilities[label])}</div>
+                      <div className="mt-1 text-[#d7e8d9]">{pct(livePrediction.probabilities[label])}</div>
                     </div>
                   ))}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-[#9fb4a8]">
-                  <div>Expected return: <strong className="text-[#d7e8d9]">{pct(mlPrediction.expected_return)}</strong></div>
-                  <div>Confidence: <strong className="text-[#d7e8d9]">{pct(mlPrediction.confidence)}</strong></div>
-                  <div>Probability margin: <strong className="text-[#d7e8d9]">{pct(mlPrediction.probability_margin)}</strong></div>
-                  <div>Calibration: <strong className="text-[#d7e8d9]">{mlPrediction.calibration_status}</strong></div>
-                  <div>OOS examples: <strong className="text-[#d7e8d9]">{mlPrediction.validation_oos_examples}</strong></div>
+                  <div>Expected return: <strong className="text-[#d7e8d9]">{pct(livePrediction.expected_return)}</strong></div>
+                  <div>Confidence: <strong className="text-[#d7e8d9]">{pct(livePrediction.confidence)}</strong></div>
+                  <div>Probability margin: <strong className="text-[#d7e8d9]">{pct(livePrediction.probability_margin)}</strong></div>
+                  <div>Calibration: <strong className="text-[#d7e8d9]">{livePrediction.calibration_status}</strong></div>
+                  <div>OOS examples: <strong className="text-[#d7e8d9]">{livePrediction.validation_oos_examples}</strong></div>
                 </div>
                 <div className="mt-3 rounded-lg border border-[#1d332f] bg-[#0b1714] p-3 text-[10px] text-[#9fb4a8]">
-                  <div className="flex flex-wrap justify-between gap-2"><span>Empirical return interval</span><strong className="text-[#d7e8d9]">{pct(mlPrediction.return_interval.p10)} · {pct(mlPrediction.return_interval.p50)} · {pct(mlPrediction.return_interval.p90)}</strong></div>
-                  <div className="mt-1 flex justify-between"><span>Probability net-positive after cost</span><strong className="text-[#c8f169]">{pct(mlPrediction.probability_net_positive)}</strong></div>
+                  <div className="flex flex-wrap justify-between gap-2"><span>Empirical return interval</span><strong className="text-[#d7e8d9]">{pct(livePrediction.return_interval.p10)} · {pct(livePrediction.return_interval.p50)} · {pct(livePrediction.return_interval.p90)}</strong></div>
+                  <div className="mt-1 flex justify-between"><span>Probability net-positive after cost</span><strong className="text-[#c8f169]">{pct(livePrediction.probability_net_positive)}</strong></div>
                 </div>
               </div>
               <div className="rounded-xl border border-[#1d332f] bg-[#09130f] p-4">
                 <Label>Evidence and model identity</Label>
                 <div className="mt-3 space-y-2 text-[10px] text-[#9fb4a8]">
-                  <div className="flex justify-between gap-3"><span>Model</span><strong className="text-right text-[#d7e8d9]">{mlPrediction.model_version}</strong></div>
-                  <div className="flex justify-between gap-3"><span>Training cutoff</span><strong className="text-right text-[#d7e8d9]">{new Date(mlPrediction.training_cutoff).toLocaleDateString("en-IN")}</strong></div>
-                  <div className="flex justify-between gap-3"><span>OOS accuracy</span><strong className="text-[#d7e8d9]">{pct(mlPrediction.oos_metrics.accuracy)}</strong></div>
-                  <div className="flex justify-between gap-3"><span>OOS log loss</span><strong className="text-[#d7e8d9]">{mlPrediction.oos_metrics.log_loss.toFixed(3)}</strong></div>
+                  <div className="flex justify-between gap-3"><span>Model</span><strong className="text-right text-[#d7e8d9]">{livePrediction.model_version}</strong></div>
+                  <div className="flex justify-between gap-3"><span>Training cutoff</span><strong className="text-right text-[#d7e8d9]">{new Date(livePrediction.training_cutoff).toLocaleDateString("en-IN")}</strong></div>
+                  <div className="flex justify-between gap-3"><span>OOS accuracy</span><strong className="text-[#d7e8d9]">{pct(livePrediction.oos_metrics.accuracy)}</strong></div>
+                  <div className="flex justify-between gap-3"><span>OOS log loss</span><strong className="text-[#d7e8d9]">{livePrediction.oos_metrics.log_loss.toFixed(3)}</strong></div>
                 </div>
                 <div className="mt-4 border-t border-[#1d332f] pt-3 text-[10px] leading-relaxed text-[#c8b582]">
-                  <div>{mlPrediction.action_reasons.map(reason => `• ${reason.replaceAll("_", " ")}`).join("  ")}</div>
-                  <div className="mt-2">{mlPrediction.action_status.startsWith("ACTIONABLE")
+                  <div>{livePrediction.action_reasons.map(reason => `• ${reason.replaceAll("_", " ")}`).join("  ")}</div>
+                  <div className="mt-2">{livePrediction.action_status.startsWith("ACTIONABLE")
                     ? "This individual forecast cleared the model, confidence, probability-margin, and net-edge gates. It remains research output, not a guarantee or an instruction to trade."
                     : "The system is intentionally not promoting this individual forecast as an action. The raw model output remains visible for research."}</div>
                 </div>
