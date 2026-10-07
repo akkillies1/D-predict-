@@ -15,6 +15,7 @@ import {
   type AgentTraceEntry,
   type AiEvidenceBlock,
   type AiMessage,
+  LocalApiError,
 } from "@/lib/localApi";
 import { openAiSettings } from "./AiSettings";
 
@@ -59,11 +60,15 @@ const PRESETS: Preset[] = [
     question: "Walk me through the current signal for this instrument. Quote only the stored numbers, and state plainly whether any of them are validated.",
     agentQuestion: "Read this symbol's newest ledger rows, then re-ask the model for a fresh 1d forecast and compare the two. Report the divergence the tool measured, whether the artifact behind either number is promotion-ready, and whether any row has a realized outcome yet. If the artifact is the reason it is abstaining, you may propose train_model for this one symbol and horizon and say what you expect the gate to measure — it still only runs if the user approves it.",
     async build(symbol) {
-      const [signal, prediction] = await Promise.all([getLatestSignal(symbol), getLivePrediction(symbol, 1)]);
-      if (!signal && !prediction) return { blocks: [], context: `${symbol}: no signal on record`, empty: `No stored signal or prediction row for ${symbol} yet. Nothing was invented for this panel.` };
+      const [signalResult, predictionResult] = await Promise.allSettled([getLatestSignal(symbol), getLivePrediction(symbol, 1)]);
+      const signal = signalResult.status === "fulfilled" ? signalResult.value : null;
+      const prediction = predictionResult.status === "fulfilled" ? predictionResult.value : null;
+      const predictionFailure = predictionResult.status === "rejected" ? predictionResult.reason : null;
+      if (!signal && !prediction && !predictionFailure) return { blocks: [], context: `${symbol}: no signal on record`, empty: `No stored signal or prediction row for ${symbol} yet. Nothing was invented for this panel.` };
       const blocks: AiEvidenceBlock[] = [];
       if (signal) blocks.push({ label: `Stored signal for ${symbol}`, asOf: signal.timestamp, data: { timestamp: signal.timestamp, direction: signal.direction, confidence: round(signal.confidence, 4), regime: signal.regime, reasonCodes: signal.reasonCodes, strategyVersion: signal.strategyVersion, modelVersion: signal.modelVersion } });
-      if (prediction?.ok) blocks.push({ label: `Prediction ledger row for ${symbol} (1d)`, asOf: prediction.timestamp, data: { timestamp: prediction.timestamp, prediction: prediction.prediction, probabilities: { DOWN: round(prediction.probabilities.DOWN, 4), FLAT: round(prediction.probabilities.FLAT, 4), UP: round(prediction.probabilities.UP, 4) }, expectedReturn: round(prediction.expected_return, 5), calibrationStatus: prediction.calibration_status, predictionStatus: prediction.prediction_status, actionStatus: prediction.action_status, actionReasons: prediction.action_reasons, promotionChecks: prediction.promotion_checks, oosMetrics: prediction.oos_metrics, validationExamples: prediction.validation_oos_examples } });
+      if (prediction) blocks.push({ label: `Prediction ledger row for ${symbol} (1d)`, asOf: prediction.timestamp, data: { timestamp: prediction.timestamp, prediction: prediction.prediction, probabilities: { DOWN: round(prediction.probabilities.DOWN, 4), FLAT: round(prediction.probabilities.FLAT, 4), UP: round(prediction.probabilities.UP, 4) }, expectedReturn: round(prediction.expected_return, 5), calibrationStatus: prediction.calibration_status, predictionStatus: prediction.prediction_status, actionStatus: prediction.action_status, actionReasons: prediction.action_reasons, promotionChecks: prediction.promotion_checks, oosMetrics: prediction.oos_metrics, validationExamples: prediction.validation_oos_examples } });
+      if (predictionFailure) blocks.push({ label: `ML prediction unavailable for ${symbol} (1d)`, data: { error: predictionFailure instanceof LocalApiError ? predictionFailure.code : "ML_INFERENCE_UNAVAILABLE", reason: predictionFailure instanceof Error ? predictionFailure.message : String(predictionFailure) } });
       return { blocks, context: `${symbol} signal state` };
     },
   },
