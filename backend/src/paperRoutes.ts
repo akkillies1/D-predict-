@@ -276,7 +276,7 @@ export async function matchRestingOrders(pool: Pool): Promise<boolean> {
 async function buildOptionPaperSnapshot(pool: Pool): Promise<{ trades: any[]; unrealizedPnl: number; marginReserved: number }> {
   const exists = await pool.query(`select to_regclass('public.option_paper_trades') as name`);
   if (!exists.rows[0]?.name) return { trades: [], unrealizedPnl: 0, marginReserved: 0 };
-  await pool.query(`alter table option_paper_trades add column if not exists margin_reserved numeric(16,2) not null default 0`);
+  await pool.query(`alter table option_paper_trades add column if not exists margin_reserved numeric(16,2) not null default 0; alter table option_paper_trades add column if not exists cash_entry_delta numeric(16,2) not null default 0`);
   const result = await pool.query(`select pt.*, oc.contract_id as contract_id from option_paper_trades pt join option_contracts oc on oc.contract_id=pt.contract_id order by pt.entry_timestamp desc limit 500`);
   const now = new Date(); let unrealizedPnl = 0; let marginReserved = 0; const trades: any[] = [];
   for (const row of result.rows) {
