@@ -479,7 +479,7 @@ export default function DecisionDashboard() {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "watch", symbol }));
   }, [symbol]);
 
-  const thesis = signal?.tradeThesis;
+  const thesis = signal?.tradeThesis; // legacy signal evidence only; never an execution authority
   const coverageSummary = trainingCoverage?.summary;
   const mlReady = (coverageSummary?.productionModels ?? 0) > 0;
   const liveActive = liveQuote?.status === "LIVE" && liveQuote.close != null && !!liveQuote.timestamp;
@@ -1002,7 +1002,7 @@ export default function DecisionDashboard() {
             ) : null}
           </Card>
           <Card className="p-5">
-            <Label>Model decision / reasons</Label>
+            <Label>Signal evidence / reasons</Label>
             <div
               className={`mt-2 font-display text-3xl font-bold ${tone(signal?.direction)}`}
             >
@@ -1400,7 +1400,7 @@ export default function DecisionDashboard() {
             </div>
           ) : (
             <div className="mt-4 rounded-xl border border-[#3c3120] bg-[#15120c] p-4 text-sm text-[#c8b582]">
-              Horizon-specific ML inference is unavailable or the instrument does not yet have enough daily history. No prediction is fabricated.
+              The ML inference path did not return a promoted prediction for this horizon. The authoritative decision engine remains the source of tradeability; no prediction is fabricated.
             </div>
           )}
         </section>
@@ -1514,13 +1514,13 @@ export default function DecisionDashboard() {
                   <Metric
                     label="Entry"
                     value={price(thesis.entryPrice)}
-                    sub="thesis entry"
+                    sub="legacy signal evidence"
                     icon={Target}
                   />
                   <Metric
                     label="Probability"
                     value={pct(thesis.probability)}
-                    sub="directional thesis"
+                    sub="legacy signal evidence"
                     icon={Gauge}
                   />
                   <Metric
@@ -1530,7 +1530,7 @@ export default function DecisionDashboard() {
                         ? "—"
                         : `${(thesis.expectedReturn * 100).toFixed(2)}%`
                     }
-                    sub="conditional forecast"
+                    sub="legacy signal evidence"
                     icon={Activity}
                   />
                   <Metric
@@ -1569,14 +1569,14 @@ export default function DecisionDashboard() {
                 </div>
               </>
             ) : (
-              <Empty text="No executable trade thesis. D-Predict will not invent targets, stop or ETA." />
+              <Empty text="No legacy signal thesis available. The decision engine does not invent targets, stops or ETA." />
             )}
           </Card>
           <Card className="p-5">
             <Label>Confidence ladder</Label>
             <div className="mt-5 space-y-4">
               {[
-                ["Forecast", thesis?.confidence ?? signal?.confidence],
+                ["ML / signal evidence", thesis?.confidence ?? signal?.confidence],
                 ["Research", research?.confidence],
                 ["Evidence agreement", research?.agreement],
                 [
