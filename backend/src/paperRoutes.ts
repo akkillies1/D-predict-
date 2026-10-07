@@ -403,6 +403,7 @@ export function createPaperRouter(pool: Pool | null): Router {
           await client.query(`delete from paper_orders where account_id=$1`, [ACCOUNT_ID]);
           await client.query(`delete from paper_positions where account_id=$1`, [ACCOUNT_ID]);
           if (optionTable.rows[0]?.name) await client.query(`delete from option_paper_trades`);
+          if (optionTable.rows[0]?.strategies) await client.query(`delete from paper_option_strategies`);
           await client.query(`update paper_accounts set cash=starting_capital, realized_pnl=0, total_costs=0, updated_at=now() where id=$1`, [ACCOUNT_ID]);
         }
         await client.query("commit");
