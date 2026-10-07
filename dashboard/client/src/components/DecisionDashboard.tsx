@@ -379,13 +379,11 @@ export default function DecisionDashboard() {
         } else {
           setLivePrediction(null);
           const failure = livePredictionResult.reason;
-          const code = failure instanceof LocalApiError ? failure.code : "ML_INFERENCE_UNAVAILABLE";
-          const message = failure instanceof LocalApiError ? failure.message : failure instanceof Error ? failure.message : String(failure);
           setLivePredictionAvailability({
             ok: false,
             status: "NO_LIVE_PREDICTION",
-            error: code,
-            reason: message,
+            error: failure instanceof LocalApiError ? failure.code : "ML_INFERENCE_UNAVAILABLE",
+            reason: failure instanceof LocalApiError ? failure.message : failure instanceof Error ? failure.message : String(failure),
             symbol,
             horizon: `${forecastHorizon}d` as "1d" | "3d" | "5d",
           });
@@ -724,7 +722,6 @@ export default function DecisionDashboard() {
     decisionEngineError ? `${decisionEngineError.code}: ${decisionEngineError.message}` : "Decision engine result unavailable",
   ];
   const isRefreshing = loading || enrichmentLoading;
-  const livePrediction = livePrediction && livePrediction.ok !== false ? livePrediction : null;
 
   return (
     <div className="min-h-screen cockpit-shell text-[#eaf4e9]">
