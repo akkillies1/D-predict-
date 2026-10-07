@@ -383,7 +383,7 @@ function DetailDialog({ tradeId, source, onClose }: { tradeId: string | null; so
     setDetail(null);
     setError(null);
     if (!tradeId) return;
-    void getShadowResource<Detail>("/trades/${tradeId}?source=${source}")
+    void getShadowResource<Detail>(`/trades/${tradeId}?source=${source}`)
       .then(setDetail)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load trade"));
   }, [tradeId, source]);
@@ -482,8 +482,8 @@ export default function ShadowTradingPanel() {
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
         getShadowResource<{ summary: Summary }>("/portfolio"),
         getShadowResource<{ trades: BlotterTrade[] }>("/blotter"),
-        getShadowResource<{ points: CurvePoint[] }>("/equity-curve?days=${days}"),
-        getShadowResource<Stats>("/stats?days=${days}"),
+        getShadowResource<{ points: CurvePoint[] }>(`/equity-curve?days=${days}`),
+        getShadowResource<Stats>(`/stats?days=${days}`),
       ]);
       setSummary(portfolio.summary);
       setTrades(blotter.trades);
@@ -506,7 +506,7 @@ export default function ShadowTradingPanel() {
     setBusy(t.id);
     try {
       const url = t.source === "MANUAL" ? `/paper-trades/${t.id}/close` : `/trades/${t.id}/close`;
-      const body = await getShadowResource<any>(url.replace(/^.*\/api\/shadow/, ""), { method: "POST" });
+      const body = await getShadowResource<any>(url, { method: "POST" });
       await refresh(range);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not close trade");
