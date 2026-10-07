@@ -205,13 +205,13 @@ export default function OptionChainTradingPanel() {
                   Option Chain
                 </h2>
                 <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-                  PAPER EXECUTION
+                  PAPER ONLY
                 </span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Quote-backed fills from the latest persisted market snapshot. No
-                broker order is sent. Open positions stay held until you close
-                them.
+                Quote-backed paper fills from the latest persisted market snapshot. No
+                broker order is sent. These manual contract actions are independent of the
+                authoritative Decision Candidate and are not a recommendation. Open positions stay held until you close them.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -307,7 +307,7 @@ export default function OptionChainTradingPanel() {
                   }}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  PAPER BUY CANDIDATE
+                  PAPER VALIDATE CANDIDATE
                 </button>
               </div>
             ) : null}
