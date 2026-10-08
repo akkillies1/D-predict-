@@ -480,12 +480,12 @@ export default function ShadowTradingPanel() {
         return;
       }
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
-        getShadowResource<{ summary: Summary }>("/portfolio"),
+        getShadowResource<{ summary: Summary }>("/portfolio").catch(() => null),
         getShadowResource<{ trades: BlotterTrade[] }>("/blotter"),
         getShadowResource<{ points: CurvePoint[] }>(`/equity-curve?days=${days}`),
         getShadowResource<Stats>(`/stats?days=${days}`),
       ]);
-      setSummary(portfolio.summary);
+      setSummary(portfolio?.summary ?? null);
       setTrades(blotter.trades);
       setCurve(equity.points);
       setStats(statsBody);

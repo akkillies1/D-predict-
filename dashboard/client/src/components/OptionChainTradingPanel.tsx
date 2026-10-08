@@ -94,14 +94,15 @@ export default function OptionChainTradingPanel() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [chain, paperTrades, intelligence, unified] = await Promise.all([
-        getOptionChain(symbol),
-        getOptionPaperTrades(),
-        getOptionIntelligence(symbol),
+      const [chain, paperTrades, intelligenceRes, unified] = await Promise.all([
+        getOptionChain(symbol).catch(() => []),
+        getOptionPaperTrades().catch(() => []),
+        getOptionIntelligence(symbol).catch(() => null),
         getUnifiedPaperState().catch(() => null),
       ]);
       setOptions(chain);
       setTrades(paperTrades);
+      setIntelligence(intelligenceRes);
       setUnified(unified);
       const expiries = Array.from(
         new Set(chain.map(row => row.expiry_date))
