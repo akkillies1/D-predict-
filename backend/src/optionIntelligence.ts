@@ -11,6 +11,7 @@ export type OptionLeg = {
   oiChange: number | null;
   iv: number | null;
   volume?: number | null;
+  lotSize?: number | null;
 };
 
 export type OptionAction = "BUY_CALL" | "BUY_PUT" | "CALL_VERTICAL" | "PUT_VERTICAL" | "WAIT" | "ABSTAIN";
@@ -25,6 +26,10 @@ export type OptionTradePlan = {
   maxLoss: number | null;
   maxProfit: number | null;
   rewardRisk: number | null;
+  lotSize: number | null;
+  entryValue: number | null;
+  maxLossValue: number | null;
+  maxProfitValue: number | null;
   legs: Array<{
     side: "BUY" | "SELL";
     strike: number;
@@ -152,7 +157,11 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
         breakeven: round(spot + (action === "BUY_CALL" ? entry : -entry), 2),
         maxLoss: round(entry, 2), maxProfit: null,
         rewardRisk: risk > 0 ? round(reward / risk, 2) : null,
-        legs: [{ side: "BUY", strike: preferred.strike, optionType: preferred.optionType, price: round(entry, 2) }],
+        lotSize: preferred.lotSize ?? null,
+        entryValue: preferred.lotSize != null ? round(entry * preferred.lotSize, 2) : null,
+        maxLossValue: preferred.lotSize != null ? round(entry * preferred.lotSize, 2) : null,
+        maxProfitValue: null,
+        legs: [{ side: "BUY", strike: preferred.strike, optionType: preferred.optionType, price: round(entry, 2), quantity: preferred.lotSize ?? null }],
       };
     }
     if ((action === "CALL_VERTICAL" || action === "PUT_VERTICAL") && hedge) {
@@ -171,9 +180,13 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
         action, symbol, expiry, entry: debit, stopLoss: null, target: maxProfit,
         breakeven, maxLoss, maxProfit,
         rewardRisk: maxLoss > 0 ? round(maxProfit / maxLoss, 2) : null,
+        lotSize: buy.lotSize ?? sell.lotSize ?? null,
+        entryValue: buy.lotSize != null && sell.lotSize != null ? round(debit * buy.lotSize, 2) : null,
+        maxLossValue: buy.lotSize != null ? round(maxLoss * buy.lotSize, 2) : null,
+        maxProfitValue: buy.lotSize != null ? round(maxProfit * buy.lotSize, 2) : null,
         legs: [
-          { side: "BUY", strike: buy.strike, optionType: buy.optionType, price: round(buy.ask!, 2) },
-          { side: "SELL", strike: sell.strike, optionType: sell.optionType, price: round(sell.bid!, 2) },
+          { side: "BUY", strike: buy.strike, optionType: buy.optionType, price: round(buy.ask!, 2), quantity: buy.lotSize ?? null },
+          { side: "SELL", strike: sell.strike, optionType: sell.optionType, price: round(sell.bid!, 2), quantity: sell.lotSize ?? null },
         ],
       };
     }
