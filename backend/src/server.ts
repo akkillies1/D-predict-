@@ -476,7 +476,7 @@ app.post("/api/ipo/analyze", async (req, res) => {
   return res.json({ ok: true, companyName, analysis });
 });
 
-await ensureOptionContractMetadata(pool!);
+if (pool) await ensureOptionContractMetadata(pool);
 const server = app.listen(port, "0.0.0.0", () => console.log(`D-predict backend listening on ${port}`));
 attachLiveHub(server, pool);
 const shutdown = async () => { server.close(); await pool?.end(); process.exit(0); };
