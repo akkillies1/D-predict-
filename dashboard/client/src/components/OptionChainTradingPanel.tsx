@@ -96,6 +96,7 @@ export default function OptionChainTradingPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [closeReason, setCloseReason] = useState<"MANUAL" | "STOP_LOSS" | "TARGET" | "EXPIRY">("MANUAL");
   const refresh = useCallback(async () => {
+    if (!symbol) { setOptions([]); setIntelligence(null); setLoading(false); return; }
     setLoading(true);
     try {
       const [chain, paperTrades, intelligenceRes, unified] = await Promise.all([
