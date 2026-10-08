@@ -12,6 +12,7 @@ import {
 import {
   getOptionChain,
   discoverOptionInstruments,
+  trackOptionUnderlying,
   getOptionPaperTrades,
   getOptionIntelligence,
   placeOptionPaperOrder,
