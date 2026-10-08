@@ -128,6 +128,15 @@ export default function OptionChainTradingPanel() {
     void refresh();
   }, [refresh]);
   useEffect(() => {
+    const query = search.trim();
+    if (!query) { setDiscoveries([]); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void discoverOptionInstruments(query, controller.signal).then(setDiscoveries).catch(() => undefined);
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [search]);
+  useEffect(() => {
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => window.clearInterval(timer);
   }, [refresh]);
