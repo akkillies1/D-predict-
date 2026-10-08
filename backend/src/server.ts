@@ -16,6 +16,7 @@ import { fetchRecentAlerts, mapAlertRow } from "./alertFeed.js";
 import { createAiRouter } from "./aiRoutes.js";
 import { analyzeOptionChain } from "./optionIntelligence.js";
 import { getUpdateStatus } from "./updateService.js";
+import { ensureOptionContractMetadata } from "./dbMigrations.js";
 
 // Resolve runtime configuration from every supported local launch context.
 // Docker supplies DATABASE_URL explicitly; direct Windows launches must also see
@@ -475,6 +476,7 @@ app.post("/api/ipo/analyze", async (req, res) => {
   return res.json({ ok: true, companyName, analysis });
 });
 
+await ensureOptionContractMetadata(pool!);
 const server = app.listen(port, "0.0.0.0", () => console.log(`D-predict backend listening on ${port}`));
 attachLiveHub(server, pool);
 const shutdown = async () => { server.close(); await pool?.end(); process.exit(0); };
