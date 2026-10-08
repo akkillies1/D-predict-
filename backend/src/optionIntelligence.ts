@@ -35,6 +35,7 @@ export type OptionTradePlan = {
     strike: number;
     optionType: OptionType;
     price: number;
+    quantity: number | null;
   }>;
 };
 export type OptionIntelligence = {
@@ -134,7 +135,8 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
       (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) &&
       row.strike !== preferred.strike)
     .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
-  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish };
+  const lotSizeAvailable = preferred != null && Number.isFinite(preferred.lotSize) && (preferred.lotSize as number) > 0 && (!hedge || (Number.isFinite(hedge.lotSize) && (hedge.lotSize as number) > 0));
+  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish, lotSizeAvailable };
   const actionable = Object.values(gates).every(Boolean);
   const verticalDebit = preferred && hedge ? Math.max(0, bullish ? preferred.ask! - hedge.bid! : hedge.ask! - preferred.bid!) : null;
   const verticalWidth = preferred && hedge ? Math.abs(preferred.strike - hedge.strike) : null;
@@ -145,7 +147,7 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
     : direction !== "NEUTRAL" && preferred && hedge ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL")
     : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
   const tradePlan: OptionTradePlan | null = (() => {
-    if (!preferred || !symbol || !expiry || !spot || !actionable) return null;
+    if (!preferred || !symbol || !expiry || !spot || !actionable || !lotSizeAvailable) return null;
     const entry = preferred.ask!;
     if (action === "BUY_CALL" || action === "BUY_PUT") {
       const stopLoss = round(entry * 0.70, 2);
