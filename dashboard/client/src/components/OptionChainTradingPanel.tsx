@@ -276,17 +276,41 @@ export default function OptionChainTradingPanel() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex rounded-lg border border-border bg-background p-1">
-                {symbols.map(item => (
-                  <button
-                    key={item}
-                    onClick={() => setSymbol(item)}
-                    className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${symbol === item ? "bg-foreground text-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                  >
-                    {item}
-                  </button>
-                ))}
+              <div className="relative">
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value.toUpperCase())}
+                  placeholder="Search underlying"
+                  aria-label="Search underlying for option chain"
+                  className="h-9 w-44 rounded-lg border border-border bg-background px-3 text-xs font-medium outline-none focus:ring-2 focus:ring-ring"
+                />
+                {discoveries.length > 0 && search.trim() && (
+                  <div className="absolute right-0 top-11 z-20 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+                    {discoveries.slice(0, 8).map(item => (
+                      <button
+                        key={`${item.symbol}-${item.exchange}`}
+                        onClick={() => {
+                          const next = item.symbol.toUpperCase();
+                          setSymbol(next);
+                          setSearch(next);
+                          localStorage.setItem("dpredict:selected-symbol", next);
+                          setDiscoveries([]);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent"
+                      >
+                        <span>
+                          <span className="font-semibold">{item.symbol}</span>
+                          <span className="ml-2 text-muted-foreground">{item.name ?? item.instrumentType ?? item.exchange}</span>
+                        </span>
+                        <span className={item.optionChain.available ? "text-emerald-400" : "text-muted-foreground"}>
+                          {item.optionChain.available ? "CHAIN" : "NO CHAIN"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
+              {!symbol && <span className="text-[10px] font-medium text-amber-400">Search and select an underlying</span>}
               <select
                 value={expiry}
                 onChange={e => setExpiry(e.target.value)}
