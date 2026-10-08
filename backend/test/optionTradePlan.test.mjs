@@ -3,7 +3,7 @@ import { analyzeOptionChain } from "../dist/optionIntelligence.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 function leg(strike, optionType, oi, bid, ask, iv = 14) {
-  return { expiryDate: "2026-10-30", strike, optionType, timestamp: now.toISOString(), ltp: (bid + ask) / 2, bid, ask, oi, oiChange: 0, iv, volume: 1000 };
+  return { lotSize: 75, expiryDate: "2026-10-30", strike, optionType, timestamp: now.toISOString(), ltp: (bid + ask) / 2, bid, ask, oi, oiChange: 0, iv, volume: 1000 };
 }
 const chain = [
   leg(24800, "CE", 1000, 220, 221), leg(25000, "CE", 2000, 150, 151), leg(25200, "CE", 500, 95, 96),
@@ -17,6 +17,10 @@ assert.equal(result.recommendation.tradePlan.legs[0].optionType, "CE");
 assert.equal(result.recommendation.tradePlan.legs[1].side, "SELL");
 assert.equal(result.recommendation.tradePlan.legs[1].optionType, "CE");
 assert.equal(result.recommendation.tradePlan.maxLoss, 56);
+assert.equal(result.recommendation.tradePlan.lotSize, 75);
+assert.equal(result.recommendation.tradePlan.entryValue, 4200);
+assert.equal(result.recommendation.tradePlan.maxLossValue, 4200);
+assert.equal(result.recommendation.tradePlan.maxProfitValue, 10800);
 
 const stale = analyzeOptionChain("NIFTY", chain.map(row => ({ ...row, timestamp: "2026-10-03T08:00:00.000Z" })), 25000, now);
 assert.equal(stale.gates.freshForPaper, false);
