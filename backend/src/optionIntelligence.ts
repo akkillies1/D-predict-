@@ -131,7 +131,14 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
     .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
   const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish };
   const actionable = Object.values(gates).every(Boolean);
-  const action: OptionAction = actionable && preferred ? (bullish ? "BUY_CALL" : "BUY_PUT") : direction !== "NEUTRAL" && preferred && hedge ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL") : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
+  const verticalDebit = preferred && hedge ? Math.max(0, bullish ? preferred.ask! - hedge.bid! : hedge.ask! - preferred.bid!) : null;
+  const verticalWidth = preferred && hedge ? Math.abs(preferred.strike - hedge.strike) : null;
+  const verticalRewardRisk = verticalDebit != null && verticalWidth != null && verticalDebit > 0 ? (verticalWidth - verticalDebit) / verticalDebit : null;
+  const useVertical = actionable && preferred != null && hedge != null && verticalRewardRisk != null && verticalRewardRisk >= 1.5;
+  const action: OptionAction = actionable && preferred
+    ? useVertical ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL") : (bullish ? "BUY_CALL" : "BUY_PUT")
+    : direction !== "NEUTRAL" && preferred && hedge ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL")
+    : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
   const tradePlan: OptionTradePlan | null = (() => {
     if (!preferred || !symbol || !expiry || !spot || !actionable) return null;
     const entry = preferred.ask!;
