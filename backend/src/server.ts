@@ -384,7 +384,8 @@ app.post("/api/options/track", async (req, res) => {
 
 app.get("/api/options/chain", async (req, res) => {
   if (!pool) return noDb(res);
-  const symbol = symbolParam(req.query.symbol);
+  const symbol = String(req.query.symbol ?? "").trim().toUpperCase();
+  if (!symbol) return res.json({ ok: true, symbol: null, rows: [], status: "UNDERLYING_REQUIRED" });
   try {
     const result = await pool.query(`select oc.expiry_date, oc.strike, oc.option_type, oc.lot_size, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id) order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
     if (!result.rows.length) return res.json({ ok: true, symbol, rows: [] });
@@ -394,7 +395,8 @@ app.get("/api/options/chain", async (req, res) => {
 
 app.get("/api/options/intelligence", async (req, res) => {
   if (!pool) return noDb(res);
-  const symbol = symbolParam(req.query.symbol);
+  const symbol = String(req.query.symbol ?? "").trim().toUpperCase();
+  if (!symbol) return res.json({ ok: false, status: "ABSTAIN", error: "UNDERLYING_REQUIRED", symbol: null });
   if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
   try {
     const spotResult = await pool.query(`select pb.close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 1`, [symbol]);
