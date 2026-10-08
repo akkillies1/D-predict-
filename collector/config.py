@@ -36,7 +36,7 @@ class Config:
     # Provider preference order. This contains provider names only; no
     # symbols, strikes, expiries, or lot sizes are encoded here.
     option_chain_providers: tuple[str, ...] = tuple(
-        name.strip().lower() for name in os.environ.get("OPTION_CHAIN_PROVIDERS", "nse").split(",") if name.strip()
+        name.strip().lower() for name in os.environ.get("OPTION_CHAIN_PROVIDERS", "nse,dhan").split(",") if name.strip()
     )
     nse_max_retries: int = 3
     dhan_client_id: str | None = os.environ.get("DHAN_CLIENT_ID")
