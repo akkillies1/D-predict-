@@ -33,7 +33,26 @@ if (!process.env.DATABASE_URL && localStateEnv) {
 const { Pool } = pg;
 const app = express();
 const port = Number(process.env.API_PORT ?? 4100);
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: 5, ssl: process.env.DATABASE_SSL === "false" ? false : undefined }) : null;
+const pool = process.env.DATABASE_URL ? new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+  // Do not let a connection that survived a database restart remain a long-lived
+  // dependency of the API. pg will discard broken clients, while these limits ensure
+  // new work can establish a fresh socket promptly after PostgreSQL recovery.
+  connectionTimeoutMillis: 5_000,
+  idleTimeoutMillis: 10_000,
+  maxLifetimeSeconds: 300,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+  ssl: process.env.DATABASE_SSL === "false" ? false : undefined,
+}) : null;
+
+pool?.on("error", (error) => {
+  // An idle client can receive a fatal PostgreSQL/network error outside a query.
+  // Keep the API process alive and let pg evict that client so the next request
+  // can establish a fresh connection after PostgreSQL recovers.
+  console.error("[database] pooled client error; pg will replace the connection", error);
+});
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
