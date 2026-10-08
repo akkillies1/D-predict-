@@ -39,7 +39,7 @@ _OPTION_CONTRACT_UPSERT = """
 insert into option_contracts (instrument_id, expiry_date, strike, option_type, lot_size)
 select instrument_id, %(expiry_date)s, %(strike)s, %(option_type)s, %(lot_size)s
 from instruments where symbol = %(instrument_symbol)s
-on conflict (instrument_id, expiry_date, strike, option_type) do nothing
+on conflict (instrument_id, expiry_date, strike, option_type) do update set lot_size = coalesce(excluded.lot_size, option_contracts.lot_size)
 returning contract_id;
 """
 
