@@ -102,14 +102,25 @@ class NSEAdapter(OptionChainProvider):
 
     def fetch_option_chain(self, symbol: str) -> list[CanonicalOptionSnapshot]:
         """Fetch the full option chain for a symbol and return canonical snapshots."""
-        is_index = symbol.upper() in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
-        path = config.nse_option_chain_indices_path if is_index else config.nse_option_chain_equities_path
-        params = {"symbol": symbol}
-        if is_index:
-            params["type"] = "Indices"
-        raw = self._get(path, params=params)
-        if not raw.get("records", {}).get("data"):
-            logger.info("nse_adapter returned no option rows for %s; market may be closed or the symbol may not be F&O-enabled", symbol)
+        # Do not classify instruments with a hard-coded symbol universe.
+        # NSE exposes separate chain resources, so probe the configured
+        # resources and accept the first valid chain response.
+        candidates = (
+            (config.nse_option_chain_indices_path, {"symbol": symbol, "type": "Indices"}),
+            (config.nse_option_chain_equities_path, {"symbol": symbol}),
+        )
+        raw = None
+        for path, params in candidates:
+            try:
+                candidate = self._get(path, params=params)
+            except Exception as exc:
+                logger.warning("nse option resource failed for %s via %s: %s", symbol, path, exc)
+                continue
+            if candidate.get("records", {}).get("data"):
+                raw = candidate
+                break
+        if raw is None:
+            logger.info("nse_adapter found no option chain for %s", symbol)
             return []
         collected_now = datetime.now(timezone.utc)
         snapshots: list[CanonicalOptionSnapshot] = []
@@ -143,6 +154,7 @@ class NSEAdapter(OptionChainProvider):
                         gamma=None,
                         theta=None,
                         vega=None,
+                        lot_size=None,
                         source="nse",
                         source_version=ADAPTER_VERSION,
                     )
