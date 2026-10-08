@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from collector.adapters.nse import NSEAdapter
+from collector.adapters.dhan import DhanOptionChainProvider
 from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
@@ -36,7 +37,11 @@ def nse_session_active(now_utc: datetime | None = None) -> bool:
 class Poller:
     def __init__(self):
         self._nse = NSEAdapter()
-        installed: dict[str, OptionChainProvider] = {self._nse.name: self._nse}
+        self._dhan = DhanOptionChainProvider()
+        installed: dict[str, OptionChainProvider] = {
+            self._nse.name: self._nse,
+            self._dhan.name: self._dhan,
+        }
         # Providers are ordered by configuration; the first provider that
         # supports the searched symbol and returns real snapshots wins.
         self._option_providers = [installed[name] for name in config.option_chain_providers if name in installed]
