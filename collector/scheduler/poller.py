@@ -38,6 +38,13 @@ class Poller:
     def __init__(self):
         self._nse = NSEAdapter()
         self._dhan = DhanOptionChainProvider()
+        self._yahoo = YahooAdapter()
+        self._db = PostgresPersistence()
+        self._radar_cursor = 0
+        # Empty option responses are muted per symbol after repeated failures
+        # until the next session open, preventing provider rate-limit churn.
+        self._chain_empties: dict[str, int] = {}
+        self._chain_muted_until: dict[str, datetime] = {}
         installed: dict[str, OptionChainProvider] = {
             self._nse.name: self._nse,
             self._dhan.name: self._dhan,
