@@ -315,7 +315,7 @@ export async function buildPaperState(pool: Pool): Promise<Record<string, unknow
   if (!accountResult.rows.length) return { ok: true, mode: "PAPER_RESEARCH", account: null, positions: [], optionTrades: [], orders: [], marketLive: false, disclaimer: "Research simulation only. No broker or live order is connected." };
   const account = accountResult.rows[0];
   const positionsResult = await pool.query(`select symbol, product, quantity, average_price, cost_net, realized_pnl, current_price, mark_timestamp, entered_on from paper_positions where account_id=$1 order by product, symbol`, [ACCOUNT_ID]);
-  const ordersResult = await pool.query(`select id, symbol, product, side, order_type, quantity, limit_price, fill_price, notional, gross_amount, net_amount, costs, realized_pnl, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 200`);
+  const ordersResult = await pool.query(`select id, symbol, product, side, order_type, quantity, limit_price, fill_price, notional, gross_amount, net_amount, costs, realized_pnl, fill_timestamp, status, note, rationale, signal_snapshot, created_at from paper_orders where account_id=$1 order by created_at desc limit 200`, [ACCOUNT_ID]);
   let unrealizedPnl = 0, marketLive = false; const positions = [];
   for (const row of positionsResult.rows) {
     const quote = await bestQuote(pool, row.symbol); const currentPrice = quote?.close ?? (row.current_price == null ? null : Number(row.current_price));
