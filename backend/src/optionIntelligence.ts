@@ -72,6 +72,15 @@ function dateOf(value: string | Date): Date | null { const d = value instanceof 
 function round(value: number, places = 4) { const factor = 10 ** places; return Math.round(value * factor) / factor; }
 function nearest(rows: OptionLeg[], spot: number): OptionLeg | null { return rows.reduce<OptionLeg | null>((best, row) => !best || Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best, null); }
 function validQuote(row: OptionLeg): boolean { return row.bid != null && row.ask != null && row.bid > 0 && row.ask >= row.bid; }
+function quoteSpread(row: OptionLeg): number { return validQuote(row) ? (row.ask! - row.bid!) / Math.max(row.ask!, 0.01) : 1; }
+function liquidityValue(row: OptionLeg): number { return Math.log1p(Math.max(0, row.oi ?? 0) + Math.max(0, row.volume ?? 0)); }
+function candidateScore(row: OptionLeg, spot: number, maxLiquidity: number): number {
+  const distance = Math.abs(row.strike - spot) / spot;
+  const proximity = Math.max(0, 1 - distance / 0.05);
+  const spread = Math.max(0, 1 - quoteSpread(row) / 0.15);
+  const liquidity = maxLiquidity > 0 ? liquidityValue(row) / maxLiquidity : 0;
+  return proximity * 0.45 + spread * 0.30 + liquidity * 0.25;
+}
 
 export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInput: number | null, now = new Date()): OptionIntelligence {
   const rows = rawRows.filter(row => Number.isFinite(row.strike) && row.strike > 0 && (row.optionType === "CE" || row.optionType === "PE") && dateOf(row.expiryDate) && dateOf(row.timestamp));
@@ -103,13 +112,23 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const spreads = quoted.map(row => (row.ask! - row.bid!) / Math.max(row.ask!, 0.01)).filter(Number.isFinite);
   const averageSpreadPct = spreads.length ? spreads.reduce((a, b) => a + b, 0) / spreads.length : null;
   const liquidityScore = Math.min(1, quoted.length / Math.max(4, chain.length * 0.5)) * (averageSpreadPct == null ? 0 : Math.max(0, 1 - averageSpreadPct * 2));
-  const candidates = chain.filter(row => spot != null && Math.abs(row.strike - spot) / spot <= 0.1 && validQuote(row)).map(row => ({ expiry, strike: row.strike, optionType: row.optionType, ltp: row.ltp, bid: row.bid, ask: row.ask, oi: Math.max(0, row.oi ?? 0), iv: row.iv, spreadPct: round((row.ask! - row.bid!) / Math.max(row.ask!, 0.01) * 100, 2) })).sort((a, b) => Math.abs(a.strike - (spot as number)) - Math.abs(b.strike - (spot as number)));
+  const maxLiquidity = chain.reduce((best, row) => Math.max(best, liquidityValue(row)), 0);
+  const ranked = spot == null ? [] : chain
+    .filter(row => Math.abs(row.strike - spot) / spot <= 0.1 && validQuote(row))
+    .map(row => ({ row, score: candidateScore(row, spot, maxLiquidity) }))
+    .sort((a, b) => b.score - a.score);
+  const candidates = ranked.map(({ row }) => ({ expiry, strike: row.strike, optionType: row.optionType, ltp: row.ltp, bid: row.bid, ask: row.ask, oi: Math.max(0, row.oi ?? 0), iv: row.iv, spreadPct: round(quoteSpread(row) * 100, 2) }));
   const pcr = ceOi > 0 ? peOi / ceOi : null;
   const bullish = pcr != null && pcr >= 1.3 && (ivSkew == null || ivSkew <= 2);
   const bearish = pcr != null && pcr <= 0.7 && (ivSkew == null || ivSkew >= -2);
   const direction = bullish ? "BULLISH" : bearish ? "BEARISH" : "NEUTRAL";
-  const preferred = candidates.find(row => row.optionType === (bullish ? "CE" : bearish ? "PE" : "CE")) ?? null;
-  const hedge = preferred && spot != null ? candidates.find(row => row.optionType === preferred.optionType && (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) && Math.abs(row.strike - preferred.strike) >= Math.max(1, spot * 0.01)) ?? null : null;
+  const preferredType: OptionType = bullish ? "CE" : "PE";
+  const preferred = spot == null ? null : ranked.filter(({ row }) => row.optionType === preferredType)[0]?.row ?? null;
+  const hedge = preferred && spot != null ? ranked
+    .filter(({ row }) => row.optionType === preferred.optionType &&
+      (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) &&
+      Math.abs(row.strike - preferred.strike) >= Math.max(1, spot * 0.01))
+    .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
   const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish };
   const actionable = Object.values(gates).every(Boolean);
   const action: OptionAction = actionable && preferred ? (bullish ? "BUY_CALL" : "BUY_PUT") : direction !== "NEUTRAL" && preferred && hedge ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL") : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
