@@ -361,12 +361,23 @@ app.post("/api/options/track", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = symbolParam(req.body?.symbol);
   if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  const providerSymbol = String(req.body?.providerSymbol ?? symbol).trim().toUpperCase();
+  const exchange = String(req.body?.exchange ?? (providerSymbol.endsWith(".BO") ? "BSE" : "NSE")).trim().toUpperCase();
+  const name = req.body?.name == null ? null : String(req.body.name).trim() || null;
+  const instrumentType = String(req.body?.instrumentType ?? "EQUITY").trim().toUpperCase();
   try {
     const result = await pool.query(
-      "update instruments set is_active = true where upper(symbol) = $1 returning symbol, exchange, name, provider_symbol, instrument_type, lot_size",
-      [symbol],
+      `insert into instruments (symbol, exchange, lot_size, is_active, name, provider_symbol, instrument_type, canonical_source)
+       values ($1, $2, 1, true, $3, $4, $5, 'search')
+       on conflict (symbol) do update set
+         is_active = true,
+         name = coalesce(excluded.name, instruments.name),
+         provider_symbol = coalesce(excluded.provider_symbol, instruments.provider_symbol),
+         instrument_type = coalesce(excluded.instrument_type, instruments.instrument_type),
+         exchange = coalesce(excluded.exchange, instruments.exchange)
+       returning symbol, exchange, name, provider_symbol, instrument_type, lot_size`,
+      [symbol, exchange, name, providerSymbol, instrumentType],
     );
-    if (!result.rows.length) return res.status(404).json({ ok: false, error: "INSTRUMENT_NOT_FOUND", symbol });
     const row = result.rows[0];
     return res.json({
       ok: true,
@@ -374,8 +385,8 @@ app.post("/api/options/track", async (req, res) => {
       tracking: true,
       providerSymbol: row.provider_symbol,
       instrumentType: row.instrument_type,
-      lotSize: row.lot_size == null ? null : Number(row.lot_size),
-      message: "Instrument activated for the configured option-chain providers.",
+      underlyingLotSize: row.lot_size == null ? null : Number(row.lot_size),
+      message: "Underlying activated for configured option-chain providers. Option contract lot size is resolved separately from contract metadata.",
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: "OPTION_TRACK_FAILED", message: error instanceof Error ? error.message : "update_failed" });
