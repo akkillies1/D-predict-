@@ -14,6 +14,7 @@ from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
 from collector.options_radar import evaluate_option_rules
+from collector.providers.options import OptionChainProvider
 from collector.persistence.postgres import PostgresPersistence
 from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, drop_partial_last_bar, evaluate_rules
 from collector.validation.market_data import validate_option_snapshot, validate_price_bar
@@ -35,6 +36,12 @@ def nse_session_active(now_utc: datetime | None = None) -> bool:
 class Poller:
     def __init__(self):
         self._nse = NSEAdapter()
+        # Providers are ordered by configuration; the first provider that
+        # supports the searched symbol and returns real snapshots wins.
+        provider_registry: dict[str, OptionChainProvider] = {"nse": self._nse}
+        self._option_providers: list[OptionChainProvider] = [
+            provider_registry[name] for name in config.option_chain_providers if name in provider_registry
+        ]
         self._yahoo = YahooAdapter()
         self._db = PostgresPersistence()
         self._radar_cursor = 0
@@ -69,13 +76,22 @@ class Poller:
             until = self._chain_muted_until.get(symbol)
             if until is not None and now_utc < until:
                 continue
-            try:
-                snapshots = self._nse.fetch_option_chain(symbol)
-            except Exception:
-                logger.exception("nse fetch failed for %s (run=%s)", symbol, run_id)
-                self._note_chain_result(symbol, False, now_utc)
-                continue
-
+            snapshots = []
+            provider_errors: list[str] = []
+            for provider in self._option_providers:
+                if not provider.supports(symbol):
+                    continue
+                try:
+                    snapshots = provider.fetch_option_chain(symbol)
+                except Exception as exc:
+                    provider_errors.append(f"{provider.name}: {exc}")
+                    logger.exception("option provider %s failed for %s (run=%s)", provider.name, symbol, run_id)
+                    continue
+                if snapshots:
+                    logger.info("option provider %s supplied %d snapshots for %s", provider.name, len(snapshots), symbol)
+                    break
+            if not snapshots and provider_errors:
+                logger.warning("all option providers failed/empty for %s: %s", symbol, " | ".join(provider_errors))
             self._note_chain_result(symbol, bool(snapshots), now_utc)
             valid, dropped = [], 0
             for snap in snapshots:

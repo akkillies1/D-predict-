@@ -14,7 +14,7 @@ assert.equal(result.ok, true);
 assert.equal(result.expiry, "2026-10-30");
 assert.equal(result.metrics.atmStrike, 25000);
 assert.equal(result.recommendation.direction, "BULLISH");
-assert.equal(result.recommendation.action, "BUY_CALL");
+assert.equal(result.recommendation.action, "CALL_VERTICAL");
 assert.equal(result.gates.freshForPaper, true);
 assert.ok(result.recommendation.evidence.length >= 3);
 

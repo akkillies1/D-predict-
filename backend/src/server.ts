@@ -312,6 +312,76 @@ app.get("/api/signals/latest", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: "SIGNAL_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
+app.get("/api/options/discover", async (req, res) => {
+  if (!pool) return noDb(res);
+  const query = String(req.query.q ?? "").trim();
+  if (query.length < 1) return res.json({ ok: true, query, instruments: [] });
+  try {
+    const result = await pool.query(`
+      select i.symbol, i.exchange, i.name, i.provider_symbol, i.instrument_type,
+             i.is_active, i.lot_size,
+             max(os.market_timestamp) as latest_option_timestamp,
+             count(oc.contract_id)::int as contracts
+      from instruments i
+      left join option_contracts oc on oc.instrument_id = i.instrument_id
+      left join option_snapshots os on os.contract_id = oc.contract_id
+      where upper(i.symbol) like $1
+         or upper(coalesce(i.name, '')) like $1
+         or exists (select 1 from unnest(i.aliases) alias where upper(alias) like $1)
+      group by i.instrument_id
+      order by case when upper(i.symbol) = upper($2) then 0
+                    when upper(i.symbol) like upper($2) || '%' then 1
+                    else 2 end, i.symbol
+      limit 25
+    `, [`%${query.toUpperCase()}%`, query]);
+    return res.json({
+      ok: true,
+      query,
+      instruments: result.rows.map(row => ({
+        symbol: row.symbol,
+        exchange: row.exchange,
+        name: row.name,
+        providerSymbol: row.provider_symbol,
+        instrumentType: row.instrument_type,
+        isActive: row.is_active,
+        lotSize: row.lot_size == null ? null : Number(row.lot_size),
+        optionChain: {
+          available: Number(row.contracts) > 0 && row.latest_option_timestamp != null,
+          contracts: Number(row.contracts),
+          latestTimestamp: iso(row.latest_option_timestamp),
+        },
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "OPTION_DISCOVERY_FAILED", message: error instanceof Error ? error.message : "query_failed" });
+  }
+});
+
+app.post("/api/options/track", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = symbolParam(req.body?.symbol);
+  if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  try {
+    const result = await pool.query(
+      "update instruments set is_active = true where upper(symbol) = $1 returning symbol, exchange, name, provider_symbol, instrument_type, lot_size",
+      [symbol],
+    );
+    if (!result.rows.length) return res.status(404).json({ ok: false, error: "INSTRUMENT_NOT_FOUND", symbol });
+    const row = result.rows[0];
+    return res.json({
+      ok: true,
+      symbol: row.symbol,
+      tracking: true,
+      providerSymbol: row.provider_symbol,
+      instrumentType: row.instrument_type,
+      lotSize: row.lot_size == null ? null : Number(row.lot_size),
+      message: "Instrument activated for the configured option-chain providers.",
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "OPTION_TRACK_FAILED", message: error instanceof Error ? error.message : "update_failed" });
+  }
+});
+
 app.get("/api/options/chain", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = symbolParam(req.query.symbol);
@@ -328,8 +398,8 @@ app.get("/api/options/intelligence", async (req, res) => {
   if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
   try {
     const spotResult = await pool.query(`select pb.close from price_bars pb join instruments i on i.instrument_id=pb.instrument_id where i.symbol=$1 order by pb.market_timestamp desc limit 1`, [symbol]);
-    const chainResult = await pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id) order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
-    const rows = chainResult.rows.map((row) => ({ expiryDate: String(row.expiry_date), strike: Number(row.strike), optionType: row.option_type as "CE" | "PE", timestamp: new Date(row.market_timestamp), ltp: finite(row.ltp), bid: finite(row.bid), ask: finite(row.ask), oi: finite(row.oi), oiChange: finite(row.oi_change), iv: finite(row.iv), volume: finite(row.volume) }));
+    const chainResult = await pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume, i.lot_size from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id) order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
+    const rows = chainResult.rows.map((row) => ({ expiryDate: String(row.expiry_date), strike: Number(row.strike), optionType: row.option_type as "CE" | "PE", timestamp: new Date(row.market_timestamp), ltp: finite(row.ltp), bid: finite(row.bid), ask: finite(row.ask), oi: finite(row.oi), oiChange: finite(row.oi_change), iv: finite(row.iv), volume: finite(row.volume), lotSize: row.lot_size == null ? null : Math.max(1, Number(row.lot_size)) }));
     return res.json(analyzeOptionChain(symbol, rows, spotResult.rows.length ? finite(spotResult.rows[0].close) : null));
   } catch (error) { return res.status(500).json({ ok: false, error: "OPTION_INTELLIGENCE_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });

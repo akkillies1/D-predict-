@@ -33,6 +33,11 @@ class Config:
     nse_option_chain_indices_path: str = "/api/option-chain-v3"
     nse_option_chain_equities_path: str = "/api/option-chain-equities"
     nse_request_timeout_seconds: int = 10
+    # Provider preference order. This contains provider names only; no
+    # symbols, strikes, expiries, or lot sizes are encoded here.
+    option_chain_providers: tuple[str, ...] = tuple(
+        name.strip().lower() for name in os.environ.get("OPTION_CHAIN_PROVIDERS", "nse").split(",") if name.strip()
+    )
     nse_max_retries: int = 3
 
     # Yahoo adapter. Add symbols as plain Yahoo tickers (for example
