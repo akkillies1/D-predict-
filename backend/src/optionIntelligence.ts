@@ -127,7 +127,7 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const hedge = preferred && spot != null ? ranked
     .filter(({ row }) => row.optionType === preferred.optionType &&
       (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) &&
-      Math.abs(row.strike - preferred.strike) >= Math.max(1, spot * 0.01))
+      row.strike !== preferred.strike)
     .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
   const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish };
   const actionable = Object.values(gates).every(Boolean);
