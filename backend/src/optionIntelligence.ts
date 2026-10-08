@@ -135,7 +135,9 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
       (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) &&
       row.strike !== preferred.strike)
     .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
-  const lotSizeAvailable = preferred != null && Number.isFinite(preferred.lotSize) && (preferred.lotSize as number) > 0 && (!hedge || (Number.isFinite(hedge.lotSize) && (hedge.lotSize as number) > 0));
+  const preferredLotSize = preferred?.lotSize;
+  const hedgeLotSize = hedge?.lotSize;
+  const lotSizeAvailable = preferred != null && Number.isFinite(preferredLotSize) && (preferredLotSize as number) > 0 && (!hedge || (Number.isFinite(hedgeLotSize) && (hedgeLotSize as number) > 0 && hedgeLotSize === preferredLotSize));
   const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish, lotSizeAvailable };
   const actionable = Object.values(gates).every(Boolean);
   const verticalDebit = preferred && hedge ? Math.max(0, bullish ? preferred.ask! - hedge.bid! : hedge.ask! - preferred.bid!) : null;
