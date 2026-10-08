@@ -209,6 +209,50 @@ app.get("/api/instruments/discover", async (req, res) => {
   return res.json({ ok: true, instruments: merged.slice(0, 25) });
 });
 
+app.get("/api/options/discover", async (req, res) => {
+  const query = String(req.query.q ?? "").trim();
+  if (!query) return res.json({ ok: true, instruments: [] });
+  let resultRows: any[] = [];
+  if (pool) {
+    try {
+      const result = await pool.query(
+        `select i.symbol, i.exchange, i.name, i.provider_symbol, i.instrument_type, i.is_active,
+                count(oc.contract_id)::int as contracts,
+                max(os.market_timestamp) as latest_timestamp
+         from instruments i
+         left join option_contracts oc on oc.instrument_id=i.instrument_id
+         left join option_snapshots os on os.contract_id=oc.contract_id
+         where upper(i.symbol) like $1
+            or upper(coalesce(i.name,'')) like $1
+         group by i.instrument_id
+         order by case when upper(i.symbol)=upper($2) then 0
+                       when upper(i.symbol) like upper($2)||'%' then 1 else 2 end,
+                  i.symbol
+         limit 25`,
+        [`%${query.toUpperCase()}%`, query],
+      );
+      resultRows = result.rows;
+    } catch (error) {
+      console.warn("option instrument discovery skipped:", error instanceof Error ? error.message : error);
+    }
+  }
+  const instruments = resultRows.map((row) => ({
+    symbol: row.symbol,
+    exchange: row.exchange,
+    name: row.name,
+    providerSymbol: row.provider_symbol,
+    instrumentType: row.instrument_type,
+    isActive: Boolean(row.is_active),
+    lotSize: null,
+    optionChain: {
+      available: Number(row.contracts ?? 0) > 0,
+      contracts: Number(row.contracts ?? 0),
+      latestTimestamp: row.latest_timestamp ? new Date(row.latest_timestamp).toISOString() : null,
+    },
+  }));
+  return res.json({ ok: true, instruments });
+});
+
 app.post("/api/instruments", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = symbolParam(req.body?.symbol);
