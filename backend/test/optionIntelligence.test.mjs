@@ -3,7 +3,7 @@ import { analyzeOptionChain } from "../dist/optionIntelligence.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 function leg(strike, optionType, oi, bid, ask, iv = 14) {
-  return { expiryDate: "2026-10-30", strike, optionType, timestamp: now.toISOString(), ltp: (bid + ask) / 2, bid, ask, oi, oiChange: 0, iv, volume: 1000 };
+  return { expiryDate: "2026-10-30", strike, optionType, timestamp: now.toISOString(), ltp: (bid + ask) / 2, bid, ask, oi, oiChange: 0, iv, volume: 1000, lotSize: 75 };
 }
 const chain = [
   leg(24800, "CE", 1000, 220, 221), leg(25000, "CE", 2000, 150, 151), leg(25200, "CE", 500, 95, 96),
