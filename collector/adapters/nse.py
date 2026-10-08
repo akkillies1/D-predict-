@@ -22,15 +22,22 @@ from collector.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-ADAPTER_VERSION = "nse_adapter_v1"
+ADAPTER_VERSION = "nse_adapter_v2"
 IST = ZoneInfo("Asia/Kolkata")
 
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/option-chain",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
@@ -44,7 +51,21 @@ class NSEAdapter:
         self._warmed_up = False
 
     def _warm_up(self) -> None:
-        self._session.get(config.nse_base_url, timeout=config.nse_request_timeout_seconds)
+        # NSE commonly issues a session cookie on the public site before the
+        # JSON endpoint accepts requests. Warm both the origin and the option
+        # chain page; keep the same Session for subsequent polls.
+        home = self._session.get(
+            config.nse_base_url,
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            timeout=config.nse_request_timeout_seconds,
+        )
+        home.raise_for_status()
+        page = self._session.get(
+            f"{config.nse_base_url}/option-chain",
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            timeout=config.nse_request_timeout_seconds,
+        )
+        page.raise_for_status()
         self._warmed_up = True
 
     @retry(
@@ -54,13 +75,19 @@ class NSEAdapter:
     def _get(self, path: str, params: dict) -> dict:
         if not self._warmed_up:
             self._warm_up()
+        request_headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"{config.nse_base_url}/option-chain?symbol={params.get('symbol', '')}",
+        }
         resp = self._session.get(
             f"{config.nse_base_url}{path}",
             params=params,
+            headers=request_headers,
             timeout=config.nse_request_timeout_seconds,
         )
-        if resp.status_code == 401:
-            # cookies expired mid-session — re-warm and let @retry try again
+        if resp.status_code in (401, 403, 429):
+            # Session/cookie challenges and rate limiting need a fresh
+            # handshake rather than replaying the same poisoned session.
             self._warmed_up = False
             resp.raise_for_status()
         resp.raise_for_status()

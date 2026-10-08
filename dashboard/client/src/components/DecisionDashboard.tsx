@@ -1881,9 +1881,30 @@ export default function DecisionDashboard() {
                 <div className="mt-3 rounded-lg border border-[#3c3120] bg-[#15120c] p-3 text-[10px] leading-relaxed text-[#c8b582]">
                   Risk: {optionIntelligence.recommendation.risks[0]}
                 </div>
+                {optionIntelligence.recommendation.tradePlan && (
+                  <div className="mt-3 rounded-lg border border-[#29463b] bg-[#0c1a15] p-3">
+                    <div className="font-mono-ui text-[9px] uppercase tracking-[.14em] text-[#70887d]">Trade plan</div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] md:grid-cols-4">
+                      <div>ENTRY <strong className="text-[#c8f169]">{price(optionIntelligence.recommendation.tradePlan.entry)}</strong></div>
+                      <div>STOP <strong className="text-[#ffb0a6]">{optionIntelligence.recommendation.tradePlan.stopLoss == null ? "—" : price(optionIntelligence.recommendation.tradePlan.stopLoss)}</strong></div>
+                      <div>TARGET <strong className="text-[#c8f169]">{optionIntelligence.recommendation.tradePlan.target == null ? "—" : price(optionIntelligence.recommendation.tradePlan.target)}</strong></div>
+                      <div>R:R <strong className="text-[#d7e8d9]">{optionIntelligence.recommendation.tradePlan.rewardRisk == null ? "—" : optionIntelligence.recommendation.tradePlan.rewardRisk + ":1"}</strong></div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[9px] text-[#9fb4a8]">
+                      {optionIntelligence.recommendation.tradePlan.legs.map((leg, index) => (
+                        <span key={leg.side + "-" + leg.strike + "-" + index} className="rounded border border-[#29463b] px-2 py-1">
+                          {leg.side} {leg.strike} {leg.optionType} @ {price(leg.price)}
+                        </span>
+                      ))}
+                      <span className="rounded border border-[#29463b] px-2 py-1">BE {optionIntelligence.recommendation.tradePlan.breakeven == null ? "—" : price(optionIntelligence.recommendation.tradePlan.breakeven)}</span>
+                      <span className="rounded border border-[#29463b] px-2 py-1">MAX LOSS {optionIntelligence.recommendation.tradePlan.maxLoss == null ? "—" : price(optionIntelligence.recommendation.tradePlan.maxLoss)}</span>
+                      <span className="rounded border border-[#29463b] px-2 py-1">MAX PROFIT {optionIntelligence.recommendation.tradePlan.maxProfit == null ? "—" : price(optionIntelligence.recommendation.tradePlan.maxProfit)}</span>
+                    </div>
+                  </div>
+                )}
                 {optionIntelligence.status === "ACTIONABLE" && optionIntelligence.recommendation.contract && ["BUY_CALL","BUY_PUT","CALL_VERTICAL","PUT_VERTICAL"].includes(optionIntelligence.recommendation.action) ? (
                   <button onClick={() => void paperValidateOption()} className="mt-3 rounded-lg border border-[#476238] bg-[#142a25] px-3 py-2 font-mono-ui text-[10px] uppercase tracking-[.08em] text-[#c8f169] hover:bg-[#1b3b31]">
-                    Paper validate {optionIntelligence.recommendation.action.replaceAll("_", " ")}
+                    Execute paper {optionIntelligence.recommendation.action.replaceAll("_", " ")}
                   </button>
                 ) : null}
                 {optionOrderMessage ? <div className="mt-2 text-[10px] text-[#a9bbb0]">{optionOrderMessage}</div> : null}\n                {optionIntelligence.recommendation.contract && ["BUY_CALL","BUY_PUT","CALL_VERTICAL","PUT_VERTICAL"].includes(optionIntelligence.recommendation.action) ? <div className="mt-2 text-[9px] leading-relaxed text-[#71877d]">This option paper validation is a simulation of the option-intelligence output; it is not a broker order and does not override the deterministic candidate gate.</div> : null}
