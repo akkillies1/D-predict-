@@ -10,11 +10,13 @@ const chain = [
   leg(24800, "PE", 3000, 80, 81, 16), leg(25000, "PE", 3500, 110, 111, 16), leg(25200, "PE", 1000, 155, 156, 16),
 ];
 const result = analyzeOptionChain("NIFTY", chain, 25000, now);
-assert.equal(result.recommendation.action, "BUY_CALL");
+assert.equal(result.recommendation.action, "CALL_VERTICAL");
 assert.ok(result.recommendation.tradePlan);
-assert.equal(result.recommendation.tradePlan.legs.length, 1);
+assert.equal(result.recommendation.tradePlan.legs.length, 2);
 assert.equal(result.recommendation.tradePlan.legs[0].optionType, "CE");
-assert.equal(result.recommendation.tradePlan.maxLoss, 151);
+assert.equal(result.recommendation.tradePlan.legs[1].side, "SELL");
+assert.equal(result.recommendation.tradePlan.legs[1].optionType, "CE");
+assert.equal(result.recommendation.tradePlan.maxLoss, 56);
 
 const stale = analyzeOptionChain("NIFTY", chain.map(row => ({ ...row, timestamp: "2026-10-03T08:00:00.000Z" })), 25000, now);
 assert.equal(stale.gates.freshForPaper, false);
