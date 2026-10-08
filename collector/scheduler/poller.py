@@ -36,21 +36,10 @@ def nse_session_active(now_utc: datetime | None = None) -> bool:
 class Poller:
     def __init__(self):
         self._nse = NSEAdapter()
+        installed: dict[str, OptionChainProvider] = {self._nse.name: self._nse}
         # Providers are ordered by configuration; the first provider that
         # supports the searched symbol and returns real snapshots wins.
-        provider_registry: dict[str, OptionChainProvider] = {"nse": self._nse}
-        self._option_providers: list[OptionChainProvider] = [
-            provider_registry[name] for name in config.option_chain_providers if name in provider_registry
-        ]
-        self._yahoo = YahooAdapter()
-        self._db = PostgresPersistence()
-        self._radar_cursor = 0
-        # NSE answers empty/403 for non-F&O symbols and outside session; after
-        # a few silent empties a symbol is muted until the next IST open
-        # instead of burning rate-limit budget on every poll.
-        self._chain_empties: dict[str, int] = {}
-        self._chain_muted_until: dict[str, datetime] = {}
-
+        self._option_providers = [installed[name] for name in config.option_chain_providers if name in installed]
     def _note_chain_result(self, symbol: str, got_rows: bool, now_utc: datetime) -> None:
         if got_rows:
             self._chain_empties[symbol] = 0
