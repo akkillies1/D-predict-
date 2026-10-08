@@ -27,3 +27,8 @@ assert.equal(stale.gates.freshForPaper, false);
 assert.equal(stale.recommendation.tradePlan, null);
 
 console.log("option trade plan contract tests passed");
+
+const mismatchedLots = chain.map((row, index) => index === 2 ? { ...row, lotSize: 50 } : row);
+const mismatched = analyzeOptionChain("NIFTY", mismatchedLots, 25000, now);
+assert.equal(mismatched.gates.lotSizeAvailable, false);
+assert.equal(mismatched.recommendation.tradePlan, null);
