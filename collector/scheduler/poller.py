@@ -38,7 +38,10 @@ class Poller:
         self._nse = NSEAdapter()
         # Providers are ordered by configuration; the first provider that
         # supports the searched symbol and returns real snapshots wins.
-        self._option_providers: list[OptionChainProvider] = [self._nse]
+        provider_registry: dict[str, OptionChainProvider] = {"nse": self._nse}
+        self._option_providers: list[OptionChainProvider] = [
+            provider_registry[name] for name in config.option_chain_providers if name in provider_registry
+        ]
         self._yahoo = YahooAdapter()
         self._db = PostgresPersistence()
         self._radar_cursor = 0
