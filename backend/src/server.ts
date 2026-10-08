@@ -312,6 +312,76 @@ app.get("/api/signals/latest", async (req, res) => {
   } catch (error) { return res.status(500).json({ ok: false, error: "SIGNAL_QUERY_FAILED", message: error instanceof Error ? error.message : "query_failed" }); }
 });
 
+app.get("/api/options/discover", async (req, res) => {
+  if (!pool) return noDb(res);
+  const query = String(req.query.q ?? "").trim();
+  if (query.length < 1) return res.json({ ok: true, query, instruments: [] });
+  try {
+    const result = await pool.query(`
+      select i.symbol, i.exchange, i.name, i.provider_symbol, i.instrument_type,
+             i.is_active, i.lot_size,
+             max(os.market_timestamp) as latest_option_timestamp,
+             count(oc.contract_id)::int as contracts
+      from instruments i
+      left join option_contracts oc on oc.instrument_id = i.instrument_id
+      left join option_snapshots os on os.contract_id = oc.contract_id
+      where upper(i.symbol) like $1
+         or upper(coalesce(i.name, '')) like $1
+         or exists (select 1 from unnest(i.aliases) alias where upper(alias) like $1)
+      group by i.instrument_id
+      order by case when upper(i.symbol) = upper($2) then 0
+                    when upper(i.symbol) like upper($2) || '%' then 1
+                    else 2 end, i.symbol
+      limit 25
+    `, [`%${query.toUpperCase()}%`, query]);
+    return res.json({
+      ok: true,
+      query,
+      instruments: result.rows.map(row => ({
+        symbol: row.symbol,
+        exchange: row.exchange,
+        name: row.name,
+        providerSymbol: row.provider_symbol,
+        instrumentType: row.instrument_type,
+        isActive: row.is_active,
+        lotSize: row.lot_size == null ? null : Number(row.lot_size),
+        optionChain: {
+          available: Number(row.contracts) > 0 && row.latest_option_timestamp != null,
+          contracts: Number(row.contracts),
+          latestTimestamp: iso(row.latest_option_timestamp),
+        },
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "OPTION_DISCOVERY_FAILED", message: error instanceof Error ? error.message : "query_failed" });
+  }
+});
+
+app.post("/api/options/track", async (req, res) => {
+  if (!pool) return noDb(res);
+  const symbol = symbolParam(req.body?.symbol);
+  if (invalidSymbol(symbol)) return res.status(400).json({ ok: false, error: "INVALID_SYMBOL" });
+  try {
+    const result = await pool.query(
+      "update instruments set is_active = true where upper(symbol) = $1 returning symbol, exchange, name, provider_symbol, instrument_type, lot_size",
+      [symbol],
+    );
+    if (!result.rows.length) return res.status(404).json({ ok: false, error: "INSTRUMENT_NOT_FOUND", symbol });
+    const row = result.rows[0];
+    return res.json({
+      ok: true,
+      symbol: row.symbol,
+      tracking: true,
+      providerSymbol: row.provider_symbol,
+      instrumentType: row.instrument_type,
+      lotSize: row.lot_size == null ? null : Number(row.lot_size),
+      message: "Instrument activated for the configured option-chain providers.",
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "OPTION_TRACK_FAILED", message: error instanceof Error ? error.message : "update_failed" });
+  }
+});
+
 app.get("/api/options/chain", async (req, res) => {
   if (!pool) return noDb(res);
   const symbol = symbolParam(req.query.symbol);
