@@ -19,6 +19,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from collector.canonical.options import CanonicalOptionSnapshot
 from collector.config import config
 from collector.logging_config import get_logger
+from collector.providers.options import OptionChainProvider
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,10 @@ _HEADERS = {
 }
 
 
-class NSEAdapter:
+class NSEAdapter(OptionChainProvider):
+    name = "nse"
+    version = ADAPTER_VERSION
+
     """Owns a warmed-up session; reuse one instance across polls rather than
     creating a fresh session every call."""
 
@@ -92,6 +96,9 @@ class NSEAdapter:
             resp.raise_for_status()
         resp.raise_for_status()
         return resp.json()
+
+    def supports(self, symbol: str) -> bool:
+        return bool(symbol.strip())
 
     def fetch_option_chain(self, symbol: str) -> list[CanonicalOptionSnapshot]:
         """Fetch the full option chain for a symbol and return canonical snapshots."""
