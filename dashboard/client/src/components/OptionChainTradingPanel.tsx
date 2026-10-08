@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   getOptionChain,
+  discoverOptionInstruments,
   getOptionPaperTrades,
   getOptionIntelligence,
   placeOptionPaperOrder,
@@ -23,7 +24,6 @@ import {
 } from "@/lib/localApi";
 import { toast } from "sonner";
 
-const symbols = ["NIFTY", "BANKNIFTY"] as const;
 const money = (v: number | null) =>
   v == null || !Number.isFinite(v)
     ? "—"
@@ -80,8 +80,12 @@ function TradeButtons({
 
 export default function OptionChainTradingPanel() {
   const [symbol, setSymbol] = useState(
-    () => localStorage.getItem("dpredict:selected-symbol") || "NIFTY"
+    () => localStorage.getItem("dpredict:selected-symbol") || ""
   );
+  const [search, setSearch] = useState(
+    () => localStorage.getItem("dpredict:selected-symbol") || ""
+  );
+  const [discoveries, setDiscoveries] = useState<Awaited<ReturnType<typeof discoverOptionInstruments>>>([]);
   const [options, setOptions] = useState<OptionRow[]>([]);
   const [trades, setTrades] = useState<PaperOptionTrade[]>([]);
   const [intelligence, setIntelligence] = useState<OptionIntelligence | null>(null);
