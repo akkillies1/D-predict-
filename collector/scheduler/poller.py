@@ -78,30 +78,37 @@ class Poller:
             if until is not None and now_utc < until:
                 continue
             snapshots = []
+            valid = []
             provider_errors: list[str] = []
             for provider in self._option_providers:
                 if not provider.supports(symbol):
                     continue
                 try:
-                    snapshots = provider.fetch_option_chain(symbol)
+                    candidate = provider.fetch_option_chain(symbol)
                 except Exception as exc:
                     provider_errors.append(f"{provider.name}: {exc}")
                     logger.exception("option provider %s failed for %s (run=%s)", provider.name, symbol, run_id)
                     continue
-                if snapshots:
-                    logger.info("option provider %s supplied %d snapshots for %s", provider.name, len(snapshots), symbol)
+                candidate_valid = []
+                candidate_dropped = 0
+                for snap in candidate:
+                    problems = validate_option_snapshot(snap)
+                    if problems:
+                        candidate_dropped += 1
+                        logger.warning("dropped option snapshot from %s for %s: %s", provider.name, symbol, problems)
+                    else:
+                        candidate_valid.append(snap)
+                if candidate_valid:
+                    snapshots = candidate
+                    valid = candidate_valid
+                    logger.info("option provider %s supplied %d valid snapshots for %s", provider.name, len(valid), symbol)
                     break
-            if not snapshots and provider_errors:
-                logger.warning("all option providers failed/empty for %s: %s", symbol, " | ".join(provider_errors))
-            self._note_chain_result(symbol, bool(snapshots), now_utc)
-            valid, dropped = [], 0
-            for snap in snapshots:
-                problems = validate_option_snapshot(snap)
-                if problems:
-                    dropped += 1
-                    logger.warning("dropped option snapshot %s: %s", snap, problems)
-                else:
-                    valid.append(snap)
+                if candidate:
+                    provider_errors.append(f"{provider.name}: {candidate_dropped} invalid snapshots")
+            if not valid and provider_errors:
+                logger.warning("all option providers failed/empty/invalid for %s: %s", symbol, " | ".join(provider_errors))
+            self._note_chain_result(symbol, bool(valid), now_utc)
+            dropped = len(snapshots) - len(valid)
 
             if valid:
                 self._db.save_option_snapshots(valid, run_id)
