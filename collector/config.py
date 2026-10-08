@@ -39,6 +39,9 @@ class Config:
         name.strip().lower() for name in os.environ.get("OPTION_CHAIN_PROVIDERS", "nse").split(",") if name.strip()
     )
     nse_max_retries: int = 3
+    dhan_client_id: str | None = os.environ.get("DHAN_CLIENT_ID")
+    dhan_access_token: str | None = os.environ.get("DHAN_ACCESS_TOKEN")
+    dhan_request_timeout_seconds: int = 10
 
     # Yahoo adapter. Add symbols as plain Yahoo tickers (for example
     # RELIANCE.NS) or use the built-in index aliases below.
