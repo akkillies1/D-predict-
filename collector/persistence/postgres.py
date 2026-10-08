@@ -102,6 +102,12 @@ class PostgresPersistence:
         self._dsn = dsn or config.database_url
         self._conn = psycopg2.connect(self._dsn)
         self._conn.autocommit = True
+        # Apply idempotent compatibility migrations before the collector starts
+        # writing newer canonical fields into an existing PGDATA volume.
+        with self._conn.cursor() as cur:
+            cur.execute("alter table option_contracts add column if not exists lot_size integer")
+            cur.execute("alter table option_contracts drop constraint if exists option_contracts_lot_size_positive")
+            cur.execute("alter table option_contracts add constraint option_contracts_lot_size_positive check (lot_size is null or lot_size > 0)")
 
     def close(self) -> None:
         self._conn.close()
