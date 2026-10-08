@@ -10,10 +10,12 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from collector.adapters.nse import NSEAdapter
+from collector.adapters.dhan import DhanOptionChainProvider
 from collector.adapters.yahoo import YahooAdapter, provider_symbol
 from collector.config import config
 from collector.logging_config import get_logger
 from collector.options_radar import evaluate_option_rules
+from collector.providers.options import OptionChainProvider
 from collector.persistence.postgres import PostgresPersistence
 from collector.radar import MIN_BARS_PRICE, RADAR_SYMBOLS, drop_partial_last_bar, evaluate_rules
 from collector.validation.market_data import validate_option_snapshot, validate_price_bar
@@ -35,15 +37,21 @@ def nse_session_active(now_utc: datetime | None = None) -> bool:
 class Poller:
     def __init__(self):
         self._nse = NSEAdapter()
+        self._dhan = DhanOptionChainProvider()
         self._yahoo = YahooAdapter()
         self._db = PostgresPersistence()
         self._radar_cursor = 0
-        # NSE answers empty/403 for non-F&O symbols and outside session; after
-        # a few silent empties a symbol is muted until the next IST open
-        # instead of burning rate-limit budget on every poll.
+        # Empty option responses are muted per symbol after repeated failures
+        # until the next session open, preventing provider rate-limit churn.
         self._chain_empties: dict[str, int] = {}
         self._chain_muted_until: dict[str, datetime] = {}
-
+        installed: dict[str, OptionChainProvider] = {
+            self._nse.name: self._nse,
+            self._dhan.name: self._dhan,
+        }
+        # Providers are ordered by configuration; the first provider that
+        # supports the searched symbol and returns real snapshots wins.
+        self._option_providers = [installed[name] for name in config.option_chain_providers if name in installed]
     def _note_chain_result(self, symbol: str, got_rows: bool, now_utc: datetime) -> None:
         if got_rows:
             self._chain_empties[symbol] = 0
@@ -69,22 +77,38 @@ class Poller:
             until = self._chain_muted_until.get(symbol)
             if until is not None and now_utc < until:
                 continue
-            try:
-                snapshots = self._nse.fetch_option_chain(symbol)
-            except Exception:
-                logger.exception("nse fetch failed for %s (run=%s)", symbol, run_id)
-                self._note_chain_result(symbol, False, now_utc)
-                continue
-
-            self._note_chain_result(symbol, bool(snapshots), now_utc)
-            valid, dropped = [], 0
-            for snap in snapshots:
-                problems = validate_option_snapshot(snap)
-                if problems:
-                    dropped += 1
-                    logger.warning("dropped option snapshot %s: %s", snap, problems)
-                else:
-                    valid.append(snap)
+            snapshots = []
+            valid = []
+            provider_errors: list[str] = []
+            for provider in self._option_providers:
+                if not provider.supports(symbol):
+                    continue
+                try:
+                    candidate = provider.fetch_option_chain(symbol)
+                except Exception as exc:
+                    provider_errors.append(f"{provider.name}: {exc}")
+                    logger.exception("option provider %s failed for %s (run=%s)", provider.name, symbol, run_id)
+                    continue
+                candidate_valid = []
+                candidate_dropped = 0
+                for snap in candidate:
+                    problems = validate_option_snapshot(snap)
+                    if problems:
+                        candidate_dropped += 1
+                        logger.warning("dropped option snapshot from %s for %s: %s", provider.name, symbol, problems)
+                    else:
+                        candidate_valid.append(snap)
+                if candidate_valid:
+                    snapshots = candidate
+                    valid = candidate_valid
+                    logger.info("option provider %s supplied %d valid snapshots for %s", provider.name, len(valid), symbol)
+                    break
+                if candidate:
+                    provider_errors.append(f"{provider.name}: {candidate_dropped} invalid snapshots")
+            if not valid and provider_errors:
+                logger.warning("all option providers failed/empty/invalid for %s: %s", symbol, " | ".join(provider_errors))
+            self._note_chain_result(symbol, bool(valid), now_utc)
+            dropped = len(snapshots) - len(valid)
 
             if valid:
                 self._db.save_option_snapshots(valid, run_id)

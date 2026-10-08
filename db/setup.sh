@@ -45,6 +45,10 @@ psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/010
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/011_underlying_paper_trading.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/012_ledger_costs.sql"
 psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/013_training_registry.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/014_buy_alerts.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/015_alert_rules_options.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/016_ai_settings.sql"
+psql -h localhost -p "$PORT" -U postgres -d nifty -f "$SCRIPT_DIR/migrations/017_option_contract_metadata.sql"
 
 pg_ctl -D "$DATA_DIR" stop
 
