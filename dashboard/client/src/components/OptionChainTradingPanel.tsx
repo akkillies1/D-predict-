@@ -145,7 +145,7 @@ export default function OptionChainTradingPanel() {
   }, [refresh]);
   useEffect(() => {
     const onSymbol = () =>
-      setSymbol(localStorage.getItem("dpredict:selected-symbol") || "NIFTY");
+      setSymbol(localStorage.getItem("dpredict:selected-symbol") || "");
     window.addEventListener("dpredict:symbol", onSymbol);
     return () => window.removeEventListener("dpredict:symbol", onSymbol);
   }, []);
