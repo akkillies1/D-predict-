@@ -124,7 +124,7 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
       return {
         action, symbol, expiry, entry: round(entry, 2), stopLoss, target,
         breakeven: round(spot + (action === "BUY_CALL" ? entry : -entry), 2),
-        maxLoss: round(risk, 2), maxProfit: null,
+        maxLoss: round(entry, 2), maxProfit: null,
         rewardRisk: risk > 0 ? round(reward / risk, 2) : null,
         legs: [{ side: "BUY", strike: preferred.strike, optionType: preferred.optionType, price: round(entry, 2) }],
       };
