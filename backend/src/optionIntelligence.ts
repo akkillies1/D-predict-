@@ -14,6 +14,24 @@ export type OptionLeg = {
 };
 
 export type OptionAction = "BUY_CALL" | "BUY_PUT" | "CALL_VERTICAL" | "PUT_VERTICAL" | "WAIT" | "ABSTAIN";
+export type OptionTradePlan = {
+  action: OptionAction;
+  symbol: string;
+  expiry: string;
+  entry: number;
+  stopLoss: number | null;
+  target: number | null;
+  breakeven: number | null;
+  maxLoss: number | null;
+  maxProfit: number | null;
+  rewardRisk: number | null;
+  legs: Array<{
+    side: "BUY" | "SELL";
+    strike: number;
+    optionType: OptionType;
+    price: number;
+  }>;
+};
 export type OptionIntelligence = {
   ok: boolean;
   status: "ACTIONABLE" | "RESEARCH_ONLY" | "ABSTAIN" | "NO_CHAIN";
@@ -42,6 +60,7 @@ export type OptionIntelligence = {
     risks: string[];
     contract: { expiry: string; strike: number; optionType: OptionType; price: number; bid: number; ask: number } | null;
     hedge: { expiry: string; strike: number; optionType: OptionType; price: number; bid: number; ask: number } | null;
+    tradePlan: OptionTradePlan | null;
   };
   candidates: Array<{ expiry: string; strike: number; optionType: OptionType; ltp: number | null; bid: number | null; ask: number | null; oi: number; iv: number | null; spreadPct: number | null }>;
   gates: Record<string, boolean>;
@@ -57,7 +76,7 @@ function validQuote(row: OptionLeg): boolean { return row.bid != null && row.ask
 export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInput: number | null, now = new Date()): OptionIntelligence {
   const rows = rawRows.filter(row => Number.isFinite(row.strike) && row.strike > 0 && (row.optionType === "CE" || row.optionType === "PE") && dateOf(row.expiryDate) && dateOf(row.timestamp));
   const disclaimer = "Research-only option evidence. This is not investment advice, does not predict with certainty, and never sends broker orders.";
-  if (!rows.length) return { ok: false, status: "NO_CHAIN", expiry: null, asOf: null, spot: finite(spotInput), metrics: { pcr: null, atmStrike: null, atmIv: null, ivSkewPutMinusCall: null, callWall: null, putWall: null, maxPain: null, averageSpreadPct: null, liquidityScore: 0, freshnessSeconds: null }, recommendation: { action: "ABSTAIN", direction: "NEUTRAL", confidence: 0, rationale: "No persisted option-chain snapshot is available.", evidence: [], risks: ["The engine cannot identify a contract without real chain data."], contract: null, hedge: null }, candidates: [], gates: { chainAvailable: false, spotAvailable: spotInput != null }, disclaimer };
+  if (!rows.length) return { ok: false, status: "NO_CHAIN", expiry: null, asOf: null, spot: finite(spotInput), metrics: { pcr: null, atmStrike: null, atmIv: null, ivSkewPutMinusCall: null, callWall: null, putWall: null, maxPain: null, averageSpreadPct: null, liquidityScore: 0, freshnessSeconds: null }, recommendation: { action: "ABSTAIN", direction: "NEUTRAL", confidence: 0, rationale: "No persisted option-chain snapshot is available.", evidence: [], risks: ["The engine cannot identify a contract without real chain data."], contract: null, hedge: null, tradePlan: null }, candidates: [], gates: { chainAvailable: false, spotAvailable: spotInput != null }, disclaimer };
   const expiry = [...new Set(rows.map(row => row.expiryDate))].sort()[0];
   const chain = rows.filter(row => row.expiryDate === expiry);
   const spot = finite(spotInput);
@@ -94,7 +113,48 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish };
   const actionable = Object.values(gates).every(Boolean);
   const action: OptionAction = actionable && preferred ? (bullish ? "BUY_CALL" : "BUY_PUT") : direction !== "NEUTRAL" && preferred && hedge ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL") : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
+  const tradePlan: OptionTradePlan | null = (() => {
+    if (!preferred || !symbol || !expiry || !spot || !actionable) return null;
+    const entry = preferred.ask!;
+    if (action === "BUY_CALL" || action === "BUY_PUT") {
+      const stopLoss = round(entry * 0.70, 2);
+      const target = round(entry * 1.60, 2);
+      const risk = entry - stopLoss;
+      const reward = target - entry;
+      return {
+        action, symbol, expiry, entry: round(entry, 2), stopLoss, target,
+        breakeven: round(spot + (action === "BUY_CALL" ? entry : -entry), 2),
+        maxLoss: round(risk, 2), maxProfit: null,
+        rewardRisk: risk > 0 ? round(reward / risk, 2) : null,
+        legs: [{ side: "BUY", strike: preferred.strike, optionType: preferred.optionType, price: round(entry, 2) }],
+      };
+    }
+    if ((action === "CALL_VERTICAL" || action === "PUT_VERTICAL") && hedge) {
+      const buy = action === "CALL_VERTICAL"
+        ? (preferred.strike < hedge.strike ? preferred : hedge)
+        : (preferred.strike > hedge.strike ? preferred : hedge);
+      const sell = buy === preferred ? hedge : preferred;
+      const debit = round(buy.ask! - sell.bid!, 2);
+      const width = Math.abs(buy.strike - sell.strike);
+      const maxLoss = round(Math.max(0, debit) * 1, 2);
+      const maxProfit = round(Math.max(0, width - debit), 2);
+      const breakeven = round(
+        action === "CALL_VERTICAL" ? buy.strike + debit : buy.strike - debit, 2
+      );
+      return {
+        action, symbol, expiry, entry: debit, stopLoss: null, target: maxProfit,
+        breakeven, maxLoss, maxProfit,
+        rewardRisk: maxLoss > 0 ? round(maxProfit / maxLoss, 2) : null,
+        legs: [
+          { side: "BUY", strike: buy.strike, optionType: buy.optionType, price: round(buy.ask!, 2) },
+          { side: "SELL", strike: sell.strike, optionType: sell.optionType, price: round(sell.bid!, 2) },
+        ],
+      };
+    }
+    return null;
+  })();
+
   const evidence = [`PCR ${pcr == null ? "unavailable" : pcr.toFixed(2)} from the ±5% ATM OI band.`, `Call wall ${callWall ?? "unavailable"}; put wall ${putWall ?? "unavailable"}.`, `ATM IV ${atmIv == null ? "unavailable" : `${atmIv.toFixed(2)}%`}; put-minus-call skew ${ivSkew == null ? "unavailable" : `${ivSkew.toFixed(2)} vol points`}.`, `Max pain is ${maxPain ?? "unavailable"}; it is context, not a price target.`];
   const risks = [freshnessSeconds != null && freshnessSeconds > 180 ? "Quote is stale for a paper fill; no action button is enabled." : "Displayed chain may be closed-market data and can gap before the next session.", averageSpreadPct == null ? "Bid/ask quality is unavailable." : `Average quoted spread is ${(averageSpreadPct * 100).toFixed(1)}%; premium slippage can overwhelm a weak edge.`, "OI walls and PCR describe positioning evidence, not a guaranteed direction."];
-  return { ok: true, status: actionable ? "ACTIONABLE" : action === "WAIT" ? "RESEARCH_ONLY" : "ABSTAIN", symbol, expiry, asOf: asOf?.toISOString() ?? null, spot, metrics: { pcr, atmStrike, atmIv, ivSkewPutMinusCall: ivSkew, callWall, putWall, maxPain, averageSpreadPct, liquidityScore: round(liquidityScore, 3), freshnessSeconds: freshnessSeconds == null ? null : round(freshnessSeconds, 1) }, recommendation: { action, direction, confidence: round(Math.min(1, (direction === "NEUTRAL" ? 0.35 : 0.55) + liquidityScore * 0.25 + (pcr != null ? 0.15 : 0)), 3), rationale: action === "WAIT" ? "The chain is available, but the directional and execution gates do not justify an action." : action === "ABSTAIN" ? "The engine is abstaining because required chain, spot, quote, or liquidity evidence is missing." : `${direction} positioning evidence clears the configured research gates; paper validation is required.`, evidence, risks, contract: preferred ? { expiry, strike: preferred.strike, optionType: preferred.optionType, price: preferred.ask!, bid: preferred.bid!, ask: preferred.ask! } : null, hedge: hedge ? { expiry, strike: hedge.strike, optionType: hedge.optionType, price: hedge.ask!, bid: hedge.bid!, ask: hedge.ask! } : null }, candidates: candidates.slice(0, 20), gates, disclaimer };
+  return { ok: true, status: actionable ? "ACTIONABLE" : action === "WAIT" ? "RESEARCH_ONLY" : "ABSTAIN", symbol, expiry, asOf: asOf?.toISOString() ?? null, spot, metrics: { pcr, atmStrike, atmIv, ivSkewPutMinusCall: ivSkew, callWall, putWall, maxPain, averageSpreadPct, liquidityScore: round(liquidityScore, 3), freshnessSeconds: freshnessSeconds == null ? null : round(freshnessSeconds, 1) }, recommendation: { action, direction, confidence: round(Math.min(1, (direction === "NEUTRAL" ? 0.35 : 0.55) + liquidityScore * 0.25 + (pcr != null ? 0.15 : 0)), 3), rationale: action === "WAIT" ? "The chain is available, but the directional and execution gates do not justify an action." : action === "ABSTAIN" ? "The engine is abstaining because required chain, spot, quote, or liquidity evidence is missing." : `${direction} positioning evidence clears the configured research gates; paper validation is required.`, evidence, risks, contract: preferred ? { expiry, strike: preferred.strike, optionType: preferred.optionType, price: preferred.ask!, bid: preferred.bid!, ask: preferred.ask! } : null, hedge: hedge ? { expiry, strike: hedge.strike, optionType: hedge.optionType, price: hedge.ask!, bid: hedge.bid!, ask: hedge.ask! } : null, tradePlan }, candidates: candidates.slice(0, 20), gates, disclaimer };
 }
