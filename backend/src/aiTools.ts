@@ -518,7 +518,7 @@ async function optionPaperOrderTool(env: ToolEnv, args: Record<string, unknown>)
   if (!Number.isFinite(strike) || strike <= 0) return fail("INVALID_STRIKE", "Provide a positive strike.");
   if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
   await env.pool.query(`create table if not exists option_paper_trades (id uuid primary key default gen_random_uuid(),contract_id uuid not null references option_contracts(contract_id),symbol text not null,expiry_date date not null,strike numeric(12,4) not null,option_type text not null check(option_type in ('CE','PE')),side text not null check(side in ('BUY','SELL')),status text not null default 'OPEN' check(status in ('OPEN','CLOSED')),lots integer not null check(lots>0),lot_size integer not null check(lot_size>0),quantity integer not null check(quantity>0),entry_price numeric(12,4) not null,entry_bid numeric(12,4),entry_ask numeric(12,4),entry_ltp numeric(12,4),entry_quote_timestamp timestamptz not null,entry_timestamp timestamptz not null default now(),current_price numeric(12,4),current_quote_timestamp timestamptz,unrealized_pnl numeric(14,2) not null default 0,realized_pnl numeric(14,2),exit_price numeric(12,4),exit_timestamp timestamptz,exit_reason text,entry_fees numeric(14,2) not null default 0,exit_fees numeric(14,2),created_at timestamptz not null default now(),updated_at timestamptz not null default now())`);
-  const cr = await env.pool.query(`select oc.contract_id, oc.expiry_date, oc.strike, oc.option_type, i.symbol, i.lot_size
+  const cr = await env.pool.query(`select oc.contract_id, oc.expiry_date, oc.strike, oc.option_type, oc.lot_size, i.symbol
     from option_contracts oc join instruments i on i.instrument_id=oc.instrument_id
     where i.symbol=$1 and oc.expiry_date=$2::date and oc.strike=$3 and oc.option_type=$4 limit 1`, [symbol, expiry, strike, optionType]);
   if (!cr.rows.length) return fail("OPTION_CONTRACT_NOT_FOUND", `${symbol} ${expiry} ${strike} ${optionType} is not in the persisted chain.`);
@@ -532,7 +532,8 @@ async function optionPaperOrderTool(env: ToolEnv, args: Record<string, unknown>)
   if (age > maxAge) return fail("OPTION_QUOTE_STALE", `Quote is ${age.toFixed(0)}s old; maximum is ${maxAge}s.`);
   const fill = side === "BUY" ? finite(quote.ask) : finite(quote.bid);
   if (fill == null || fill <= 0) return fail(side === "BUY" ? "OPTION_ASK_UNAVAILABLE" : "OPTION_BID_UNAVAILABLE", "Executable quote side is unavailable.");
-  const lotSize = Math.max(1, Number(contract.lot_size));
+  const lotSize = Number(contract.lot_size);
+  if (!Number.isFinite(lotSize) || lotSize <= 0) return fail("OPTION_LOT_SIZE_MISSING", "Contract lot size is unavailable.");
   const quantity = lotSize * lots;
   const feeFixed = Math.max(0, Number(process.env.SHADOW_FEE_FIXED_PER_ORDER ?? 20));
   const feeBps = Math.max(0, Number(process.env.SHADOW_FEE_BPS_PER_SIDE ?? 15));
