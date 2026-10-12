@@ -462,7 +462,7 @@ async function optionChainTool(env: ToolEnv, args: Record<string, unknown>): Pro
   const symbol = symbolOf(args.symbol);
   if (!symbol) return fail("INVALID_SYMBOL", "Provide NIFTY or BANKNIFTY (or another stored index symbol).");
   if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
-  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, oc.lot_size, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
     from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
     where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
     order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
@@ -482,7 +482,7 @@ async function optionIntelligenceTool(env: ToolEnv, args: Record<string, unknown
       where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
       order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]),
   ]);
-  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume) }));
+  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume), lotSize:r.lot_size == null ? null : Number(r.lot_size) }));
   const intelligence = analyzeOptionChain(symbol, rows, spot.rows.length ? finite(spot.rows[0].close) : null);
   return { ok: intelligence.ok, summary: `${symbol}: ${intelligence.status} · ${intelligence.recommendation.action} · ${intelligence.recommendation.direction} · confidence ${(intelligence.recommendation.confidence*100).toFixed(0)}%.`, data: intelligence };
 }
