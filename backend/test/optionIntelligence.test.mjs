@@ -18,6 +18,19 @@ assert.equal(result.recommendation.action, "CALL_VERTICAL");
 assert.equal(result.gates.freshForPaper, true);
 assert.ok(result.recommendation.evidence.length >= 3);
 
+// Bearish put vertical: the long higher-strike PE must determine the debit.
+// The old calculation reversed the legs, produced zero debit, and hid the vertical.
+const bearishChain = [
+  leg(24800, "CE", 3000, 220, 221), leg(25000, "CE", 4000, 150, 151), leg(25200, "CE", 3000, 95, 96),
+  leg(24800, "PE", 100, 80, 81), leg(25000, "PE", 100, 110, 111), leg(25200, "PE", 100, 155, 156),
+];
+const bearish = analyzeOptionChain("NIFTY", bearishChain, 25000, now);
+assert.equal(bearish.recommendation.direction, "BEARISH");
+assert.equal(bearish.recommendation.action, "PUT_VERTICAL");
+assert.equal(bearish.recommendation.tradePlan?.entry, 31);
+assert.equal(bearish.recommendation.tradePlan?.legs[0]?.side, "BUY");
+assert.equal(bearish.recommendation.tradePlan?.legs[0]?.strike, 25000);
+
 const stale = analyzeOptionChain("NIFTY", chain.map(row => ({ ...row, timestamp: "2026-10-03T08:00:00.000Z" })), 25000, now);
 assert.notEqual(stale.recommendation.action, "BUY_CALL");
 assert.equal(stale.gates.freshForPaper, false);
