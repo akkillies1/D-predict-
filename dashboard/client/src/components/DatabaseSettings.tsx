@@ -17,17 +17,28 @@ const modeLabel: Record<NonNullable<DatabaseStatus["mode"]>, string> = {
 
 export default function DatabaseSettings() {
   const [status, setStatus] = useState<DatabaseStatus | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [statusError, setStatusError] = useState<"offline" | "permission" | "unavailable" | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    setLoadingStatus(true);
+    setStatusError(null);
     try {
       const response = await fetch("/api/system/database", { cache: "no-store" });
-      if (!response.ok) throw new Error("Database status unavailable");
+      if (!response.ok) {
+        setStatusError(response.status === 401 || response.status === 403 ? "permission" : "unavailable");
+        throw new Error(response.status === 401 || response.status === 403 ? "Access to database status was denied." : "Database status service is unavailable.");
+      }
       setStatus(await response.json());
     } catch (error) {
+      if (!navigator.onLine) setStatusError("offline");
+      else setStatusError(current => current ?? "unavailable");
       setMessage(error instanceof Error ? error.message : "Database status unavailable");
+    } finally {
+      setLoadingStatus(false);
     }
   }, []);
 
@@ -64,7 +75,7 @@ export default function DatabaseSettings() {
               {status?.mode === "local_postgres" ? <HardDrive className="mt-0.5 size-5 text-[#c8f169]" /> : <Database className="mt-0.5 size-5 text-[#c8f169]" />}
               <div>
                 <div className="font-mono-ui text-[9px] uppercase tracking-[.18em] text-[#789087]">Data & Database</div>
-                <div className="mt-1 font-display text-lg font-semibold text-[#edf5e9]">{configured && status?.mode ? modeLabel[status.mode] : "Configuration not detected"}</div>
+                <div className="mt-1 font-display text-lg font-semibold text-[#edf5e9]">{loadingStatus ? "Checking database status…" : configured && status?.mode ? modeLabel[status.mode] : statusError ? "Status unavailable" : "Configuration not detected"}</div>
                 <p className="mt-1 text-xs text-[#70887d]">
                   {status?.dataRoot ? `Local PostgreSQL data: ${status.dataRoot}` : "D-Predict uses the configured local or PostgreSQL-compatible deployment."}
                 </p>
@@ -75,7 +86,8 @@ export default function DatabaseSettings() {
               <Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw />Refresh</Button>
             </div>
           </div>
-          {!configured && <div className="mt-4 rounded-lg border border-[#5a4530] bg-[#2a2116] px-3 py-2 text-xs text-[#d7b989]">The dashboard could not find the saved database state. Refresh after installation; if it remains missing, run Setup & Repair.</div>}
+          {statusError && <div role="alert" className="mt-4 rounded-lg border border-[#5a4530] bg-[#2a2116] px-3 py-2 text-xs text-[#d7b989]">{statusError === "offline" ? "The browser is offline. Database status could not be checked." : statusError === "permission" ? "Permission denied while reading database status. Check local service permissions." : "The local API did not return database status. Confirm D-Predict services are running."} <button type="button" onClick={() => void refresh()} className="ml-2 inline-flex items-center gap-1 font-semibold underline"><RefreshCw size={11} />Retry</button></div>}
+          {!loadingStatus && !statusError && !configured && <div className="mt-4 rounded-lg border border-[#5a4530] bg-[#2a2116] px-3 py-2 text-xs text-[#d7b989]">The dashboard could not find the saved database state. Refresh after installation; if it remains missing, run Setup & Repair.</div>}
           {message && <p className="mt-3 text-xs text-[#8da59a]">{message}</p>}
         </div>
       </section>
