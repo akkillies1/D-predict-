@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import express from "express";
 import { analyzeOptionChain } from "../dist/optionIntelligence.js";
-import { calculateVerticalRisk, isOptionContractExpired, isOptionQuoteFresh } from "../dist/shadowRoutes.js";
+import { calculateVerticalRisk, createShadowRouter, isOptionContractExpired, isOptionQuoteFresh } from "../dist/shadowRoutes.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 const leg = (strike, optionType, oi, bid, ask) => ({
@@ -40,3 +41,64 @@ assert.equal(isOptionContractExpired("2026-10-02", expiryNow), true);
 assert.equal(isOptionContractExpired("2026-10-03", expiryNow), false);
 assert.equal(isOptionContractExpired("2026-10-30", expiryNow), false);
 assert.equal(isOptionContractExpired("not-a-date", expiryNow), true);
+
+
+// Endpoint-level regression: missing contract sizing must reject both order types
+// and leave trade/ledger tables untouched.
+{
+  const RealDate = globalThis.Date;
+  const fixedMillis = new RealDate("2026-10-13T04:30:00.000Z").getTime(); // Tuesday, 10:00 IST
+  class FixedDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [fixedMillis])); }
+    static now() { return fixedMillis; }
+  }
+  globalThis.Date = FixedDate;
+  const clientSql = [];
+  const poolSql = [];
+  const client = {
+    async query(sql) {
+      clientSql.push(String(sql));
+      if (String(sql).includes('from option_contracts oc join instruments i')) {
+        return { rows: [{ contractId: "contract-1", expiryDate: "2026-10-30", strike: 25000, optionType: "CE", symbol: "NIFTY", lotSize: null }] };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const pool = {
+    async query(sql) { poolSql.push(String(sql)); return { rows: [] }; },
+    async connect() { return client; },
+  };
+  const app = express();
+  app.use(express.json());
+  app.use("/api/shadow", createShadowRouter(pool));
+  const server = app.listen(0);
+  try {
+    await new Promise(resolve => server.once("listening", resolve));
+    const address = server.address();
+    const base = `http://127.0.0.1:${address.port}/api/shadow`;
+    const single = await fetch(`${base}/paper-orders`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ symbol: "NIFTY", expiry: "2026-10-30", strike: 25000, optionType: "CE", side: "BUY", lots: 1 }),
+    });
+    assert.equal(single.status, 409);
+    assert.equal((await single.json()).error, "OPTION_LOT_SIZE_MISSING");
+
+    const vertical = await fetch(`${base}/paper-strategy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ symbol: "NIFTY", strategy: "CALL_VERTICAL", legs: [
+        { expiry: "2026-10-30", strike: 25000, optionType: "CE", side: "BUY", lots: 1 },
+        { expiry: "2026-10-30", strike: 25200, optionType: "CE", side: "SELL", lots: 1 },
+      ] }),
+    });
+    assert.equal(vertical.status, 409);
+    assert.equal((await vertical.json()).error, "OPTION_LOT_SIZE_MISSING");
+    assert.ok(clientSql.filter(sql => sql.toLowerCase() === "rollback").length >= 2);
+    assert.equal(clientSql.some(sql => /insert into (option_paper_trades|paper_option_strategies|paper_option_cash_ledger)|update paper_accounts/i.test(sql)), false);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    globalThis.Date = RealDate;
+  }
+}
