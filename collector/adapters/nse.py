@@ -210,7 +210,7 @@ def _parse_lot_size_csv(text: str) -> dict[str, int]:
     """Parse recognized symbol/lot-size columns; never infer from row position."""
     if not text or not text.strip():
         return {}
-    reader = csv.DictReader(io.StringIO(text.lstrip("\\ufeff")))
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     if not reader.fieldnames:
         return {}
     normalize = lambda value: "".join(ch.lower() for ch in (value or "") if ch.isalnum())
