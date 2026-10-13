@@ -1,10 +1,9 @@
 // Agent tools. Market/model facts come from the local Postgres store or the local ML service.
 // Deterministic analytics are explicitly labelled as such; this file never invents
 // missing observations or presents a fallback calculation as an ML prediction.
-// Four tools change app state (train, watchlist add/remove, alert ack). Each one
-// is gated: aiAgent.ts will not execute it until the user approves that exact
-// change in the dashboard, and it runs the same appActions.ts statements the
-// dashboard itself uses.
+// State-changing tools (including option paper orders) are gated: aiAgent.ts
+// will not execute them until the user approves that exact change in the dashboard.
+// Paper orders reuse the same validated execution path as the dashboard endpoint.
 import type { Pool } from "pg";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
 import { computePredictionPerformance } from "./predictionStats.js";
