@@ -75,6 +75,7 @@ export type OptionIntelligence = {
 
 function finite(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }
 function dateOf(value: string | Date): Date | null { const d = value instanceof Date ? value : new Date(value); return Number.isFinite(d.getTime()) ? d : null; }
+function timestampFresh(value: string | Date, now: Date, maxAgeSeconds = 180): boolean { const d = dateOf(value); if (!d) return false; const age = (now.getTime() - d.getTime()) / 1000; return age >= 0 && age <= maxAgeSeconds; }
 function round(value: number, places = 4) { const factor = 10 ** places; return Math.round(value * factor) / factor; }
 function nearest(rows: OptionLeg[], spot: number): OptionLeg | null { return rows.reduce<OptionLeg | null>((best, row) => !best || Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best, null); }
 function validQuote(row: OptionLeg): boolean { return row.bid != null && row.ask != null && row.bid > 0 && row.ask >= row.bid; }
@@ -136,10 +137,11 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
       (bullish ? row.strike > preferred.strike : row.strike < preferred.strike) &&
       row.strike !== preferred.strike)
     .sort((a, b) => Math.abs(a.row.strike - preferred.strike) - Math.abs(b.row.strike - preferred.strike) || b.score - a.score)[0]?.row ?? null : null;
+  const selectedQuotesFresh = preferred != null && timestampFresh(preferred.timestamp, now) && (!hedge || timestampFresh(hedge.timestamp, now));
   const preferredLotSize = preferred?.lotSize;
   const hedgeLotSize = hedge?.lotSize;
   const lotSizeAvailable = preferred != null && Number.isFinite(preferredLotSize) && (preferredLotSize as number) > 0 && (!hedge || (Number.isFinite(hedgeLotSize) && (hedgeLotSize as number) > 0 && hedgeLotSize === preferredLotSize));
-  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds >= 0 && freshnessSeconds <= 180, directionalEvidence: bullish || bearish, lotSizeAvailable };
+  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds >= 0 && freshnessSeconds <= 180 && selectedQuotesFresh, selectedQuotesFresh, directionalEvidence: bullish || bearish, lotSizeAvailable };
   const actionable = Object.values(gates).every(Boolean);
   const verticalDebit = preferred && hedge ? Math.max(0, preferred.ask! - hedge.bid!) : null;
   const verticalWidth = preferred && hedge ? Math.abs(preferred.strike - hedge.strike) : null;
