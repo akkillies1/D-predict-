@@ -12,6 +12,7 @@ once you're running this against live responses.
 
 import csv
 import io
+import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -207,7 +208,15 @@ class NSEAdapter(OptionChainProvider):
 
 
 def _parse_lot_size_csv(text: str) -> dict[str, int]:
-    """Parse recognized symbol/lot-size columns; never infer from row position."""
+    """Parse exact-symbol lot sizes from the official NSE report.
+
+    The current NSE report has one lot-size column per expiry (for example
+    ``OCT-26`` and ``NOV-26``), while older/fixture reports may expose one
+    ``MARKET LOT``/``LOT SIZE`` column. A symbol is returned only when every
+    populated recognized lot field is a positive integer and all of those
+    fields agree. This deliberately refuses to guess when expiry metadata is
+    malformed or inconsistent.
+    """
     if not text or not text.strip():
         return {}
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
@@ -216,30 +225,43 @@ def _parse_lot_size_csv(text: str) -> dict[str, int]:
     normalize = lambda value: "".join(ch.lower() for ch in (value or "") if ch.isalnum())
     columns = {normalize(name): name for name in reader.fieldnames}
     symbol_key = next((columns[key] for key in ("symbol", "underlyingsymbol", "underlying") if key in columns), None)
-    lot_key = next((columns[key] for key in ("marketlot", "lotsize", "permittedlotsize", "lotquantity") if key in columns), None)
-    if not symbol_key or not lot_key:
+    fixed_lot_key = next((columns[key] for key in ("marketlot", "lotsize", "permittedlotsize", "lotquantity") if key in columns), None)
+    expiry_lot_keys = [
+        name for name in reader.fieldnames
+        if re.fullmatch(r"[A-Za-z]{3}-\d{2,4}", (name or "").strip())
+    ]
+    lot_keys = [fixed_lot_key] if fixed_lot_key else expiry_lot_keys
+    if not symbol_key or not lot_keys:
         logger.warning("unrecognized NSE permitted lot-size CSV headers: %s", reader.fieldnames)
         return {}
     result: dict[str, int] = {}
     conflicted: set[str] = set()
     for row in reader:
         symbol = (row.get(symbol_key) or "").strip().upper()
-        raw_lot = (row.get(lot_key) or "").strip().replace(",", "")
-        if not symbol or not raw_lot or symbol in conflicted:
+        if not symbol or symbol in conflicted:
+            continue
+        raw_values = [(row.get(key) or "").strip().replace(",", "") for key in lot_keys]
+        populated = [value for value in raw_values if value]
+        if not populated:
             continue
         try:
-            lot = int(float(raw_lot))
+            lots = [int(float(value)) for value in populated]
         except (TypeError, ValueError, OverflowError):
             continue
-        if lot > 0:
-            # Conflicting duplicate symbols are ambiguous: remove rather than
-            # choosing a row arbitrarily and potentially inventing sizing.
-            if symbol in result and result[symbol] != lot:
-                result.pop(symbol, None)
-                conflicted.add(symbol)
-                logger.warning("conflicting lot-size rows for NSE symbol %s; leaving unavailable", symbol)
-                continue
-            result[symbol] = lot
+        if not lots or any(lot <= 0 for lot in lots) or len(set(lots)) != 1:
+            conflicted.add(symbol)
+            result.pop(symbol, None)
+            logger.warning("invalid or conflicting lot-size fields for NSE symbol %s; leaving unavailable", symbol)
+            continue
+        lot = lots[0]
+        # Conflicting duplicate symbols are ambiguous: remove rather than
+        # choosing a row arbitrarily and potentially inventing sizing.
+        if symbol in result and result[symbol] != lot:
+            result.pop(symbol, None)
+            conflicted.add(symbol)
+            logger.warning("conflicting lot-size rows for NSE symbol %s; leaving unavailable", symbol)
+            continue
+        result[symbol] = lot
     return result
 
 

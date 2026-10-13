@@ -63,6 +63,7 @@ def _provider(monkeypatch, rows):
     provider._session.post.side_effect = [
         Response({"data": ["2026-10-28"]}),
         Response({
+            "timestamp": "2026-10-13T09:00:00Z",
             "data": {
                 "last_price": 25000,
                 "oc": {
@@ -132,3 +133,18 @@ def test_dhan_does_not_invent_missing_contract_lot_size(monkeypatch):
     by_type = {row.option_type: row for row in snapshots}
     assert by_type["CE"].lot_size == 75
     assert by_type["PE"].lot_size is None
+
+
+def test_dhan_drops_chain_without_source_timestamp(monkeypatch):
+    provider = _provider(monkeypatch, _master_rows())
+    provider._session.post.side_effect = [
+        Response({"data": ["2026-10-28"]}),
+        Response({
+            "data": {
+                "last_price": 25000,
+                "oc": {"25000": {"ce": {"last_price": 150}, "pe": {"last_price": 110}}},
+            }
+        }),
+    ]
+
+    assert provider.fetch_option_chain("NIFTY") == []

@@ -8,6 +8,24 @@ def test_parses_exact_symbol_and_positive_market_lot():
     assert _parse_lot_size_csv(csv_text) == {"NIFTY": 25, "RELIANCE": 250}
 
 
+def test_parses_official_expiry_column_format():
+    csv_text = (
+        "UNDERLYING,SYMBOL,OCT-26,NOV-26,DEC-26\n"
+        "NIFTY 50,NIFTY,65,65,65\n"
+        "NIFTY BANK,BANKNIFTY,30,30,30\n"
+        "Derivatives on Individual Securities,Symbol,OCT-26,NOV-26,DEC-26\n"
+        "RELIANCE,RELIANCE,250,250,250\n"
+    )
+
+    assert _parse_lot_size_csv(csv_text) == {"NIFTY": 65, "BANKNIFTY": 30, "RELIANCE": 250}
+
+
+def test_conflicting_expiry_columns_are_unavailable():
+    csv_text = "UNDERLYING,SYMBOL,OCT-26,NOV-26\nNIFTY 50,NIFTY,65,75\n"
+
+    assert _parse_lot_size_csv(csv_text) == {}
+
+
 def test_unknown_schema_and_empty_csv_fail_closed():
     assert _parse_lot_size_csv("") == {}
     assert _parse_lot_size_csv("name,value\nNIFTY,25\n") == {}

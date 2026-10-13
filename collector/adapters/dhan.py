@@ -74,6 +74,22 @@ class DhanOptionChainProvider:
                 continue
         return None
 
+    @staticmethod
+    def _source_timestamp(payload: dict[str, Any]) -> datetime | None:
+        """Read a provider timestamp; never substitute local collection time."""
+        raw = payload.get("timestamp") or payload.get("last_updated") or payload.get("updated_at")
+        if raw is None:
+            return None
+        if isinstance(raw, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
     def _resolve_underlying(self, symbol: str) -> dict[str, str] | None:
         target = symbol.strip().upper()
         candidates = []
@@ -136,6 +152,12 @@ class DhanOptionChainProvider:
         )
         response.raise_for_status()
         payload = response.json()
+        market_timestamp = self._source_timestamp(payload)
+        if market_timestamp is None:
+            # The API response is still useful evidence for diagnosing a provider
+            # integration, but it is not safe to present as a fresh paper-trading
+            # quote without a source timestamp.
+            return []
         chain = payload.get("data", {})
         spot = chain.get("last_price")
         if not isinstance(chain.get("oc"), dict):
@@ -165,7 +187,6 @@ class DhanOptionChainProvider:
                 continue
             contract_meta[(row_expiry, strike, option_type)] = {"lot_size": lot_text}
 
-        now = datetime.now(timezone.utc)
         snapshots: list[CanonicalOptionSnapshot] = []
         for strike_text, sides in chain["oc"].items():
             try:
@@ -189,7 +210,7 @@ class DhanOptionChainProvider:
                     expiry_date=date.fromisoformat(expiry),
                     strike=strike,
                     option_type=option_type,
-                    market_timestamp=now,
+                    market_timestamp=market_timestamp,
                     ltp=float(item["last_price"]) if item.get("last_price") is not None else None,
                     bid=float(item["top_bid_price"]) if item.get("top_bid_price") is not None else None,
                     ask=float(item["top_ask_price"]) if item.get("top_ask_price") is not None else None,
