@@ -136,6 +136,7 @@ export default function OptionChainTradingPanel() {
         setExpiry(current => current && expiries.includes(current) ? current : (expiries[0] ?? ""));
       } else {
         setOptions([]);
+        setIntelligence(null);
         setLoadError(describeUiError(chainResult.reason));
       }
       if (tradesResult.status === "fulfilled") setTrades(tradesResult.value);
@@ -316,7 +317,7 @@ export default function OptionChainTradingPanel() {
                   aria-label="Search underlying for option chain"
                   className="h-9 w-44 rounded-lg border border-border bg-background px-3 text-xs font-medium outline-none focus:ring-2 focus:ring-ring"
                 />
-                {search.trim() && (discoveryLoading || discoveryError || discoveries.length > 0 || !discoveryLoading) && (
+                {search.trim() && (
                   <div className="absolute right-0 top-11 z-20 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
                     {discoveryLoading && <div role="status" className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground"><RefreshCw size={13} className="animate-spin" />Searching stored instruments…</div>}
                     {!discoveryLoading && discoveryError && <div role="alert" className="flex items-start gap-2 px-3 py-3 text-xs text-rose-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" /><span>{discoveryError.message}</span></div>}
