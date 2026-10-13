@@ -1,10 +1,9 @@
 // Agent tools. Market/model facts come from the local Postgres store or the local ML service.
 // Deterministic analytics are explicitly labelled as such; this file never invents
 // missing observations or presents a fallback calculation as an ML prediction.
-// Four tools change app state (train, watchlist add/remove, alert ack). Each one
-// is gated: aiAgent.ts will not execute it until the user approves that exact
-// change in the dashboard, and it runs the same appActions.ts statements the
-// dashboard itself uses.
+// State-changing tools (including option paper orders) are gated: aiAgent.ts
+// will not execute them until the user approves that exact change in the dashboard.
+// Paper orders reuse the same validated execution path as the dashboard endpoint.
 import type { Pool } from "pg";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
 import { computePredictionPerformance } from "./predictionStats.js";
@@ -20,6 +19,7 @@ import {
 } from "./appActions.js";
 import { analyzeOptionChain, type OptionType } from "./optionIntelligence.js";
 import { buildDecisionCandidate, type CandidateDirection } from "./decisionEngine.js";
+import { executeOptionPaperOrder } from "./shadowRoutes.js";
 
 /** Anything longer is cut and the cut is declared inside the payload. Sized so a
  * full 26-instrument coverage report fits without losing its tail. */
@@ -462,7 +462,7 @@ async function optionChainTool(env: ToolEnv, args: Record<string, unknown>): Pro
   const symbol = symbolOf(args.symbol);
   if (!symbol) return fail("INVALID_SYMBOL", "Provide NIFTY or BANKNIFTY (or another stored index symbol).");
   if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
-  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
+  const result = await env.pool.query(`select oc.expiry_date, oc.strike, oc.option_type, oc.lot_size, os.market_timestamp, os.ltp, os.bid, os.ask, os.oi, os.oi_change, os.iv, os.volume
     from option_snapshots os join option_contracts oc on oc.contract_id=os.contract_id join instruments i on i.instrument_id=oc.instrument_id
     where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
     order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]);
@@ -482,7 +482,7 @@ async function optionIntelligenceTool(env: ToolEnv, args: Record<string, unknown
       where i.symbol=$1 and os.market_timestamp=(select max(os2.market_timestamp) from option_snapshots os2 join option_contracts oc2 on oc2.contract_id=os2.contract_id where oc2.instrument_id=oc.instrument_id)
       order by oc.expiry_date, oc.strike, oc.option_type`, [symbol]),
   ]);
-  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume) }));
+  const rows = chain.rows.map(r => ({ expiryDate:String(r.expiry_date), strike:Number(r.strike), optionType:String(r.option_type) as OptionType, timestamp:new Date(r.market_timestamp), ltp:finite(r.ltp), bid:finite(r.bid), ask:finite(r.ask), oi:finite(r.oi), oiChange:finite(r.oi_change), iv:finite(r.iv), volume:finite(r.volume), lotSize:r.lot_size == null ? null : Number(r.lot_size) }));
   const intelligence = analyzeOptionChain(symbol, rows, spot.rows.length ? finite(spot.rows[0].close) : null);
   return { ok: intelligence.ok, summary: `${symbol}: ${intelligence.status} · ${intelligence.recommendation.action} · ${intelligence.recommendation.direction} · confidence ${(intelligence.recommendation.confidence*100).toFixed(0)}%.`, data: intelligence };
 }
@@ -505,42 +505,23 @@ async function optionCandidateTool(env: ToolEnv, args: Record<string, unknown>):
 }
 
 async function optionPaperOrderTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {
-  const symbol = symbolOf(args.symbol);
-  const expiry = String(args.expiry ?? "").trim();
-  const optionType = String(args.optionType ?? "").trim().toUpperCase();
-  const side = String(args.side ?? "").trim().toUpperCase();
-  const strike = Number(args.strike);
-  const lots = intOf(args.lots, 1, 1, 1000);
-  if (!symbol) return fail("INVALID_SYMBOL", "Provide the underlying symbol.");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return fail("INVALID_EXPIRY", "Use YYYY-MM-DD.");
-  if (optionType !== "CE" && optionType !== "PE") return fail("INVALID_OPTION_TYPE", "optionType must be CE or PE.");
-  if (side !== "BUY" && side !== "SELL") return fail("INVALID_SIDE", "side must be BUY or SELL.");
-  if (!Number.isFinite(strike) || strike <= 0) return fail("INVALID_STRIKE", "Provide a positive strike.");
-  if (!env.pool) return fail("DATABASE_UNAVAILABLE", NO_DATABASE);
-  await env.pool.query(`create table if not exists option_paper_trades (id uuid primary key default gen_random_uuid(),contract_id uuid not null references option_contracts(contract_id),symbol text not null,expiry_date date not null,strike numeric(12,4) not null,option_type text not null check(option_type in ('CE','PE')),side text not null check(side in ('BUY','SELL')),status text not null default 'OPEN' check(status in ('OPEN','CLOSED')),lots integer not null check(lots>0),lot_size integer not null check(lot_size>0),quantity integer not null check(quantity>0),entry_price numeric(12,4) not null,entry_bid numeric(12,4),entry_ask numeric(12,4),entry_ltp numeric(12,4),entry_quote_timestamp timestamptz not null,entry_timestamp timestamptz not null default now(),current_price numeric(12,4),current_quote_timestamp timestamptz,unrealized_pnl numeric(14,2) not null default 0,realized_pnl numeric(14,2),exit_price numeric(12,4),exit_timestamp timestamptz,exit_reason text,entry_fees numeric(14,2) not null default 0,exit_fees numeric(14,2),created_at timestamptz not null default now(),updated_at timestamptz not null default now())`);
-  const cr = await env.pool.query(`select oc.contract_id, oc.expiry_date, oc.strike, oc.option_type, i.symbol, i.lot_size
-    from option_contracts oc join instruments i on i.instrument_id=oc.instrument_id
-    where i.symbol=$1 and oc.expiry_date=$2::date and oc.strike=$3 and oc.option_type=$4 limit 1`, [symbol, expiry, strike, optionType]);
-  if (!cr.rows.length) return fail("OPTION_CONTRACT_NOT_FOUND", `${symbol} ${expiry} ${strike} ${optionType} is not in the persisted chain.`);
-  const contract = cr.rows[0];
-  const q = await env.pool.query(`select market_timestamp, ltp, bid, ask from option_snapshots where contract_id=$1 order by market_timestamp desc limit 1`, [contract.contract_id]);
-  if (!q.rows.length) return fail("OPTION_QUOTE_MISSING", "No quote exists for the requested contract.");
-  const quote = q.rows[0];
-  const ts = new Date(quote.market_timestamp);
-  const age = Math.max(0, (Date.now()-ts.getTime())/1000);
-  const maxAge = Math.max(15, Number(process.env.SHADOW_MAX_QUOTE_AGE_SECONDS ?? 120));
-  if (age > maxAge) return fail("OPTION_QUOTE_STALE", `Quote is ${age.toFixed(0)}s old; maximum is ${maxAge}s.`);
-  const fill = side === "BUY" ? finite(quote.ask) : finite(quote.bid);
-  if (fill == null || fill <= 0) return fail(side === "BUY" ? "OPTION_ASK_UNAVAILABLE" : "OPTION_BID_UNAVAILABLE", "Executable quote side is unavailable.");
-  const lotSize = Math.max(1, Number(contract.lot_size));
-  const quantity = lotSize * lots;
-  const feeFixed = Math.max(0, Number(process.env.SHADOW_FEE_FIXED_PER_ORDER ?? 20));
-  const feeBps = Math.max(0, Number(process.env.SHADOW_FEE_BPS_PER_SIDE ?? 15));
-  const entryFees = Math.round((feeFixed + fill * quantity * feeBps / 10000) * 100) / 100;
-  const ins = await env.pool.query(`insert into option_paper_trades (contract_id,symbol,expiry_date,strike,option_type,side,status,lots,lot_size,quantity,entry_price,entry_bid,entry_ask,entry_ltp,entry_quote_timestamp,current_price,current_quote_timestamp,unrealized_pnl,entry_fees)
-    values ($1,$2,$3,$4,$5,$6,'OPEN',$7,$8,$9,$10,$11,$12,$13,$14,$10,$14,0,$15) returning id,entry_timestamp`,
-    [contract.contract_id,symbol,contract.expiry_date,Number(contract.strike),optionType,side,lots,lotSize,quantity,fill,finite(quote.bid),finite(quote.ask),finite(quote.ltp),ts,entryFees]);
-  return { ok:true, summary:`Paper ${side} ${symbol} ${optionType} ${Number(contract.strike)} ${contract.expiry_date} filled at ₹${fill} for ${quantity} units. No broker order was sent.`, data:{ id:ins.rows[0].id, symbol, expiry:contract.expiry_date, strike:Number(contract.strike), optionType, side, lots, quantity, fillPrice:fill, fees:entryFees, quoteTimestamp:ts.toISOString(), paperOnly:true } };
+  const result = await executeOptionPaperOrder(env.pool, {
+    symbol: symbolOf(args.symbol),
+    expiry: args.expiry,
+    optionType: args.optionType,
+    side: args.side,
+    strike: args.strike,
+    lots: intOf(args.lots, 1, 1, 1000),
+  });
+  if (result.status < 200 || result.status >= 300) {
+    return fail(String(result.body?.error ?? "OPTION_PAPER_ORDER_FAILED"), String(result.body?.message ?? result.body?.error ?? "Paper order rejected."));
+  }
+  const order = result.body.order;
+  return {
+    ok: true,
+    summary: `Paper ${order.side} ${order.symbol} ${order.optionType} ${order.strike} ${order.expiryDate} filled at ₹${order.entryPrice} for ${order.quantity} units. No broker order was sent.`,
+    data: { ...order, paperOnly: true },
+  };
 }
 
 async function optionPayoffTool(env: ToolEnv, args: Record<string, unknown>): Promise<ToolOutcome> {

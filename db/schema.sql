@@ -53,6 +53,7 @@ create table option_contracts (
     expiry_date     date not null,
     strike          numeric(10,2) not null,
     option_type     option_type not null,
+    lot_size        integer,
     created_at      timestamptz not null default now(),
     unique (instrument_id, expiry_date, strike, option_type)
 );

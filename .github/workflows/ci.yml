@@ -27,6 +27,8 @@ jobs:
         run: python -m pip install -r collector/requirements.txt -r ml-service/requirements.txt pytest scikit-learn
       - name: Collector compile check
         run: python -m compileall -q collector
+      - name: Collector tests
+        run: python -m pytest collector/tests -q
       - name: ML inference compile check
         run: python -m compileall -q ml-service
       - name: ML artifact and promotion tests

@@ -10,7 +10,10 @@ Treat the field-mapping section as the part most likely to need adjustment
 once you're running this against live responses.
 """
 
-from datetime import date, datetime, timezone
+import csv
+import io
+import re
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -19,22 +22,35 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from collector.canonical.options import CanonicalOptionSnapshot
 from collector.config import config
 from collector.logging_config import get_logger
+from collector.providers.options import OptionChainProvider
 
 logger = get_logger(__name__)
 
-ADAPTER_VERSION = "nse_adapter_v1"
+ADAPTER_VERSION = "nse_adapter_v3"
 IST = ZoneInfo("Asia/Kolkata")
+LOT_SIZE_CSV_URL = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+LOT_SIZE_CACHE_TTL = timedelta(hours=1)
 
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/option-chain",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
-class NSEAdapter:
+class NSEAdapter(OptionChainProvider):
+    name = "nse"
+    version = ADAPTER_VERSION
+
     """Owns a warmed-up session; reuse one instance across polls rather than
     creating a fresh session every call."""
 
@@ -42,9 +58,25 @@ class NSEAdapter:
         self._session = requests.Session()
         self._session.headers.update(_HEADERS)
         self._warmed_up = False
+        self._lot_sizes: dict[str, int] = {}
+        self._lot_sizes_loaded_at: datetime | None = None
 
     def _warm_up(self) -> None:
-        self._session.get(config.nse_base_url, timeout=config.nse_request_timeout_seconds)
+        # NSE commonly issues a session cookie on the public site before the
+        # JSON endpoint accepts requests. Warm both the origin and the option
+        # chain page; keep the same Session for subsequent polls.
+        home = self._session.get(
+            config.nse_base_url,
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            timeout=config.nse_request_timeout_seconds,
+        )
+        home.raise_for_status()
+        page = self._session.get(
+            f"{config.nse_base_url}/option-chain",
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            timeout=config.nse_request_timeout_seconds,
+        )
+        page.raise_for_status()
         self._warmed_up = True
 
     @retry(
@@ -54,30 +86,55 @@ class NSEAdapter:
     def _get(self, path: str, params: dict) -> dict:
         if not self._warmed_up:
             self._warm_up()
+        request_headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"{config.nse_base_url}/option-chain?symbol={params.get('symbol', '')}",
+        }
         resp = self._session.get(
             f"{config.nse_base_url}{path}",
             params=params,
+            headers=request_headers,
             timeout=config.nse_request_timeout_seconds,
         )
-        if resp.status_code == 401:
-            # cookies expired mid-session — re-warm and let @retry try again
+        if resp.status_code in (401, 403, 429):
+            # Session/cookie challenges and rate limiting need a fresh
+            # handshake rather than replaying the same poisoned session.
             self._warmed_up = False
             resp.raise_for_status()
         resp.raise_for_status()
         return resp.json()
 
+    def supports(self, symbol: str) -> bool:
+        return bool(symbol.strip())
+
     def fetch_option_chain(self, symbol: str) -> list[CanonicalOptionSnapshot]:
         """Fetch the full option chain for a symbol and return canonical snapshots."""
-        is_index = symbol.upper() in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
-        path = config.nse_option_chain_indices_path if is_index else config.nse_option_chain_equities_path
-        params = {"symbol": symbol}
-        if is_index:
-            params["type"] = "Indices"
-        raw = self._get(path, params=params)
-        if not raw.get("records", {}).get("data"):
-            logger.info("nse_adapter returned no option rows for %s; market may be closed or the symbol may not be F&O-enabled", symbol)
+        # Do not classify instruments with a hard-coded symbol universe.
+        # NSE exposes separate chain resources, so probe the configured
+        # resources and accept the first valid chain response.
+        candidates = (
+            (config.nse_option_chain_indices_path, {"symbol": symbol, "type": "Indices"}),
+            (config.nse_option_chain_equities_path, {"symbol": symbol}),
+        )
+        raw = None
+        for path, params in candidates:
+            try:
+                candidate = self._get(path, params=params)
+            except Exception as exc:
+                logger.warning("nse option resource failed for %s via %s: %s", symbol, path, exc)
+                continue
+            if candidate.get("records", {}).get("data"):
+                raw = candidate
+                break
+        if raw is None:
+            logger.info("nse_adapter found no option chain for %s", symbol)
             return []
         collected_now = datetime.now(timezone.utc)
+        lot_sizes = self._get_lot_sizes(collected_now)
+        market_timestamp = _parse_nse_response_timestamp(raw)
+        if market_timestamp is None:
+            logger.warning("NSE option chain for %s has no trustworthy source timestamp; dropping snapshots", symbol)
+            return []
         snapshots: list[CanonicalOptionSnapshot] = []
 
         for record in raw.get("records", {}).get("data", []):
@@ -95,9 +152,9 @@ class NSEAdapter:
                         expiry_date=expiry,
                         strike=float(strike),
                         option_type=opt_type,
-                        # NSE doesn't give a precise per-record market timestamp in this
-                        # endpoint — fall back to the response's overall timestamp field.
-                        market_timestamp=_parse_nse_response_timestamp(raw, fallback=collected_now),
+                        # Use the source's response timestamp; never stamp a stale
+                        # or undated chain with the local collection time.
+                        market_timestamp=market_timestamp,
                         ltp=leg.get("lastPrice"),
                         bid=leg.get("bidprice"),
                         ask=leg.get("askPrice"),
@@ -109,6 +166,9 @@ class NSEAdapter:
                         gamma=None,
                         theta=None,
                         vega=None,
+                        # NSE's public chain payload omits lot size. Enrich only
+                        # from the official permitted-lot CSV and exact symbol match.
+                        lot_size=lot_sizes.get(symbol.strip().upper()),
                         source="nse",
                         source_version=ADAPTER_VERSION,
                     )
@@ -117,18 +177,106 @@ class NSEAdapter:
         return snapshots
 
 
+
+    def _get_lot_sizes(self, now_utc: datetime | None = None) -> dict[str, int]:
+        """Load official NSE permitted lot sizes with a bounded cache.
+
+        Failure to fetch or parse this report is deliberately non-fatal: chain
+        rows can still be stored for research, but their lot_size stays null.
+        """
+        now = now_utc or datetime.now(timezone.utc)
+        if self._lot_sizes_loaded_at and now - self._lot_sizes_loaded_at < LOT_SIZE_CACHE_TTL:
+            return self._lot_sizes
+        try:
+            response = self._session.get(
+                LOT_SIZE_CSV_URL,
+                headers={"Accept": "text/csv,*/*;q=0.8", "Referer": f"{config.nse_base_url}/static/products-services/equity-derivatives-contract-information"},
+                timeout=config.nse_request_timeout_seconds,
+            )
+            response.raise_for_status()
+            parsed = _parse_lot_size_csv(response.text)
+            if not parsed:
+                logger.warning("NSE permitted lot-size CSV returned no recognized rows; execution sizing remains unavailable")
+                return {}
+            self._lot_sizes = parsed
+            self._lot_sizes_loaded_at = now
+            logger.info("loaded %d underlying lot sizes from official NSE permitted-lot CSV", len(parsed))
+            return self._lot_sizes
+        except Exception as exc:
+            logger.warning("unable to load official NSE permitted lot-size CSV: %s", exc)
+            return {}
+
+
+def _parse_lot_size_csv(text: str) -> dict[str, int]:
+    """Parse exact-symbol lot sizes from the official NSE report.
+
+    The current NSE report has one lot-size column per expiry (for example
+    ``OCT-26`` and ``NOV-26``), while older/fixture reports may expose one
+    ``MARKET LOT``/``LOT SIZE`` column. A symbol is returned only when every
+    populated recognized lot field is a positive integer and all of those
+    fields agree. This deliberately refuses to guess when expiry metadata is
+    malformed or inconsistent.
+    """
+    if not text or not text.strip():
+        return {}
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    if not reader.fieldnames:
+        return {}
+    normalize = lambda value: "".join(ch.lower() for ch in (value or "") if ch.isalnum())
+    columns = {normalize(name): name for name in reader.fieldnames}
+    symbol_key = next((columns[key] for key in ("symbol", "underlyingsymbol", "underlying") if key in columns), None)
+    fixed_lot_key = next((columns[key] for key in ("marketlot", "lotsize", "permittedlotsize", "lotquantity") if key in columns), None)
+    expiry_lot_keys = [
+        name for name in reader.fieldnames
+        if re.fullmatch(r"[A-Za-z]{3}-\d{2,4}", (name or "").strip())
+    ]
+    lot_keys = [fixed_lot_key] if fixed_lot_key else expiry_lot_keys
+    if not symbol_key or not lot_keys:
+        logger.warning("unrecognized NSE permitted lot-size CSV headers: %s", reader.fieldnames)
+        return {}
+    result: dict[str, int] = {}
+    conflicted: set[str] = set()
+    for row in reader:
+        symbol = (row.get(symbol_key) or "").strip().upper()
+        if not symbol or symbol in conflicted:
+            continue
+        raw_values = [(row.get(key) or "").strip().replace(",", "") for key in lot_keys]
+        populated = [value for value in raw_values if value]
+        if not populated:
+            continue
+        try:
+            lots = [int(float(value)) for value in populated]
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not lots or any(lot <= 0 for lot in lots) or len(set(lots)) != 1:
+            conflicted.add(symbol)
+            result.pop(symbol, None)
+            logger.warning("invalid or conflicting lot-size fields for NSE symbol %s; leaving unavailable", symbol)
+            continue
+        lot = lots[0]
+        # Conflicting duplicate symbols are ambiguous: remove rather than
+        # choosing a row arbitrarily and potentially inventing sizing.
+        if symbol in result and result[symbol] != lot:
+            result.pop(symbol, None)
+            conflicted.add(symbol)
+            logger.warning("conflicting lot-size rows for NSE symbol %s; leaving unavailable", symbol)
+            continue
+        result[symbol] = lot
+    return result
+
+
 def _parse_nse_date(raw: str) -> date:
     return datetime.strptime(raw, "%d-%b-%Y").date()
 
 
-def _parse_nse_response_timestamp(raw: dict, fallback: datetime) -> datetime:
+def _parse_nse_response_timestamp(raw: dict) -> datetime | None:
     ts = raw.get("records", {}).get("timestamp")
     if not ts:
-        return fallback
+        return None
     try:
         # NSE format observed: '18-Sep-2026 14:32:01', stated in IST.
         naive = datetime.strptime(ts, "%d-%b-%Y %H:%M:%S")
         ist = naive.replace(tzinfo=IST)
         return ist.astimezone(timezone.utc)  # store everything in UTC
     except ValueError:
-        return fallback
+        return None

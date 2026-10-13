@@ -36,10 +36,10 @@ do update set collected_at = excluded.collected_at,
 """
 
 _OPTION_CONTRACT_UPSERT = """
-insert into option_contracts (instrument_id, expiry_date, strike, option_type)
-select instrument_id, %(expiry_date)s, %(strike)s, %(option_type)s
+insert into option_contracts (instrument_id, expiry_date, strike, option_type, lot_size)
+select instrument_id, %(expiry_date)s, %(strike)s, %(option_type)s, %(lot_size)s
 from instruments where symbol = %(instrument_symbol)s
-on conflict (instrument_id, expiry_date, strike, option_type) do nothing
+on conflict (instrument_id, expiry_date, strike, option_type) do update set lot_size = coalesce(excluded.lot_size, option_contracts.lot_size)
 returning contract_id;
 """
 
@@ -102,6 +102,12 @@ class PostgresPersistence:
         self._dsn = dsn or config.database_url
         self._conn = psycopg2.connect(self._dsn)
         self._conn.autocommit = True
+        # Apply idempotent compatibility migrations before the collector starts
+        # writing newer canonical fields into an existing PGDATA volume.
+        with self._conn.cursor() as cur:
+            cur.execute("alter table option_contracts add column if not exists lot_size integer")
+            cur.execute("alter table option_contracts drop constraint if exists option_contracts_lot_size_positive")
+            cur.execute("alter table option_contracts add constraint option_contracts_lot_size_positive check (lot_size is null or lot_size > 0)")
 
     def close(self) -> None:
         self._conn.close()
@@ -231,12 +237,13 @@ class PostgresPersistence:
                 (symbol, provider_symbol),
             )
 
-    def _get_or_create_contract_id(self, symbol: str, expiry: date, strike: float, opt_type: str):
+    def _get_or_create_contract_id(self, symbol: str, expiry: date, strike: float, opt_type: str, lot_size: int | None):
         params = {
             "instrument_symbol": symbol,
             "expiry_date": expiry,
             "strike": strike,
             "option_type": opt_type,
+            "lot_size": lot_size,
         }
         with self._conn.cursor() as cur:
             cur.execute(_OPTION_CONTRACT_UPSERT, params)
@@ -252,7 +259,7 @@ class PostgresPersistence:
         with self._conn.cursor() as cur:
             for snap in snapshots:
                 contract_id = self._get_or_create_contract_id(
-                    snap.instrument_symbol, snap.expiry_date, snap.strike, snap.option_type
+                    snap.instrument_symbol, snap.expiry_date, snap.strike, snap.option_type, snap.lot_size
                 )
                 cur.execute(
                     _OPTION_SNAPSHOT_UPSERT,

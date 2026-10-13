@@ -1,4 +1,8 @@
-"""Canonical representation of a single option contract's snapshot at a point in time."""
+"""Canonical representation of an option contract snapshot.
+
+Provider adapters map their native response into this type. Downstream code
+must not infer contract metadata from a provider name, symbol list, or default.
+"""
 
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -6,11 +10,11 @@ from datetime import date, datetime
 
 @dataclass(frozen=True)
 class CanonicalOptionSnapshot:
-    instrument_symbol: str       # 'NIFTY'
+    instrument_symbol: str
     expiry_date: date
     strike: float
-    option_type: str             # 'CE' or 'PE'
-    market_timestamp: datetime   # actual market time of this snapshot (tz-aware)
+    option_type: str
+    market_timestamp: datetime
     ltp: float | None
     bid: float | None
     ask: float | None
@@ -22,8 +26,9 @@ class CanonicalOptionSnapshot:
     gamma: float | None
     theta: float | None
     vega: float | None
-    source: str                  # 'nse'
-    source_version: str          # e.g. 'nse_adapter_v1'
+    lot_size: int | None
+    source: str
+    source_version: str
 
     def validate_shape(self) -> None:
         if self.option_type not in ("CE", "PE"):
@@ -32,3 +37,5 @@ class CanonicalOptionSnapshot:
             raise ValueError("market_timestamp must be timezone-aware")
         if self.strike <= 0:
             raise ValueError(f"invalid strike: {self.strike}")
+        if self.lot_size is not None and self.lot_size <= 0:
+            raise ValueError(f"invalid lot_size: {self.lot_size}")
