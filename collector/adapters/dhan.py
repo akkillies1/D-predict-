@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import requests
@@ -56,6 +56,23 @@ class DhanOptionChainProvider:
             if value:
                 return value.strip()
         return ""
+
+    @staticmethod
+    def _normalise_expiry(value: str) -> str | None:
+        """Return a canonical YYYY-MM-DD date for supported master/API formats."""
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            pass
+        for fmt in ("%d-%b-%Y", "%d-%b-%Y %H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
 
     def _resolve_underlying(self, symbol: str) -> dict[str, str] | None:
         target = symbol.strip().upper()
@@ -106,12 +123,15 @@ class DhanOptionChainProvider:
         expiries = expiry_response.json().get("data") or []
         if not expiries:
             return []
-        expiry = sorted(str(item) for item in expiries)[0]
+        expiry_api_value = sorted(str(item) for item in expiries)[0]
+        expiry = self._normalise_expiry(expiry_api_value)
+        if expiry is None:
+            return []
 
         response = self._session.post(
             f"{DHAN_API}/optionchain",
             headers=self._headers(),
-            json={"UnderlyingScrip": int(float(security_id)), "UnderlyingSeg": segment, "Expiry": expiry},
+            json={"UnderlyingScrip": int(float(security_id)), "UnderlyingSeg": segment, "Expiry": expiry_api_value},
             timeout=config.dhan_request_timeout_seconds,
         )
         response.raise_for_status()
@@ -128,8 +148,11 @@ class DhanOptionChainProvider:
             row_symbol = self._value(row, "UNDERLYING_SYMBOL").upper()
             if row_symbol != symbol.upper():
                 continue
-            row_expiry = self._value(row, "SM_EXPIRY_DATE", "SEM_EXPIRY_DATE")
-            if row_expiry and row_expiry != expiry:
+            row_expiry_raw = self._value(row, "SM_EXPIRY_DATE", "SEM_EXPIRY_DATE")
+            row_expiry = self._normalise_expiry(row_expiry_raw)
+            # A contract without a parseable expiry cannot safely be joined:
+            # strike/type can repeat across weekly and monthly expiries.
+            if row_expiry is None or row_expiry != expiry:
                 continue
             option_type = self._value(row, "OPTION_TYPE", "SEM_OPTION_TYPE").upper()
             strike_text = self._value(row, "STRIKE_PRICE", "SEM_STRIKE_PRICE")
@@ -140,7 +163,7 @@ class DhanOptionChainProvider:
                 strike = float(strike_text)
             except ValueError:
                 continue
-            contract_meta[(row_expiry or expiry, strike, option_type)] = {"lot_size": lot_text}
+            contract_meta[(row_expiry, strike, option_type)] = {"lot_size": lot_text}
 
         now = datetime.now(timezone.utc)
         snapshots: list[CanonicalOptionSnapshot] = []
@@ -156,13 +179,14 @@ class DhanOptionChainProvider:
                 meta = contract_meta.get((expiry, strike, option_type), {})
                 lot_text = meta.get("lot_size", "")
                 try:
-                    lot_size = int(float(lot_text)) if lot_text else None
-                except ValueError:
+                    parsed_lot_size = int(float(lot_text)) if lot_text else None
+                    lot_size = parsed_lot_size if parsed_lot_size is not None and parsed_lot_size > 0 else None
+                except (TypeError, ValueError, OverflowError):
                     lot_size = None
                 greeks = item.get("greeks") or {}
                 snapshot = CanonicalOptionSnapshot(
                     instrument_symbol=symbol.upper(),
-                    expiry_date=datetime.fromisoformat(expiry).date(),
+                    expiry_date=date.fromisoformat(expiry),
                     strike=strike,
                     option_type=option_type,
                     market_timestamp=now,
