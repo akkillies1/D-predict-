@@ -96,7 +96,8 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const chain = rows.filter(row => row.expiryDate === expiry);
   const spot = finite(spotInput);
   const asOf = chain.map(row => dateOf(row.timestamp)!).sort((a, b) => b.getTime() - a.getTime())[0];
-  const freshnessSeconds = asOf ? Math.max(0, (now.getTime() - asOf.getTime()) / 1000) : null;
+  // Preserve negative age as evidence of a future-dated snapshot; never clamp it to zero.
+  const freshnessSeconds = asOf ? (now.getTime() - asOf.getTime()) / 1000 : null;
   const atmStrike = spot != null ? nearest(chain, spot)?.strike ?? null : null;
   const band = spot != null ? chain.filter(row => Math.abs(row.strike - spot) / spot <= 0.05) : chain;
   const ceOi = band.filter(row => row.optionType === "CE").reduce((sum, row) => sum + Math.max(0, row.oi ?? 0), 0);
