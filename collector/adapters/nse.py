@@ -221,10 +221,11 @@ def _parse_lot_size_csv(text: str) -> dict[str, int]:
         logger.warning("unrecognized NSE permitted lot-size CSV headers: %s", reader.fieldnames)
         return {}
     result: dict[str, int] = {}
+    conflicted: set[str] = set()
     for row in reader:
         symbol = (row.get(symbol_key) or "").strip().upper()
         raw_lot = (row.get(lot_key) or "").strip().replace(",", "")
-        if not symbol or not raw_lot:
+        if not symbol or not raw_lot or symbol in conflicted:
             continue
         try:
             lot = int(float(raw_lot))
@@ -235,6 +236,7 @@ def _parse_lot_size_csv(text: str) -> dict[str, int]:
             # choosing a row arbitrarily and potentially inventing sizing.
             if symbol in result and result[symbol] != lot:
                 result.pop(symbol, None)
+                conflicted.add(symbol)
                 logger.warning("conflicting lot-size rows for NSE symbol %s; leaving unavailable", symbol)
                 continue
             result[symbol] = lot
