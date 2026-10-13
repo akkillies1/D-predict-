@@ -145,9 +145,10 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const verticalWidth = preferred && hedge ? Math.abs(preferred.strike - hedge.strike) : null;
   const verticalRewardRisk = verticalDebit != null && verticalWidth != null && verticalDebit > 0 ? (verticalWidth - verticalDebit) / verticalDebit : null;
   const useVertical = actionable && preferred != null && hedge != null && verticalRewardRisk != null && verticalRewardRisk >= 1.5;
+  // Keep recommendation labels aligned with execution eligibility. Research-only
+  // chains may show a direction, but must not advertise a trade action.
   const action: OptionAction = actionable && preferred
     ? useVertical ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL") : (bullish ? "BUY_CALL" : "BUY_PUT")
-    : direction !== "NEUTRAL" && preferred && hedge && lotSizeAvailable ? (bullish ? "CALL_VERTICAL" : "PUT_VERTICAL")
     : gates.chainAvailable && gates.spotAvailable ? "WAIT" : "ABSTAIN";
   const status: OptionIntelligence["status"] = actionable
     ? "ACTIONABLE"
