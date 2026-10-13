@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { analyzeOptionChain } from "../dist/optionIntelligence.js";
+import { isOptionQuoteFresh } from "../dist/shadowRoutes.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 const leg = (strike, optionType, oi, bid, ask) => ({
@@ -20,3 +21,10 @@ assert.equal(result.status, "RESEARCH_ONLY");
 assert.equal(result.recommendation.tradePlan, null);
 
 console.log("option lot-size gate contract passed");
+
+// The order/close route must enforce quote age even outside market hours.
+const freshnessNow = new Date("2026-10-03T10:00:00.000Z");
+assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() - 30_000), freshnessNow, 120_000), true);
+assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() - 180_000), freshnessNow, 120_000), false);
+assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() + 1_000), freshnessNow, 120_000), false);
+assert.equal(isOptionQuoteFresh(new Date("invalid"), freshnessNow, 120_000), false);
