@@ -6,10 +6,11 @@ symbol/lot-size table. Missing or mismatched metadata must remain unavailable.
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+import collector.adapters.dhan as dhan_module
 from collector.adapters.dhan import DhanOptionChainProvider
-from collector.config import config
 
 
 class Response:
@@ -51,9 +52,11 @@ def _master_rows(expiry: str = "2026-10-28 14:30:00") -> list[dict[str, str]]:
 
 
 def _provider(monkeypatch, rows):
-    monkeypatch.setattr(config, "dhan_client_id", "test-client")
-    monkeypatch.setattr(config, "dhan_access_token", "test-token")
-    monkeypatch.setattr(config, "dhan_request_timeout_seconds", 1)
+    monkeypatch.setattr(dhan_module, "config", SimpleNamespace(
+        dhan_client_id="test-client",
+        dhan_access_token="test-token",
+        dhan_request_timeout_seconds=1,
+    ))
     provider = DhanOptionChainProvider()
     provider._master = rows
     provider._session = Mock()
