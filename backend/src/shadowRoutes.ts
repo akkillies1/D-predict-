@@ -14,7 +14,7 @@ function regularMarketOpenNow(now = new Date()): boolean { const p = istParts(no
 function marketOpenNow(now = new Date()): boolean { return regularMarketOpenNow(now); }
 export function isOptionQuoteFresh(timestamp: Date, now = new Date(), maxAgeMs = MAX_QUOTE_AGE_MS): boolean { const timestampMs = timestamp.getTime(); const age = now.getTime() - timestampMs; return Number.isFinite(timestampMs) && Number.isFinite(now.getTime()) && age >= 0 && age <= maxAgeMs; }
 export function isOptionContractExpired(expiryDate: string | Date, now = new Date()): boolean {
-  const expiryMs = new Date(expiryDate).getTime();
+  const expiryMs = expiryDate instanceof Date ? expiryDate.getTime() : new Date(expiryDate).getTime();
   if (!Number.isFinite(expiryMs) || !Number.isFinite(now.getTime())) return true;
   return expiryMs < Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 }
