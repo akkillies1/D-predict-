@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { analyzeOptionChain } from "../dist/optionIntelligence.js";
-import { isOptionQuoteFresh } from "../dist/shadowRoutes.js";
+import { calculateVerticalRisk, isOptionQuoteFresh } from "../dist/shadowRoutes.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 const leg = (strike, optionType, oi, bid, ask) => ({
@@ -28,3 +28,8 @@ assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() - 30_000), fresh
 assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() - 180_000), freshnessNow, 120_000), false);
 assert.equal(isOptionQuoteFresh(new Date(freshnessNow.getTime() + 1_000), freshnessNow, 120_000), false);
 assert.equal(isOptionQuoteFresh(new Date("invalid"), freshnessNow, 120_000), false);
+
+// Debit verticals already pay their maximum loss as premium; do not reserve it again.
+assert.deepEqual(calculateVerticalRisk(1000, 500), { maxProfit: 500, maxLoss: 500, marginReserved: 0 });
+// Credit verticals reserve their defined maximum loss from paper cash.
+assert.deepEqual(calculateVerticalRisk(1000, -300), { maxProfit: 300, maxLoss: 700, marginReserved: 700 });
