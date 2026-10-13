@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { analyzeOptionChain } from "../dist/optionIntelligence.js";
-import { calculateVerticalRisk, isOptionQuoteFresh } from "../dist/shadowRoutes.js";
+import { calculateVerticalRisk, isOptionContractExpired, isOptionQuoteFresh } from "../dist/shadowRoutes.js";
 
 const now = new Date("2026-10-03T10:00:00.000Z");
 const leg = (strike, optionType, oi, bid, ask) => ({
@@ -33,3 +33,10 @@ assert.equal(isOptionQuoteFresh(new Date("invalid"), freshnessNow, 120_000), fal
 assert.deepEqual(calculateVerticalRisk(1000, 500), { maxProfit: 500, maxLoss: 500, marginReserved: 0 });
 // Credit verticals reserve their defined maximum loss from paper cash.
 assert.deepEqual(calculateVerticalRisk(1000, -300), { maxProfit: 300, maxLoss: 700, marginReserved: 700 });
+
+// Vertical spreads must reject expired contracts just like single-leg orders.
+const expiryNow = new Date("2026-10-03T10:00:00.000Z");
+assert.equal(isOptionContractExpired("2026-10-02", expiryNow), true);
+assert.equal(isOptionContractExpired("2026-10-03", expiryNow), false);
+assert.equal(isOptionContractExpired("2026-10-30", expiryNow), false);
+assert.equal(isOptionContractExpired("not-a-date", expiryNow), true);
