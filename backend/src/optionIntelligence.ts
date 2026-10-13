@@ -139,7 +139,7 @@ export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInp
   const preferredLotSize = preferred?.lotSize;
   const hedgeLotSize = hedge?.lotSize;
   const lotSizeAvailable = preferred != null && Number.isFinite(preferredLotSize) && (preferredLotSize as number) > 0 && (!hedge || (Number.isFinite(hedgeLotSize) && (hedgeLotSize as number) > 0 && hedgeLotSize === preferredLotSize));
-  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds <= 180, directionalEvidence: bullish || bearish, lotSizeAvailable };
+  const gates = { chainAvailable: true, spotAvailable: spot != null && spot > 0, quoteAvailable: candidates.length > 0, liquidity: liquidityScore >= 0.25, costCovered: preferred != null && ((preferred.ask! - preferred.bid!) / preferred.ask!) <= 0.15, freshForPaper: freshnessSeconds != null && freshnessSeconds >= 0 && freshnessSeconds <= 180, directionalEvidence: bullish || bearish, lotSizeAvailable };
   const actionable = Object.values(gates).every(Boolean);
   const verticalDebit = preferred && hedge ? Math.max(0, preferred.ask! - hedge.bid!) : null;
   const verticalWidth = preferred && hedge ? Math.abs(preferred.strike - hedge.strike) : null;
