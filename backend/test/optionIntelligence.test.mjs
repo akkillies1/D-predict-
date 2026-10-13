@@ -67,6 +67,16 @@ assert.equal(mixedTimestamps.status, "RESEARCH_ONLY");
 assert.equal(mixedTimestamps.recommendation.action, "WAIT");
 assert.equal(mixedTimestamps.recommendation.tradePlan, null);
 
+const expiredChain = analyzeOptionChain(
+  "NIFTY",
+  chain.map(row => ({ ...row, expiryDate: "2026-10-02" })),
+  25000,
+  now,
+);
+assert.equal(expiredChain.status, "NO_CHAIN");
+assert.equal(expiredChain.recommendation.action, "ABSTAIN");
+assert.equal(expiredChain.recommendation.tradePlan, null);
+
 const missing = analyzeOptionChain("NIFTY", [], null, now);
 assert.equal(missing.status, "NO_CHAIN");
 assert.equal(missing.recommendation.action, "ABSTAIN");
