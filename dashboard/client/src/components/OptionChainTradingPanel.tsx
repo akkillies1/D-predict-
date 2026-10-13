@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
+  SearchX,
+  ShieldAlert,
+  WifiOff,
   ArrowDownToLine,
   ArrowUpFromLine,
   BarChart3,
@@ -33,6 +37,17 @@ const compact = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v)
     ? "—"
     : v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+type UiError = { kind: "offline" | "permission" | "unavailable" | "unknown"; message: string };
+function describeUiError(error: unknown): UiError {
+  const value = error as { message?: unknown; status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
+  const message = typeof value?.message === "string" ? value.message : "The request could not be completed.";
+  const status = Number(value?.status ?? value?.statusCode ?? value?.response?.status);
+  if (!navigator.onLine || error instanceof TypeError && /fetch|network|connect/i.test(message)) return { kind: "offline", message: "Cannot reach the service. Check your connection and confirm the D-Predict local services are running." };
+  if (status === 401 || status === 403 || /permission denied|forbidden|unauthori[sz]ed|access denied/i.test(message)) return { kind: "permission", message: "Access was denied. Check the account or service permissions, then retry." };
+  if (status >= 500 || /service unavailable|failed to fetch|timed out|timeout|econnrefused/i.test(message)) return { kind: "unavailable", message: "The data service is unavailable or responding too slowly. Check service health and retry." };
+  return { kind: "unknown", message };
+}
 
 function Quote({ row }: { row?: OptionRow }) {
   if (!row) return <span className="text-muted-foreground">—</span>;
@@ -94,37 +109,42 @@ export default function OptionChainTradingPanel() {
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<{ kind: "offline" | "permission" | "unavailable" | "unknown"; message: string } | null>(null);
+  const [slowLoading, setSlowLoading] = useState(false);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<{ kind: "offline" | "permission" | "unavailable" | "unknown"; message: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [closeReason, setCloseReason] = useState<"MANUAL" | "STOP_LOSS" | "TARGET" | "EXPIRY">("MANUAL");
   const refresh = useCallback(async () => {
-    if (!symbol) { setOptions([]); setIntelligence(null); setLoading(false); return; }
+    if (!symbol) { setOptions([]); setIntelligence(null); setLoadError(null); setLoading(false); return; }
     void trackOptionUnderlying({ symbol }).catch(() => undefined);
     setLoading(true);
+    setLoadError(null);
+    setSlowLoading(false);
+    const slowTimer = window.setTimeout(() => setSlowLoading(true), 2500);
     try {
-      const [chain, paperTrades, intelligenceRes, unified] = await Promise.all([
-        getOptionChain(symbol).catch(() => []),
-        getOptionPaperTrades().catch(() => []),
-        getOptionIntelligence(symbol).catch(() => null),
-        getUnifiedPaperState().catch(() => null),
+      const [chainResult, tradesResult, intelligenceResult, unifiedResult] = await Promise.allSettled([
+        getOptionChain(symbol),
+        getOptionPaperTrades(),
+        getOptionIntelligence(symbol),
+        getUnifiedPaperState(),
       ]);
-      setOptions(chain);
-      setTrades(paperTrades);
-      setIntelligence(intelligenceRes);
-      setUnified(unified);
-      const expiries = Array.from(
-        new Set(chain.map(row => row.expiry_date))
-      ).sort();
-      setExpiry(current =>
-        current && expiries.includes(current) ? current : (expiries[0] ?? "")
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Could not load live option chain"
-      );
+      if (chainResult.status === "fulfilled") {
+        const chain = chainResult.value;
+        setOptions(chain);
+        const expiries = Array.from(new Set(chain.map(row => row.expiry_date))).sort();
+        setExpiry(current => current && expiries.includes(current) ? current : (expiries[0] ?? ""));
+      } else {
+        setOptions([]);
+        setLoadError(describeUiError(chainResult.reason));
+      }
+      if (tradesResult.status === "fulfilled") setTrades(tradesResult.value);
+      if (intelligenceResult.status === "fulfilled") setIntelligence(intelligenceResult.value);
+      if (unifiedResult.status === "fulfilled") setUnified(unifiedResult.value);
     } finally {
+      window.clearTimeout(slowTimer);
       setLoading(false);
+      setSlowLoading(false);
     }
   }, [symbol]);
   useEffect(() => {
@@ -132,10 +152,17 @@ export default function OptionChainTradingPanel() {
   }, [refresh]);
   useEffect(() => {
     const query = search.trim();
-    if (!query) { setDiscoveries([]); return; }
+    setDiscoveries([]);
+    setDiscoveryError(null);
+    setDiscoveryLoading(false);
+    if (!query) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void discoverOptionInstruments(query, controller.signal).then(setDiscoveries).catch(() => undefined);
+      setDiscoveryLoading(true);
+      void discoverOptionInstruments(query, controller.signal)
+        .then(results => { if (!controller.signal.aborted) setDiscoveries(results); })
+        .catch(error => { if (!controller.signal.aborted) setDiscoveryError(describeUiError(error)); })
+        .finally(() => { if (!controller.signal.aborted) setDiscoveryLoading(false); });
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [search]);
@@ -289,9 +316,12 @@ export default function OptionChainTradingPanel() {
                   aria-label="Search underlying for option chain"
                   className="h-9 w-44 rounded-lg border border-border bg-background px-3 text-xs font-medium outline-none focus:ring-2 focus:ring-ring"
                 />
-                {discoveries.length > 0 && search.trim() && (
+                {search.trim() && (discoveryLoading || discoveryError || discoveries.length > 0 || !discoveryLoading) && (
                   <div className="absolute right-0 top-11 z-20 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-                    {discoveries.slice(0, 8).map(item => (
+                    {discoveryLoading && <div role="status" className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground"><RefreshCw size={13} className="animate-spin" />Searching stored instruments…</div>}
+                    {!discoveryLoading && discoveryError && <div role="alert" className="flex items-start gap-2 px-3 py-3 text-xs text-rose-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" /><span>{discoveryError.message}</span></div>}
+                    {!discoveryLoading && !discoveryError && discoveries.length === 0 && <div className="flex items-start gap-2 px-3 py-3 text-xs text-muted-foreground"><SearchX size={14} className="mt-0.5 shrink-0" /><span>No matching stored instruments. Try a symbol or a longer search.</span></div>}
+                    {!discoveryLoading && discoveries.slice(0, 8).map(item => (
                       <button
                         key={`${item.symbol}-${item.exchange}`}
                         onClick={() => {
@@ -300,6 +330,7 @@ export default function OptionChainTradingPanel() {
                           setSearch(next);
                           localStorage.setItem("dpredict:selected-symbol", next);
                           setDiscoveries([]);
+                          setDiscoveryError(null);
                         }}
                         className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent"
                       >
@@ -511,21 +542,101 @@ export default function OptionChainTradingPanel() {
               </tbody>
             </table>
           </div>
+        ) : loading ? (
+          <div role="status" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+            <RefreshCw size={22} className="animate-spin text-muted-foreground" />
+            <div className="text-sm font-semibold">{slowLoading ? "Still waiting for market data" : "Loading option chain"}</div>
+            <div className="max-w-md text-xs text-muted-foreground">{slowLoading ? "This request is taking longer than expected. Check the local API and collector; do not treat old quotes as live." : "Fetching persisted contracts and paper positions…"}</div>
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+            {loadError.kind === "offline" ? <WifiOff size={22} className="text-amber-400" /> : loadError.kind === "permission" ? <ShieldAlert size={22} className="text-rose-400" /> : <AlertTriangle size={22} className="text-amber-400" />}
+            <div className="text-sm font-semibold">{loadError.kind === "offline" ? "Data service unreachable" : loadError.kind === "permission" ? "Permission denied" : loadError.kind === "unavailable" ? "Service unavailable" : "Could not load option chain"}</div>
+            <div className="max-w-md text-xs text-muted-foreground">{loadError.message}</div>
+            <button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"><RefreshCw size={13} />Retry</button>
+          </div>
+        ) : rows.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1060px] text-xs">
+              <thead>
+                <tr className="border-b border-border/70 bg-muted/20 text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <th
+                    colSpan={3}
+                    className="border-r border-border/70 px-4 py-2 text-center font-semibold text-emerald-400/90"
+                  >
+                    CALLS · CE
+                  </th>
+                  <th className="w-[100px] px-3 py-2 text-center font-semibold text-foreground">
+                    STRIKE
+                  </th>
+                  <th
+                    colSpan={3}
+                    className="border-l border-border/70 px-4 py-2 text-center font-semibold text-rose-400/90"
+                  >
+                    PUTS · PE
+                  </th>
+                </tr>
+                <tr className="border-b border-border/70 text-[9px] uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3 py-2 text-right">LTP / B-A</th>
+                  <th className="px-3 py-2 text-right">OI</th>
+                  <th className="border-r border-border/70 px-3 py-2">TRADE</th>
+                  <th className="px-3 py-2 text-center">PRICE</th>
+                  <th className="border-l border-border/70 px-3 py-2 text-left">
+                    TRADE
+                  </th>
+                  <th className="px-3 py-2 text-right">OI</th>
+                  <th className="px-3 py-2">LTP / B-A</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ strike, ce, pe }) => (
+                  <tr
+                    key={strike}
+                    className="group border-b border-border/50 transition hover:bg-muted/20"
+                  >
+                    <td className="px-3 py-2.5 text-right">
+                      <Quote row={ce} />
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                      {compact(ce?.oi)}
+                    </td>
+                    <td className="border-r border-border/70 px-3 py-2.5">
+                      <div className="flex justify-end">
+                        <TradeButtons row={ce} onTrade={trade} busy={busy} />
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className="inline-flex min-w-[72px] justify-center rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs font-bold tabular-nums shadow-sm group-hover:border-foreground/20">
+                        {strike.toLocaleString("en-IN")}
+                      </span>
+                    </td>
+                    <td className="border-l border-border/70 px-3 py-2.5">
+                      <TradeButtons row={pe} onTrade={trade} busy={busy} />
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                      {compact(pe?.oi)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Quote row={pe} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-muted/20">
               <BarChart3 size={20} className="text-muted-foreground" />
             </div>
             <div>
-              <div className="text-sm font-semibold">
-                No live chain available
+              <div className="text-sm font-semibold">{options.length > 0 ? "No contracts for this expiry" : "No option-chain data yet"}</div>
+              <div className="mt-1 max-w-md text-xs text-muted-foreground">
+                {options.length > 0
+                  ? "The selected expiry has no stored contracts. Choose another expiry or refresh the chain."
+                  : `No persisted option quotes are available for ${symbol}. The collector must store a quote-backed chain before contracts can be shown. This may be normal outside market hours.`}
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                No persisted option quotes are available for {symbol}. BUY and
-                SELL appear beside each contract after the collector stores a
-                quote-backed chain. Start the collector and refresh during a
-                supported NSE option session.
-              </div>
+              <button type="button" onClick={() => void refresh()} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"><RefreshCw size={13} />Refresh data</button>
             </div>
           </div>
         )}
