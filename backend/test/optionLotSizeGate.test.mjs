@@ -125,7 +125,7 @@ assert.equal(isOptionContractExpired("not-a-date", expiryNow), true);
       if (text.includes("select * from option_paper_trades where id=$1 and status='OPEN' for update")) return { rows: [legs[0]] };
       if (text.includes("select * from option_paper_trades where strategy_id=$1 and status='OPEN'")) return { rows: legs };
       if (text.toLowerCase().includes("to_regclass")) return { rows: [{ name: "public.paper_accounts" }] };
-      if (text.includes("select cash from paper_accounts where id=1 for update")) return { rows: [{ cash: 1_000_000 }] };
+      if (text.includes("select id,cash from paper_accounts where id=1 for update")) return { rows: [{ id: 1, cash: 1_000_000 }] };
       return { rows: [] };
     },
     release() {},
