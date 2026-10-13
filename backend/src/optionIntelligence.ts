@@ -76,6 +76,7 @@ export type OptionIntelligence = {
 function finite(value: unknown): number | null { const n = Number(value); return Number.isFinite(n) ? n : null; }
 function dateOf(value: string | Date): Date | null { const d = value instanceof Date ? value : new Date(value); return Number.isFinite(d.getTime()) ? d : null; }
 function timestampFresh(value: string | Date, now: Date, maxAgeSeconds = 180): boolean { const d = dateOf(value); if (!d) return false; const age = (now.getTime() - d.getTime()) / 1000; return age >= 0 && age <= maxAgeSeconds; }
+function expiryNotPast(value: string | Date, now: Date): boolean { const expiry = dateOf(value); if (!expiry || !Number.isFinite(now.getTime())) return false; const expiryDay = Date.UTC(expiry.getUTCFullYear(), expiry.getUTCMonth(), expiry.getUTCDate()); const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()); return expiryDay >= today; }
 function round(value: number, places = 4) { const factor = 10 ** places; return Math.round(value * factor) / factor; }
 function nearest(rows: OptionLeg[], spot: number): OptionLeg | null { return rows.reduce<OptionLeg | null>((best, row) => !best || Math.abs(row.strike - spot) < Math.abs(best.strike - spot) ? row : best, null); }
 function validQuote(row: OptionLeg): boolean { return row.bid != null && row.ask != null && row.bid > 0 && row.ask >= row.bid; }
@@ -90,7 +91,7 @@ function candidateScore(row: OptionLeg, spot: number, maxLiquidity: number): num
 }
 
 export function analyzeOptionChain(symbol: string, rawRows: OptionLeg[], spotInput: number | null, now = new Date()): OptionIntelligence {
-  const rows = rawRows.filter(row => Number.isFinite(row.strike) && row.strike > 0 && (row.optionType === "CE" || row.optionType === "PE") && dateOf(row.expiryDate) && dateOf(row.timestamp));
+  const rows = rawRows.filter(row => Number.isFinite(row.strike) && row.strike > 0 && (row.optionType === "CE" || row.optionType === "PE") && expiryNotPast(row.expiryDate, now) && dateOf(row.timestamp));
   const disclaimer = "Research-only option evidence. This is not investment advice, does not predict with certainty, and never sends broker orders.";
   if (!rows.length) return { ok: false, status: "NO_CHAIN", expiry: null, asOf: null, spot: finite(spotInput), metrics: { pcr: null, atmStrike: null, atmIv: null, ivSkewPutMinusCall: null, callWall: null, putWall: null, maxPain: null, averageSpreadPct: null, liquidityScore: 0, freshnessSeconds: null }, recommendation: { action: "ABSTAIN", direction: "NEUTRAL", confidence: 0, rationale: "No persisted option-chain snapshot is available.", evidence: [], risks: ["The engine cannot identify a contract without real chain data."], contract: null, hedge: null, tradePlan: null }, candidates: [], gates: { chainAvailable: false, spotAvailable: spotInput != null }, disclaimer };
   const expiry = [...new Set(rows.map(row => row.expiryDate))].sort()[0];
