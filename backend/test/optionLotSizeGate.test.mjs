@@ -152,7 +152,7 @@ assert.equal(isOptionContractExpired("not-a-date", expiryNow), true);
       body: JSON.stringify({ reason: "MANUAL" }),
     });
     const result = await response.json();
-    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(response.status, 200, JSON.stringify({ result, clientSql }));
     assert.equal(result.strategyId, "strategy-1");
     assert.equal(result.legs.length, 2);
     assert.equal(clientSql.filter(sql => /update option_paper_trades set status='CLOSED'/i.test(sql)).length, 2);
