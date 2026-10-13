@@ -130,6 +130,10 @@ class NSEAdapter(OptionChainProvider):
             return []
         collected_now = datetime.now(timezone.utc)
         lot_sizes = self._get_lot_sizes(collected_now)
+        market_timestamp = _parse_nse_response_timestamp(raw)
+        if market_timestamp is None:
+            logger.warning("NSE option chain for %s has no trustworthy source timestamp; dropping snapshots", symbol)
+            return []
         snapshots: list[CanonicalOptionSnapshot] = []
 
         for record in raw.get("records", {}).get("data", []):
@@ -147,9 +151,9 @@ class NSEAdapter(OptionChainProvider):
                         expiry_date=expiry,
                         strike=float(strike),
                         option_type=opt_type,
-                        # NSE doesn't give a precise per-record market timestamp in this
-                        # endpoint — fall back to the response's overall timestamp field.
-                        market_timestamp=_parse_nse_response_timestamp(raw, fallback=collected_now),
+                        # Use the source's response timestamp; never stamp a stale
+                        # or undated chain with the local collection time.
+                        market_timestamp=market_timestamp,
                         ltp=leg.get("lastPrice"),
                         bid=leg.get("bidprice"),
                         ask=leg.get("askPrice"),
@@ -241,14 +245,14 @@ def _parse_nse_date(raw: str) -> date:
     return datetime.strptime(raw, "%d-%b-%Y").date()
 
 
-def _parse_nse_response_timestamp(raw: dict, fallback: datetime) -> datetime:
+def _parse_nse_response_timestamp(raw: dict) -> datetime | None:
     ts = raw.get("records", {}).get("timestamp")
     if not ts:
-        return fallback
+        return None
     try:
         # NSE format observed: '18-Sep-2026 14:32:01', stated in IST.
         naive = datetime.strptime(ts, "%d-%b-%Y %H:%M:%S")
         ist = naive.replace(tzinfo=IST)
         return ist.astimezone(timezone.utc)  # store everything in UTC
     except ValueError:
-        return fallback
+        return None
