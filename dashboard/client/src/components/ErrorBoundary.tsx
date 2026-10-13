@@ -33,11 +33,9 @@ class ErrorBoundary extends Component<Props, State> {
 
             <h2 className="text-xl mb-4">An unexpected error occurred.</h2>
 
-            <div className="p-4 w-full rounded bg-muted overflow-auto mb-6">
-              <pre className="text-sm text-muted-foreground whitespace-break-spaces">
-                {this.state.error?.stack}
-              </pre>
-            </div>
+            <p role="alert" className="mb-6 max-w-lg text-center text-sm text-muted-foreground">
+              D-Predict encountered an unexpected problem. Your saved market data and paper-trading records have not been intentionally changed by this screen. Reload the dashboard; if the problem returns, capture the time and share the application logs with support.
+            </p>
 
             <button
               onClick={() => window.location.reload()}
