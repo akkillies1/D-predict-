@@ -1,5 +1,5 @@
 """Tests for the official NSE permitted-lot CSV parser."""
-from collector.adapters.nse import _parse_lot_size_csv
+from collector.adapters.nse import _parse_lot_size_csv, _parse_nse_response_timestamp
 
 
 def test_parses_exact_symbol_and_positive_market_lot():
@@ -14,9 +14,15 @@ def test_unknown_schema_and_empty_csv_fail_closed():
 
 
 def test_conflicting_duplicate_symbol_is_not_sized():
-    csv_text = "SYMBOL,MARKET LOT\nNIFTY,25\nNIFTY,50\nRELIANCE,250\n"
+    csv_text = "SYMBOL,MARKET LOT\nNIFTY,25\nNIFTY,50\nNIFTY,75\nRELIANCE,250\n"
 
     parsed = _parse_lot_size_csv(csv_text)
 
     assert "NIFTY" not in parsed
     assert parsed["RELIANCE"] == 250
+
+
+def test_missing_or_invalid_source_timestamp_is_not_replaced_with_local_time():
+    assert _parse_nse_response_timestamp({"records": {}}) is None
+    assert _parse_nse_response_timestamp({"records": {"timestamp": "not-a-timestamp"}}) is None
+    assert _parse_nse_response_timestamp({"records": {"timestamp": "13-Oct-2026 14:32:01"}}) is not None
