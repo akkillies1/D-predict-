@@ -10,7 +10,9 @@ Treat the field-mapping section as the part most likely to need adjustment
 once you're running this against live responses.
 """
 
-from datetime import date, datetime, timezone
+import csv
+import io
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -23,8 +25,10 @@ from collector.providers.options import OptionChainProvider
 
 logger = get_logger(__name__)
 
-ADAPTER_VERSION = "nse_adapter_v2"
+ADAPTER_VERSION = "nse_adapter_v3"
 IST = ZoneInfo("Asia/Kolkata")
+LOT_SIZE_CSV_URL = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+LOT_SIZE_CACHE_TTL = timedelta(hours=1)
 
 _HEADERS = {
     "User-Agent": (
@@ -53,6 +57,8 @@ class NSEAdapter(OptionChainProvider):
         self._session = requests.Session()
         self._session.headers.update(_HEADERS)
         self._warmed_up = False
+        self._lot_sizes: dict[str, int] = {}
+        self._lot_sizes_loaded_at: datetime | None = None
 
     def _warm_up(self) -> None:
         # NSE commonly issues a session cookie on the public site before the
@@ -123,6 +129,7 @@ class NSEAdapter(OptionChainProvider):
             logger.info("nse_adapter found no option chain for %s", symbol)
             return []
         collected_now = datetime.now(timezone.utc)
+        lot_sizes = self._get_lot_sizes(collected_now)
         snapshots: list[CanonicalOptionSnapshot] = []
 
         for record in raw.get("records", {}).get("data", []):
@@ -154,13 +161,80 @@ class NSEAdapter(OptionChainProvider):
                         gamma=None,
                         theta=None,
                         vega=None,
-                        lot_size=None,
+                        # NSE's public chain payload omits lot size. Enrich only
+                        # from the official permitted-lot CSV and exact symbol match.
+                        lot_size=lot_sizes.get(symbol.strip().upper()),
                         source="nse",
                         source_version=ADAPTER_VERSION,
                     )
                 )
         logger.info("nse_adapter fetched %d option legs for %s", len(snapshots), symbol)
         return snapshots
+
+
+
+    def _get_lot_sizes(self, now_utc: datetime | None = None) -> dict[str, int]:
+        """Load official NSE permitted lot sizes with a bounded cache.
+
+        Failure to fetch or parse this report is deliberately non-fatal: chain
+        rows can still be stored for research, but their lot_size stays null.
+        """
+        now = now_utc or datetime.now(timezone.utc)
+        if self._lot_sizes_loaded_at and now - self._lot_sizes_loaded_at < LOT_SIZE_CACHE_TTL:
+            return self._lot_sizes
+        try:
+            response = self._session.get(
+                LOT_SIZE_CSV_URL,
+                headers={"Accept": "text/csv,*/*;q=0.8", "Referer": f"{config.nse_base_url}/static/products-services/equity-derivatives-contract-information"},
+                timeout=config.nse_request_timeout_seconds,
+            )
+            response.raise_for_status()
+            parsed = _parse_lot_size_csv(response.text)
+            if not parsed:
+                logger.warning("NSE permitted lot-size CSV returned no recognized rows; execution sizing remains unavailable")
+                return {}
+            self._lot_sizes = parsed
+            self._lot_sizes_loaded_at = now
+            logger.info("loaded %d underlying lot sizes from official NSE permitted-lot CSV", len(parsed))
+            return self._lot_sizes
+        except Exception as exc:
+            logger.warning("unable to load official NSE permitted lot-size CSV: %s", exc)
+            return {}
+
+
+def _parse_lot_size_csv(text: str) -> dict[str, int]:
+    """Parse recognized symbol/lot-size columns; never infer from row position."""
+    if not text or not text.strip():
+        return {}
+    reader = csv.DictReader(io.StringIO(text.lstrip("\\ufeff")))
+    if not reader.fieldnames:
+        return {}
+    normalize = lambda value: "".join(ch.lower() for ch in (value or "") if ch.isalnum())
+    columns = {normalize(name): name for name in reader.fieldnames}
+    symbol_key = next((columns[key] for key in ("symbol", "underlyingsymbol", "underlying") if key in columns), None)
+    lot_key = next((columns[key] for key in ("marketlot", "lotsize", "permittedlotsize", "lotquantity") if key in columns), None)
+    if not symbol_key or not lot_key:
+        logger.warning("unrecognized NSE permitted lot-size CSV headers: %s", reader.fieldnames)
+        return {}
+    result: dict[str, int] = {}
+    for row in reader:
+        symbol = (row.get(symbol_key) or "").strip().upper()
+        raw_lot = (row.get(lot_key) or "").strip().replace(",", "")
+        if not symbol or not raw_lot:
+            continue
+        try:
+            lot = int(float(raw_lot))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if lot > 0:
+            # Conflicting duplicate symbols are ambiguous: remove rather than
+            # choosing a row arbitrarily and potentially inventing sizing.
+            if symbol in result and result[symbol] != lot:
+                result.pop(symbol, None)
+                logger.warning("conflicting lot-size rows for NSE symbol %s; leaving unavailable", symbol)
+                continue
+            result[symbol] = lot
+    return result
 
 
 def _parse_nse_date(raw: str) -> date:
