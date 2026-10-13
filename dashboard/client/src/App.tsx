@@ -12,6 +12,7 @@ import OptionChainTradingPanel from "./components/OptionChainTradingPanel";
 import ResearchPanel from "./components/ResearchPanel";
 import ShadowTradingPanel from "./components/ShadowTradingPanel";
 import UpdateBanner from "./components/UpdateBanner";
+import NetworkStatusBanner from "./components/NetworkStatusBanner";
 import Research20Panel from "./components/Research20Panel";
 import ModelCoveragePanel from "./components/ModelCoveragePanel";
 import TradingDesk from "./components/TradingDesk";
@@ -91,6 +92,7 @@ function App() {
           </header>
 
           <UpdateBanner />
+          <NetworkStatusBanner />
 
           <main className="min-h-[calc(100vh-58px)]">
             <div className="mx-auto max-w-[1540px] px-4 pt-5 sm:px-6 lg:px-8">
