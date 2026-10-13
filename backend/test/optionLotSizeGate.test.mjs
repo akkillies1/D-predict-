@@ -102,3 +102,65 @@ assert.equal(isOptionContractExpired("not-a-date", expiryNow), true);
     globalThis.Date = RealDate;
   }
 }
+
+
+// Closing either leg of an open vertical closes every remaining leg in one transaction.
+{
+  const RealDate = globalThis.Date;
+  const fixedMillis = new RealDate("2026-10-13T04:30:00.000Z").getTime();
+  class FixedDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [fixedMillis])); }
+    static now() { return fixedMillis; }
+  }
+  globalThis.Date = FixedDate;
+  const clientSql = [];
+  const legs = [
+    { id: "trade-buy", strategy_id: "strategy-1", contract_id: "contract-buy", side: "BUY", quantity: 65, entry_price: 100, entry_fees: 20, margin_reserved: 0 },
+    { id: "trade-sell", strategy_id: "strategy-1", contract_id: "contract-sell", side: "SELL", quantity: 65, entry_price: 60, entry_fees: 20, margin_reserved: 0 },
+  ];
+  const client = {
+    async query(sql) {
+      const text = String(sql);
+      clientSql.push(text);
+      if (text.includes("select * from option_paper_trades where id=$1 and status='OPEN' for update")) return { rows: [legs[0]] };
+      if (text.includes("select * from option_paper_trades where strategy_id=$1 and status='OPEN'")) return { rows: legs };
+      if (text.includes("to_regclass('public.paper_accounts')")) return { rows: [{ name: "paper_accounts" }] };
+      if (text.includes("select cash from paper_accounts where id=1 for update")) return { rows: [{ cash: 1_000_000 }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const pool = {
+    async query(sql, params = []) {
+      if (String(sql).includes("select market_timestamp as timestamp,ltp,bid,ask from option_snapshots")) {
+        return { rows: [{ timestamp: new RealDate(fixedMillis), ltp: 80, bid: params[0] === "contract-buy" ? 80 : 40, ask: params[0] === "contract-buy" ? 81 : 41 }] };
+      }
+      return { rows: [] };
+    },
+    async connect() { return client; },
+  };
+  const app = express();
+  app.use(express.json());
+  app.use("/api/shadow", createShadowRouter(pool));
+  const server = app.listen(0);
+  try {
+    await new Promise(resolve => server.once("listening", resolve));
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/shadow/paper-trades/trade-buy/close`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "MANUAL" }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.strategyId, "strategy-1");
+    assert.equal(result.legs.length, 2);
+    assert.equal(clientSql.filter(sql => /update option_paper_trades set status='CLOSED'/i.test(sql)).length, 2);
+    assert.equal(clientSql.filter(sql => /insert into paper_option_cash_ledger/i.test(sql)).length, 2);
+    assert.equal(clientSql.filter(sql => /update paper_option_strategies set status='CLOSED'/i.test(sql)).length, 1);
+    assert.equal(clientSql.filter(sql => sql.toLowerCase() === "commit").length, 1);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    globalThis.Date = RealDate;
+  }
+}
