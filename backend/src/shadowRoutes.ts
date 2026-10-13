@@ -167,7 +167,7 @@ export async function executeOptionPaperOrder(pool: Pool | null, body: any): Pro
   const bad=validateOrder(body);
   if(bad) return {status:400,body:{ok:false,error:bad}};
   const symbol=String(body.symbol).trim().toUpperCase(),expiry=String(body.expiry??"").trim(),optionType=String(body.optionType).trim().toUpperCase(),side=String(body.side).trim().toUpperCase() as "BUY"|"SELL",strike=Number(body.strike),lots=Number(body.lots);
-  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(expiry)) return {status:400,body:{ok:false,error:"INVALID_EXPIRY"}};
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return {status:400,body:{ok:false,error:"INVALID_EXPIRY"}};
   if(!marketOpenNow()) return {status:409,body:{ok:false,error:"MARKET_CLOSED",message:"Market is closed. New option paper orders require the live session."}};
   const client=await pool.connect();
   try {
