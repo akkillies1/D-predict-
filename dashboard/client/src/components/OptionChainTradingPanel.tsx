@@ -227,7 +227,9 @@ export default function OptionChainTradingPanel() {
     try {
       const result = await closeOptionPaperTrade(id, closeReason);
       toast.success(
-        `Position closed at ${money(result.exitPrice)} · P&L ${money(result.realizedPnl)}`
+        result.strategyId
+          ? `Vertical spread closed (${result.legs?.length ?? 0} legs) · net P&L ${money(result.netPnl ?? result.realizedPnl)}`
+          : `Position closed at ${money(result.exitPrice ?? null)} · net P&L ${money(result.netPnl ?? result.realizedPnl)}`
       );
       await refresh();
     } catch (error) {
