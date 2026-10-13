@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AlertCircle,
   ArrowDownToLine,
   ArrowUpFromLine,
   BarChart3,
   Clock3,
+  Loader2,
   RefreshCw,
+  SearchX,
+  ShieldAlert,
   ShoppingCart,
+  WifiOff,
   X,
 } from "lucide-react";
 import {
@@ -19,6 +24,7 @@ import {
   placeOptionPaperStrategy,
   closeOptionPaperTrade,
   getUnifiedPaperState,
+  LocalApiError,
   type OptionRow,
   type PaperOptionTrade,
   type OptionIntelligence,
@@ -79,6 +85,20 @@ function TradeButtons({
   );
 }
 
+type RequestState = { kind: "permission" | "rate_limit" | "network" | "server" | "unknown"; message: string };
+
+function requestState(error: unknown): RequestState {
+  if (error instanceof LocalApiError) {
+    if (error.status === 401 || error.status === 403) return { kind: "permission", message: "The local API denied access to this data." };
+    if (error.status === 408 || error.status === 429 || error.status >= 500) return { kind: error.status === 429 ? "rate_limit" : "server", message: error.message || "The local service did not complete the request." };
+    return { kind: "unknown", message: error.message || "The local API rejected the request." };
+  }
+  if (error instanceof TypeError || (error instanceof Error && /network|fetch|failed to fetch|load failed|timeout/i.test(error.message))) {
+    return { kind: "network", message: "The local API could not be reached. Check that D-Predict is running." };
+  }
+  return { kind: "unknown", message: error instanceof Error ? error.message : "The option data request failed." };
+}
+
 export default function OptionChainTradingPanel() {
   const [symbol, setSymbol] = useState(
     () => localStorage.getItem("dpredict:selected-symbol") || ""
@@ -94,36 +114,42 @@ export default function OptionChainTradingPanel() {
   const [expiry, setExpiry] = useState("");
   const [lots, setLots] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
+  const [chainError, setChainError] = useState<RequestState | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<RequestState | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryRevision, setDiscoveryRevision] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [closeReason, setCloseReason] = useState<"MANUAL" | "STOP_LOSS" | "TARGET" | "EXPIRY">("MANUAL");
   const refresh = useCallback(async () => {
-    if (!symbol) { setOptions([]); setIntelligence(null); setLoading(false); return; }
+    if (!symbol) { setOptions([]); setIntelligence(null); setChainError(null); setLoading(false); return; }
     void trackOptionUnderlying({ symbol }).catch(() => undefined);
     setLoading(true);
+    setSlow(false);
+    setChainError(null);
+    const slowTimer = window.setTimeout(() => setSlow(true), 3000);
     try {
-      const [chain, paperTrades, intelligenceRes, unified] = await Promise.all([
-        getOptionChain(symbol).catch(() => []),
-        getOptionPaperTrades().catch(() => []),
-        getOptionIntelligence(symbol).catch(() => null),
-        getUnifiedPaperState().catch(() => null),
+      const [chainResult, paperTradesResult, intelligenceResult, unifiedResult] = await Promise.allSettled([
+        getOptionChain(symbol),
+        getOptionPaperTrades(),
+        getOptionIntelligence(symbol),
+        getUnifiedPaperState(),
       ]);
+      const chain = chainResult.status === "fulfilled" ? chainResult.value : [];
+      if (chainResult.status === "rejected") setChainError(requestState(chainResult.reason));
       setOptions(chain);
-      setTrades(paperTrades);
-      setIntelligence(intelligenceRes);
-      setUnified(unified);
+      if (paperTradesResult.status === "fulfilled") setTrades(paperTradesResult.value);
+      if (intelligenceResult.status === "fulfilled") setIntelligence(intelligenceResult.value);
+      if (unifiedResult.status === "fulfilled") setUnified(unifiedResult.value);
       const expiries = Array.from(
         new Set(chain.map(row => row.expiry_date))
       ).sort();
       setExpiry(current =>
         current && expiries.includes(current) ? current : (expiries[0] ?? "")
       );
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Could not load live option chain"
-      );
     } finally {
+      window.clearTimeout(slowTimer);
       setLoading(false);
     }
   }, [symbol]);
@@ -132,13 +158,18 @@ export default function OptionChainTradingPanel() {
   }, [refresh]);
   useEffect(() => {
     const query = search.trim();
-    if (!query) { setDiscoveries([]); return; }
+    if (!query) { setDiscoveries([]); setDiscoveryError(null); setDiscoveryLoading(false); return; }
     const controller = new AbortController();
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
     const timer = window.setTimeout(() => {
-      void discoverOptionInstruments(query, controller.signal).then(setDiscoveries).catch(() => undefined);
+      void discoverOptionInstruments(query, controller.signal)
+        .then(setDiscoveries)
+        .catch(error => { if (error?.name !== "AbortError") setDiscoveryError(requestState(error)); })
+        .finally(() => { if (!controller.signal.aborted) setDiscoveryLoading(false); });
     }, 250);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [search]);
+    return () => { window.clearTimeout(timer); controller.abort(); setDiscoveryLoading(false); };
+  }, [search, discoveryRevision]);
   useEffect(() => {
     const timer = window.setInterval(() => void refresh(), 15000);
     return () => window.clearInterval(timer);
@@ -148,6 +179,13 @@ export default function OptionChainTradingPanel() {
       setSymbol(localStorage.getItem("dpredict:selected-symbol") || "");
     window.addEventListener("dpredict:symbol", onSymbol);
     return () => window.removeEventListener("dpredict:symbol", onSymbol);
+  }, []);
+  useEffect(() => {
+    const onOnline = () => setOffline(false);
+    const onOffline = () => setOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => { window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); };
   }, []);
   const rows = useMemo(() => {
     const filtered = options.filter(row => row.expiry_date === expiry);
@@ -252,6 +290,9 @@ export default function OptionChainTradingPanel() {
     (n, r) => n + (r.ce ? 1 : 0) + (r.pe ? 1 : 0),
     0
   );
+  const latestQuoteTimestamp = options.reduce<string | null>((latest, row) => !latest || row.timestamp > latest ? row.timestamp : latest, null);
+  const latestQuoteAgeSeconds = latestQuoteTimestamp ? Math.max(0, (Date.now() - new Date(latestQuoteTimestamp).getTime()) / 1000) : null;
+  const staleChain = latestQuoteAgeSeconds != null && latestQuoteAgeSeconds > 600;
   const unrealized = openTrades.reduce(
     (n, t) => n + Number(t.unrealized_pnl ?? 0),
     0
@@ -289,9 +330,15 @@ export default function OptionChainTradingPanel() {
                   aria-label="Search underlying for option chain"
                   className="h-9 w-44 rounded-lg border border-border bg-background px-3 text-xs font-medium outline-none focus:ring-2 focus:ring-ring"
                 />
-                {discoveries.length > 0 && search.trim() && (
+                {search.trim() && (discoveries.length > 0 || discoveryLoading || discoveryError) && (
                   <div className="absolute right-0 top-11 z-20 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
-                    {discoveries.slice(0, 8).map(item => (
+                    {discoveryLoading ? (
+                      <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" /> Searching option-enabled instruments…</div>
+                    ) : discoveryError ? (
+                      <div className="flex items-start gap-2 px-3 py-3 text-xs text-rose-400"><AlertCircle size={14} className="mt-0.5 shrink-0" /><span>{discoveryError.message}<button onClick={() => setDiscoveryRevision(value => value + 1)} className="ml-2 underline">Retry</button></span></div>
+                    ) : discoveries.length === 0 ? (
+                      <div className="flex items-start gap-2 px-3 py-3 text-xs text-muted-foreground"><SearchX size={14} className="mt-0.5 shrink-0" /><span>No option-enabled instrument matched “{search.trim()}”.</span></div>
+                    ) : discoveries.slice(0, 8).map(item => (
                       <button
                         key={`${item.symbol}-${item.exchange}`}
                         onClick={() => {
@@ -359,6 +406,25 @@ export default function OptionChainTradingPanel() {
             </div>
           </div>
         </div>
+        {offline ? (
+          <div role="status" className="flex items-start gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-4 text-xs text-amber-200 md:px-6">
+            <WifiOff size={16} className="mt-0.5 shrink-0" />
+            <div><div className="font-semibold">You are offline</div><div className="mt-1 text-amber-200/75">Option data cannot be refreshed until the network connection returns. Existing paper positions remain local and no live order will be sent.</div></div>
+          </div>
+        ) : chainError ? (
+          <div role="alert" className={`flex items-start gap-3 border-b px-5 py-4 text-xs md:px-6 ${chainError.kind === "permission" ? "border-rose-500/20 bg-rose-500/10 text-rose-200" : "border-amber-500/20 bg-amber-500/10 text-amber-200"}`}>
+            {chainError.kind === "permission" ? <ShieldAlert size={16} className="mt-0.5 shrink-0" /> : <AlertCircle size={16} className="mt-0.5 shrink-0" />}
+            <div><div className="font-semibold">{chainError.kind === "permission" ? "Permission denied" : chainError.kind === "network" ? "Local service unavailable" : chainError.kind === "rate_limit" ? "Data provider is throttling requests" : "Option data unavailable"}</div><div className="mt-1 opacity-80">{chainError.message}</div><button onClick={() => void refresh()} className="mt-2 inline-flex items-center gap-1 rounded-md border border-current/30 px-2 py-1 text-[10px] font-semibold hover:bg-background/40"><RefreshCw size={11} /> Retry</button></div>
+          </div>
+        ) : slow ? (
+          <div role="status" className="flex items-center gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-3 text-xs text-amber-200 md:px-6"><Clock3 size={15} /> This request is taking longer than usual. The provider or local database may be slow; paper trading remains disabled until a fresh quote is verified.</div>
+        ) : loading && !options.length ? (
+          <div role="status" className="flex min-h-[180px] items-center justify-center gap-3 border-b border-border/70 px-5 py-8 text-xs text-muted-foreground md:px-6"><Loader2 size={16} className="animate-spin" /> Loading option-chain data for {symbol}…</div>
+        ) : !symbol ? (
+          <div role="status" className="flex min-h-[180px] items-center justify-center gap-3 border-b border-border/70 px-5 py-8 text-center text-xs text-muted-foreground md:px-6"><SearchX size={18} /> Search and select an underlying to inspect its option chain.</div>
+        ) : staleChain ? (
+          <div role="status" className="flex items-start gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-3 text-xs text-amber-200 md:px-6"><Clock3 size={15} className="mt-0.5 shrink-0" /><span><strong>Stale snapshot.</strong> The latest persisted chain is {Math.round(latestQuoteAgeSeconds ?? 0)} seconds old. It is shown for research only; paper orders require a fresh quote.</span></div>
+        ) : null}
         {intelligence ? (
           <div className="border-b border-border/70 bg-background/40 px-5 py-5 md:px-6">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
