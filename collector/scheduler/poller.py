@@ -77,8 +77,13 @@ class Poller:
             until = self._chain_muted_until.get(symbol)
             if until is not None and now_utc < until:
                 continue
+            # Prefer a provider with authoritative contract lot sizes when
+            # available, but retain the first valid chain for research if no
+            # provider can supply complete sizing metadata.
             snapshots = []
             valid = []
+            best_coverage = -1.0
+            best_provider = None
             provider_errors: list[str] = []
             for provider in self._option_providers:
                 if not provider.supports(symbol):
@@ -99,12 +104,31 @@ class Poller:
                     else:
                         candidate_valid.append(snap)
                 if candidate_valid:
-                    snapshots = candidate
-                    valid = candidate_valid
-                    logger.info("option provider %s supplied %d valid snapshots for %s", provider.name, len(valid), symbol)
-                    break
-                if candidate:
+                    sized = sum(
+                        snap.lot_size is not None and snap.lot_size > 0
+                        for snap in candidate_valid
+                    )
+                    coverage = sized / len(candidate_valid)
+                    if coverage > best_coverage:
+                        snapshots = candidate
+                        valid = candidate_valid
+                        best_coverage = coverage
+                        best_provider = provider.name
+                    logger.info(
+                        "option provider %s supplied %d valid snapshots for %s (lot-size coverage %.1f%%)",
+                        provider.name, len(candidate_valid), symbol, coverage * 100,
+                    )
+                    # A complete chain needs no fallback. Otherwise allow later
+                    # providers to improve contract metadata completeness.
+                    if coverage == 1.0:
+                        break
+                elif candidate:
                     provider_errors.append(f"{provider.name}: {candidate_dropped} invalid snapshots")
+            if best_provider:
+                logger.info(
+                    "selected option provider %s for %s (lot-size coverage %.1f%%)",
+                    best_provider, symbol, best_coverage * 100,
+                )
             if not valid and provider_errors:
                 logger.warning("all option providers failed/empty/invalid for %s: %s", symbol, " | ".join(provider_errors))
             self._note_chain_result(symbol, bool(valid), now_utc)
