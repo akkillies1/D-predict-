@@ -50,6 +50,23 @@ assert.equal(future.status, "RESEARCH_ONLY");
 assert.equal(future.recommendation.action, "WAIT");
 assert.equal(future.recommendation.tradePlan, null);
 
+// A fresh unrelated row must not make stale selected execution legs actionable.
+const mixedTimestamps = analyzeOptionChain(
+  "NIFTY",
+  chain.map((row, index) => ({
+    ...row,
+    timestamp: index === 3 ? now.toISOString() : "2026-10-03T08:00:00.000Z",
+  })),
+  25000,
+  now,
+);
+assert.equal(mixedTimestamps.metrics.freshnessSeconds, 0);
+assert.equal(mixedTimestamps.gates.selectedQuotesFresh, false);
+assert.equal(mixedTimestamps.gates.freshForPaper, false);
+assert.equal(mixedTimestamps.status, "RESEARCH_ONLY");
+assert.equal(mixedTimestamps.recommendation.action, "WAIT");
+assert.equal(mixedTimestamps.recommendation.tradePlan, null);
+
 const missing = analyzeOptionChain("NIFTY", [], null, now);
 assert.equal(missing.status, "NO_CHAIN");
 assert.equal(missing.recommendation.action, "ABSTAIN");
