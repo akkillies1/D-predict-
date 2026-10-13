@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import collector.scheduler.poller as poller_module
 from collector.canonical.options import CanonicalOptionSnapshot
@@ -57,17 +58,33 @@ class Persistence:
 
 
 def _poller(monkeypatch, providers):
+    """Construct a real Poller while replacing external adapters and DB."""
     monkeypatch.setattr(poller_module, "nse_session_active", lambda now=None: True)
-    poller = Poller.__new__(Poller)
-    poller._option_providers = providers
-    poller._db = Persistence()
-    poller._chain_empties = {}
-    poller._chain_muted_until = {}
+    by_name = {provider.name: provider for provider in providers}
+    monkeypatch.setattr(poller_module, "NSEAdapter", lambda: by_name["nse"])
+    monkeypatch.setattr(poller_module, "DhanOptionChainProvider", lambda: by_name["dhan"])
+    monkeypatch.setattr(poller_module, "YahooAdapter", lambda: object())
+    persistence = Persistence()
+    monkeypatch.setattr(poller_module, "PostgresPersistence", lambda: persistence)
+    monkeypatch.setattr(
+        poller_module,
+        "config",
+        SimpleNamespace(option_chain_providers=tuple(provider.name for provider in providers)),
+    )
+
+    poller = Poller()
+    assert poller._db is persistence
+    assert poller._yahoo is not None
+    assert poller._radar_cursor == 0
+    assert poller._chain_empties == {}
+    assert poller._chain_muted_until == {}
+    assert poller._option_providers == providers
     return poller
 
 
 def test_provider_with_authoritative_lot_size_beats_incomplete_first_provider(monkeypatch):
-    poller = _poller(monkeypatch, [Provider("nse", None), Provider("dhan", 25)])
+    providers = [Provider("nse", None), Provider("dhan", 25)]
+    poller = _poller(monkeypatch, providers)
 
     poller.run_option_chain_poll()
 
@@ -77,7 +94,8 @@ def test_provider_with_authoritative_lot_size_beats_incomplete_first_provider(mo
 
 
 def test_first_valid_chain_is_kept_for_research_if_no_provider_has_lot_size(monkeypatch):
-    poller = _poller(monkeypatch, [Provider("nse", None), Provider("dhan", None)])
+    providers = [Provider("nse", None), Provider("dhan", None)]
+    poller = _poller(monkeypatch, providers)
 
     poller.run_option_chain_poll()
 
