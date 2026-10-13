@@ -473,7 +473,20 @@ export default function OptionChainTradingPanel() {
             </div>
           </div>
         </div>
-        {rows.length ? (
+        {loading ? (
+          <div role="status" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+            <RefreshCw size={22} className="animate-spin text-muted-foreground" />
+            <div className="text-sm font-semibold">{slowLoading ? "Still waiting for market data" : "Loading option chain"}</div>
+            <div className="max-w-md text-xs text-muted-foreground">{slowLoading ? "This request is taking longer than expected. Check the local API and collector; do not treat old quotes as live." : "Fetching persisted contracts and paper positions…"}</div>
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+            {loadError.kind === "offline" ? <WifiOff size={22} className="text-amber-400" /> : loadError.kind === "permission" ? <ShieldAlert size={22} className="text-rose-400" /> : <AlertTriangle size={22} className="text-amber-400" />}
+            <div className="text-sm font-semibold">{loadError.kind === "offline" ? "Data service unreachable" : loadError.kind === "permission" ? "Permission denied" : loadError.kind === "unavailable" ? "Service unavailable" : "Could not load option chain"}</div>
+            <div className="max-w-md text-xs text-muted-foreground">{loadError.message}</div>
+            <button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"><RefreshCw size={13} />Retry</button>
+          </div>
+        ) : rows.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1060px] text-xs">
               <thead>
@@ -542,20 +555,7 @@ export default function OptionChainTradingPanel() {
               </tbody>
             </table>
           </div>
-        ) : loading ? (
-          <div role="status" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
-            <RefreshCw size={22} className="animate-spin text-muted-foreground" />
-            <div className="text-sm font-semibold">{slowLoading ? "Still waiting for market data" : "Loading option chain"}</div>
-            <div className="max-w-md text-xs text-muted-foreground">{slowLoading ? "This request is taking longer than expected. Check the local API and collector; do not treat old quotes as live." : "Fetching persisted contracts and paper positions…"}</div>
-          </div>
-        ) : loadError ? (
-          <div role="alert" className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
-            {loadError.kind === "offline" ? <WifiOff size={22} className="text-amber-400" /> : loadError.kind === "permission" ? <ShieldAlert size={22} className="text-rose-400" /> : <AlertTriangle size={22} className="text-amber-400" />}
-            <div className="text-sm font-semibold">{loadError.kind === "offline" ? "Data service unreachable" : loadError.kind === "permission" ? "Permission denied" : loadError.kind === "unavailable" ? "Service unavailable" : "Could not load option chain"}</div>
-            <div className="max-w-md text-xs text-muted-foreground">{loadError.message}</div>
-            <button type="button" onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"><RefreshCw size={13} />Retry</button>
-          </div>
-        ) : rows.length ? (
+        ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1060px] text-xs">
               <thead>
@@ -639,6 +639,7 @@ export default function OptionChainTradingPanel() {
               <button type="button" onClick={() => void refresh()} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"><RefreshCw size={13} />Refresh data</button>
             </div>
           </div>
+        )}
         )}
         <div className="border-t border-border/70 bg-muted/10 px-5 py-3 md:px-6">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[10px] text-muted-foreground">
