@@ -1825,11 +1825,13 @@ export default function DecisionDashboard() {
                   const freshness =
                     ageSeconds == null || !Number.isFinite(ageSeconds)
                       ? { label: "NO STAMP", color: "#70887d" }
-                      : ageSeconds <= 120
-                        ? { label: "LIVE", color: "#c8f169" }
-                        : ageSeconds <= 3600
-                          ? { label: "RECENT", color: "#e5b55f" }
-                          : { label: `STALE · ${duration(ageSeconds)} OLD`, color: "#f0776b" };
+                      : ageSeconds < 0
+                        ? { label: "FUTURE STAMP", color: "#f0776b" }
+                        : ageSeconds <= 120
+                          ? { label: "LIVE", color: "#c8f169" }
+                          : ageSeconds <= 3600
+                            ? { label: "RECENT", color: "#e5b55f" }
+                            : { label: `STALE · ${duration(ageSeconds)} OLD`, color: "#f0776b" };
                   return (
                     <>
                       <span
