@@ -6,6 +6,7 @@ import { runAgent } from "./aiAgent.js";
 import { executeAgentTool } from "./aiTools.js";
 import { APPROVAL_TIMEOUT_MS, abandonRun, settle, waitForApproval } from "./agentApprovals.js";
 import { mlFetch } from "./mlProxy.js";
+import { databaseUnavailable, failureResponse } from "./paperRoutes.js";
 import { rankDecisionCandidates } from "./decisionEngine.js";
 import {
   DEFAULT_AI_BASE_URL,
@@ -38,7 +39,13 @@ function ensureAiSchema(pool: Pool): Promise<void> {
         model text,
         enabled boolean not null default true,
         updated_at timestamptz not null default now())`)
-      .then(() => undefined);
+      .then(() => undefined)
+      .catch((error) => {
+        // Never cache a failed migration: if the database was still starting when this ran
+        // first, every later AI request would replay the same rejection until a restart.
+        schemaPromise = null;
+        throw error;
+      });
   }
   return schemaPromise;
 }
@@ -51,9 +58,13 @@ async function readSavedConfig(pool: Pool | null): Promise<{ apiKey: string; bas
     const row = result.rows[0];
     if (!row) return null;
     return { apiKey: String(row.api_key ?? ""), baseUrl: String(row.base_url ?? DEFAULT_AI_BASE_URL), model: row.model == null ? null : String(row.model), enabled: row.enabled !== false };
-  } catch {
+  } catch (error) {
     // A database without the ai_settings table (older install) must still allow
     // an environment-key configuration rather than failing the whole endpoint.
+    // An unreachable database must not pretend to be unconfigured: the settings
+    // panel would show "no key saved", and a save that omits the key resolves the
+    // stored one to an empty string and deletes it.
+    if (databaseUnavailable(error)) throw error;
     return null;
   }
 }
@@ -140,7 +151,7 @@ export function createAiRouter(pool: Pool | null): Router {
       const outcome = await executeAgentTool({ pool, mlFetch }, "decision_candidate", { symbol, horizon });
       return res.status(outcome.ok ? 200 : 422).json(outcome);
     } catch (error) {
-      return res.status(500).json({ ok: false, error: "CANDIDATE_FAILED", message: error instanceof Error ? error.message : "candidate_failed" });
+      return failureResponse(res, error, "CANDIDATE_FAILED");
     }
   });
 
@@ -158,13 +169,17 @@ export function createAiRouter(pool: Pool | null): Router {
       const ranked = rankDecisionCandidates(results as Array<ReturnType<typeof import("./decisionEngine.js").buildDecisionCandidate>>);
       return res.json({ ok: true, horizon, count: ranked.length, candidates: ranked, disclaimer: "Ranked deterministic research/paper candidates only. No broker orders are sent." });
     } catch (error) {
-      return res.status(500).json({ ok: false, error: "CANDIDATE_SCAN_FAILED", message: error instanceof Error ? error.message : "candidate_scan_failed" });
+      return failureResponse(res, error, "CANDIDATE_SCAN_FAILED");
     }
   });
 
   router.get("/status", async (req, res) => {
     if (!isLoopbackRequest(req)) return refuseRemote(req, res);
-    res.json(statusPayload(await effectiveConfig(pool)));
+    try {
+      res.json(statusPayload(await effectiveConfig(pool)));
+    } catch (error) {
+      return failureResponse(res, error, "AI_STATUS_FAILED");
+    }
   });
 
   // Upsert. An omitted apiKey keeps the stored one so the UI can change the
@@ -211,7 +226,7 @@ export function createAiRouter(pool: Pool | null): Router {
       // Never echo the key back — statusPayload carries the masked form only.
       res.json(statusPayload(await effectiveConfig(pool)));
     } catch (error) {
-      res.status(500).json({ ok: false, error: "AI_CONFIG_SAVE_FAILED", message: error instanceof Error ? error.message : "save_failed" });
+      failureResponse(res, error, "AI_CONFIG_SAVE_FAILED");
     }
   });
 
@@ -223,7 +238,7 @@ export function createAiRouter(pool: Pool | null): Router {
       await pool.query("delete from ai_settings where id = 1");
       res.json({ ...statusPayload(await effectiveConfig(pool)), removed: true });
     } catch (error) {
-      res.status(500).json({ ok: false, error: "AI_CONFIG_CLEAR_FAILED", message: error instanceof Error ? error.message : "clear_failed" });
+      failureResponse(res, error, "AI_CONFIG_CLEAR_FAILED");
     }
   });
 
@@ -231,7 +246,12 @@ export function createAiRouter(pool: Pool | null): Router {
   // shipping a hardcoded catalog that can silently go stale.
   router.get("/models", async (req, res) => {
     if (!isLoopbackRequest(req)) return refuseRemote(req, res);
-    const config = await effectiveConfig(pool);
+    let config: AiConfig;
+    try {
+      config = await effectiveConfig(pool);
+    } catch (error) {
+      return failureResponse(res, error, "AI_MODELS_CONFIG_FAILED");
+    }
     if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "Add your NVIDIA API key first." });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MODELS_TIMEOUT_MS);
@@ -262,7 +282,12 @@ export function createAiRouter(pool: Pool | null): Router {
     if (!question) return res.status(400).json({ ok: false, error: "AI_QUESTION_REQUIRED" });
     const history = sanitizeMessages(body.messages);
     const evidence = evidenceFrom(body);
-    const config = await effectiveConfig(pool);
+    let config: AiConfig;
+    try {
+      config = await effectiveConfig(pool);
+    } catch (error) {
+      return failureResponse(res, error, "AI_CHAT_CONFIG_FAILED");
+    }
     if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "The assistant needs an NVIDIA API key. Open AI Assistant settings and paste your own key — it is stored locally on this machine." });
     if (!config.enabled) return res.status(400).json({ ok: false, error: "AI_DISABLED", message: "The assistant is switched off in AI Assistant settings." });
     const model = normalizeModel(body.model) || config.model;
@@ -327,7 +352,12 @@ export function createAiRouter(pool: Pool | null): Router {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const question = String(body.question ?? "").trim().slice(0, 4000);
     if (!question) return res.status(400).json({ ok: false, error: "AI_QUESTION_REQUIRED" });
-    const config = await effectiveConfig(pool);
+    let config: AiConfig;
+    try {
+      config = await effectiveConfig(pool);
+    } catch (error) {
+      return failureResponse(res, error, "AI_AGENT_CONFIG_FAILED");
+    }
     if (!config.apiKey) return res.status(400).json({ ok: false, error: "AI_KEY_MISSING", message: "The investigation agent needs an NVIDIA API key. Open AI Assistant settings and paste your own key." });
     if (!config.enabled) return res.status(400).json({ ok: false, error: "AI_DISABLED", message: "The assistant is switched off in AI Assistant settings." });
     const model = String(body.model ?? "").trim().slice(0, 160) || config.model;
