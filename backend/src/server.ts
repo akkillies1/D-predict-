@@ -5,7 +5,7 @@ import path from "node:path";
 import pg from "pg";
 import { buildCausalTradeThesis } from "./tradeThesis.js";
 import { createShadowRouter } from "./shadowRoutes.js";
-import { createPaperRouter } from "./paperRoutes.js";
+import { createPaperRouter, attachPoolAvailabilityHandler } from "./paperRoutes.js";
 import { attachLiveHub } from "./liveHub.js";
 import { runMarketScan } from "./marketScan.js";
 import { BACKTEST_STRATEGIES, runBacktest, type BacktestStrategy } from "./backtest.js";
@@ -33,7 +33,15 @@ if (!process.env.DATABASE_URL && localStateEnv) {
 const { Pool } = pg;
 const app = express();
 const port = Number(process.env.API_PORT ?? 4100);
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: 5, ssl: process.env.DATABASE_SSL === "false" ? false : undefined }) : null;
+const pool = process.env.DATABASE_URL ? new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+  // A database that is restarting can leave a connect attempt hanging on a stale address.
+  // Bound it so a desk poll gets a retryable 503 instead of a request that never settles.
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.DATABASE_SSL === "false" ? false : undefined,
+}) : null;
+attachPoolAvailabilityHandler(pool);
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 

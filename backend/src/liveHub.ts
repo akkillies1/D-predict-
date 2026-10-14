@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import type { Pool } from "pg";
 import { WebSocketServer, WebSocket } from "ws";
-import { buildPaperState, matchRestingOrders, symbolQuote } from "./paperRoutes.js";
+import { buildPaperState, databaseUnavailable, DATABASE_UNAVAILABLE_MESSAGE, matchRestingOrders, symbolQuote } from "./paperRoutes.js";
 import { fetchAlertsSince, mapAlertRow } from "./alertFeed.js";
 
 const PUSH_INTERVAL_MS = 4000;
@@ -65,7 +65,13 @@ export function attachLiveHub(server: Server, pool: Pool | null): void {
           send(socket, { type: "quote", symbol, quote: quoteCache.get(symbol) });
         }
       }
-    } catch { /* keep the hub alive across transient query errors */ }
+    } catch (error) {
+      // Stay alive across a transient database outage, but do not leave a connected desk
+      // guessing: without this the hub simply has nothing to push and the browser keeps
+      // showing the last equity number as if it were current.
+      console.error(`[LIVE_HUB] ${error instanceof Error ? error.message : String(error)}`);
+      if (databaseUnavailable(error)) for (const socket of wss.clients) send(socket, { type: "unavailable", message: DATABASE_UNAVAILABLE_MESSAGE });
+    }
   }, PUSH_INTERVAL_MS);
   timer.unref?.();
 

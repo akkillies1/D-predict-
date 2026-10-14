@@ -66,15 +66,19 @@ export type LivePredictionResult = LivePrediction | LivePredictionUnavailable;
 export class LocalApiError extends Error {
   readonly code: string;
   readonly status: number;
-  constructor(code: string, message: string, status: number) {
+  // Whether the same request is worth retrying on its own (the local database was starting or
+  // unreachable). The backend states it explicitly; 503/5xx is the fallback when it doesn't.
+  readonly retryable: boolean;
+  constructor(code: string, message: string, status: number, retryable = status === 503 || status >= 500) {
     super(message);
     this.name = "LocalApiError";
     this.code = code;
     this.status = status;
+    this.retryable = retryable;
   }
 }
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string } | null; throw new LocalApiError(body?.error ?? `HTTP_${response.status}`, body?.message ?? body?.error ?? `API returned ${response.status}`, response.status); } return response.json() as Promise<T>; }
+async function json<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string; message?: string; retryable?: boolean } | null; throw new LocalApiError(body?.error ?? `HTTP_${response.status}`, body?.message ?? body?.error ?? `API returned ${response.status}`, response.status, body?.retryable ?? (response.status === 503 || response.status >= 500)); } return response.json() as Promise<T>; }
 export async function getLocalHealth(signal?: AbortSignal): Promise<LocalHealth> { return json<LocalHealth>(`${API_BASE}/health`, { signal }); }
 export async function getSystemReadiness(signal?: AbortSignal): Promise<SystemReadiness> { const response = await fetch(`${API_BASE}/ready`, { signal }); return response.json() as Promise<SystemReadiness>; }
 export function localApiBaseUrl() { return API_BASE; }
@@ -158,7 +162,7 @@ export async function resetPaperAccount(mode: "trades" | "all" = "trades"): Prom
 export async function getPaperAnalytics(days = 90, signal?: AbortSignal): Promise<PaperAnalytics> { return json<PaperAnalytics>(`${API_BASE}/api/paper/analytics?days=${Math.max(1, Math.min(3650, Math.round(days)))}`, { signal }); }
 export function paperExportUrl(days = 3650): string { return `${API_BASE}/api/paper/export.csv?days=${Math.max(1, Math.min(3650, Math.round(days)))}`; }
 export function paperLiveUrl(): string { return `${API_BASE.replace(/^http/, "ws").replace(/\/+$/, "")}/live`; }
-export type LiveMessage = { type: "state"; state: PaperState } | { type: "quote"; symbol: string; quote: MarketOverview } | { type: "alert"; alert: BuyAlert } | { type: string };
+export type LiveMessage = { type: "state"; state: PaperState } | { type: "quote"; symbol: string; quote: MarketOverview } | { type: "alert"; alert: BuyAlert } | { type: "unavailable"; message: string } | { type: string };
 export type BuyAlert = { id: number; symbol: string; rule: string; evidence: Record<string, unknown>; price: number | null; marketTimestamp: string | null; newToRadar: boolean; acknowledged: boolean; createdAt: string | null };
 export type AlertsResult = { ok: boolean; alerts: BuyAlert[]; unreadCount: number; error?: string; disclaimer?: string };
 export async function getAlerts(limit = 20, symbol?: string, signal?: AbortSignal): Promise<AlertsResult> {

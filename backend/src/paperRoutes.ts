@@ -44,7 +44,10 @@ function marginInfo(product: Product, gross: number, charges: number): number {
 }
 
 function ensurePaperSchema(pool: Pool): Promise<void> {
-  if (!paperSchemaPromise) paperSchemaPromise = pool.query(`
+  // A transient outage during the first DDL attempt must not be memoized: caching the
+  // rejected promise would fail every paper route forever, even after the database returns.
+  if (!paperSchemaPromise) {
+    paperSchemaPromise = pool.query(`
     create table if not exists paper_accounts (id smallint primary key default 1 check (id=1), starting_capital numeric(16,2) not null check (starting_capital>0), cash numeric(16,2) not null check (cash>=0), realized_pnl numeric(16,2) not null default 0, total_costs numeric(16,2) not null default 0, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
     create table if not exists paper_positions (account_id smallint not null references paper_accounts(id) on delete cascade, symbol text not null references instruments(symbol) on update cascade, product text not null default 'CNC' check (product in ('CNC','MIS','NRML')), quantity integer not null check (quantity>0), average_price numeric(14,4) not null check (average_price>0), cost_net numeric(18,2) not null default 0, realized_pnl numeric(16,2) not null default 0, current_price numeric(14,4), mark_timestamp timestamptz, entered_on date not null default current_date, updated_at timestamptz not null default now(), primary key(account_id,symbol,product));
     create table if not exists paper_orders (id uuid primary key default gen_random_uuid(), account_id smallint not null references paper_accounts(id) on delete cascade, symbol text not null references instruments(symbol) on update cascade, product text not null default 'CNC' check (product in ('CNC','MIS','NRML')), side text not null check(side in ('BUY','SELL','HOLD')), order_type text not null default 'MARKET' check(order_type in ('MARKET','LIMIT')), quantity integer not null check(quantity>=0), limit_price numeric(14,4), fill_price numeric(14,4), notional numeric(16,2) not null default 0, gross_amount numeric(16,2) not null default 0, net_amount numeric(16,2) not null default 0, costs jsonb not null default '{}'::jsonb, realized_pnl numeric(16,2) not null default 0, fill_timestamp timestamptz, status text not null default 'FILLED' check(status in ('FILLED','REJECTED','RECORDED','OPEN','CANCELLED')), note text not null default '', rationale text not null default '', signal_snapshot jsonb not null default '{}'::jsonb, created_at timestamptz not null default now());
@@ -75,7 +78,14 @@ function ensurePaperSchema(pool: Pool): Promise<void> {
     create index if not exists idx_paper_orders_symbol on paper_orders(symbol,created_at desc);
     create index if not exists idx_paper_orders_open on paper_orders(account_id,status) where status='OPEN';
     create index if not exists idx_paper_positions_account on paper_positions(account_id);
-  `).then(() => undefined);
+  `).then(() => undefined).catch((error) => {
+    // Never cache a failed migration: a database that was still starting would otherwise
+    // keep handing back the same rejected promise, so every paper route would stay broken
+    // long after the server came back.
+    paperSchemaPromise = null;
+    throw error;
+  });
+  }
   return paperSchemaPromise;
 }
 
@@ -171,8 +181,63 @@ async function latestSignal(client: Pool | PoolClient, symbol: string): Promise<
   const row = result.rows[0];
   return { direction: row.direction, confidence: row.confidence == null ? null : Number(row.confidence), reasonCodes: row.reason_codes ?? [], modelVersion: row.model_version, parameters: row.parameters ?? {}, timestamp: row.timestamp };
 }
-function errorResponse(res: any, status: number, error: string, message?: string) {
-  return res.status(status).json({ ok: false, error, ...(message ? { message } : {}) });
+function errorResponse(res: any, status: number, error: string, message?: string, extra?: Record<string, unknown>) {
+  return res.status(status).json({ ok: false, error, ...(message ? { message } : {}), ...(extra ?? {}) });
+}
+
+// Postgres signals a missing or unreachable server with connection-class SQLSTATEs (08xxx),
+// admin/session-shutdown states (57Pxx), and node-postgres' own socket errors. Those describe
+// infrastructure that may come back a second later, not a ledger problem, so they must not be
+// reported as a 500 the browser reads as "the desk is broken" (nor as empty data).
+const UNAVAILABLE_SQLSTATE = new Set(["08000", "08001", "08003", "08004", "08006", "08007", "53300", "53400", "53500", "57P01", "57P02", "57P03", "58000", "58030"]);
+const UNAVAILABLE_NODE_CODE = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
+const UNAVAILABLE_TEXT = /database system|server shutting down|not yet accepting|terminating connection|server closed the connection|connection terminated|could not connect|connection to .* failed|connection refused|socket hang up|timeout exceeded|no connection|getaddrinfo/i;
+export function databaseUnavailable(error: unknown): boolean {
+  const err = error as { code?: unknown; sqlState?: unknown } | null;
+  const code = typeof err?.code === "string" ? err.code.toUpperCase() : "";
+  const sqlState = typeof err?.sqlState === "string" ? err.sqlState.toUpperCase() : "";
+  if (UNAVAILABLE_SQLSTATE.has(code) || UNAVAILABLE_SQLSTATE.has(sqlState)) return true;
+  if (UNAVAILABLE_NODE_CODE.has(code)) return true;
+  return UNAVAILABLE_TEXT.test(error instanceof Error ? error.message : String(error ?? ""));
+}
+
+// Keep the provider detail in the server log and send the browser something useful that cannot
+// echo an internal host, port or credential back through the console.
+function safeDetail(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : String(error ?? "");
+  if (!detail) return fallback;
+  const stripped = detail
+    .replace(/(password|api[_-]?key|token|secret)[\s:=]+("[^"]*"|'[^']*'|\S+)/gi, "$1=[redacted]")
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g, "[db-host]")
+    .replace(/\b(?:getaddrinfo\s+)?(?:EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT)\s+\S+/gi, "[db-host]")
+    .replace(/\b[\w.-]+:\d{2,5}\b/g, "[db-host]");
+  return stripped.length > 240 ? `${stripped.slice(0, 240)}…` : stripped;
+}
+
+// Every data route answers a caught error the same way: retryable unavailability is a 503 with
+// a stable code, a real fault stays a 500 with its own code so it is never hidden from the user.
+export const DATABASE_UNAVAILABLE_MESSAGE = "The local database is starting up or unreachable. The desk retries automatically once it is back.";
+export function failureResponse(res: any, error: unknown, code: string) {
+  const detail = error instanceof Error ? error.message : String(error ?? code);
+  console.error(`[${code}] ${detail}`);
+  if (databaseUnavailable(error)) {
+    return errorResponse(res, 503, "DATABASE_UNAVAILABLE", DATABASE_UNAVAILABLE_MESSAGE, { retryable: true, source: code });
+  }
+  return errorResponse(res, 500, code, safeDetail(error, "request_failed"), { retryable: false });
+}
+
+// pg-pool re-emits a failure that lands on an *idle* client as an "error" event on the Pool
+// itself (a database restart answers 57P01 on every open connection at once). Node treats an
+// unhandled "error" event as fatal, so one dropped connection took the whole API down with it
+// and every desk poll in the restart window answered 500. Keep the process alive: pg evicts the
+// broken client, the next query opens a fresh connection, and requests in between answer
+// 503 DATABASE_UNAVAILABLE from failureResponse.
+export function attachPoolAvailabilityHandler(pool: { on: (event: "error", listener: (error: Error) => void) => unknown } | null): void {
+  if (!pool) return;
+  pool.on("error", (error) => {
+    const shaped = error as { code?: string; sqlState?: string } | null;
+    console.error(`[DATABASE_UNAVAILABLE] pooled connection failed outside a query: ${safeDetail(error, "connection error")} (code=${shaped?.sqlState ?? shaped?.code ?? "n/a"})`);
+  });
 }
 
 // Apply a fill to cash + positions for a BUY or SELL. Assumes an account row is locked
@@ -343,16 +408,19 @@ export function createPaperRouter(pool: Pool | null): Router {
   const router = Router();
 
   router.get("/state", async (_req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     try {
+      // A first launch has no paper tables at all; create them the same way the write routes
+      // do, then read. Otherwise the very first desk poll reports a schema error as a 500.
+      await ensurePaperSchema(pool);
       return res.json(await buildPaperState(pool));
     } catch (error) {
-      return errorResponse(res, 500, "PAPER_STATE_FAILED", error instanceof Error ? error.message : "state_failed");
+      return failureResponse(res, error, "PAPER_STATE_FAILED");
     }
   });
 
   router.post("/account", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const startingCapital = toMoney(req.body?.startingCapital);
     if (startingCapital == null || startingCapital <= 0 || startingCapital > 1_000_000_000) return errorResponse(res, 400, "INVALID_STARTING_CAPITAL", "Starting capital must be greater than zero.");
     try {
@@ -362,12 +430,12 @@ export function createPaperRouter(pool: Pool | null): Router {
       await pool.query(`insert into paper_accounts(id, starting_capital, cash) values($1,$2,$2)`, [ACCOUNT_ID, startingCapital]);
       return res.status(201).json({ ok: true, mode: "PAPER_RESEARCH", startingCapital, cash: startingCapital });
     } catch (error) {
-      return errorResponse(res, 500, "PAPER_ACCOUNT_CREATE_FAILED", error instanceof Error ? error.message : "account_create_failed");
+      return failureResponse(res, error, "PAPER_ACCOUNT_CREATE_FAILED");
     }
   });
 
   router.post("/deposit", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const amount = toMoney(req.body?.amount);
     if (amount == null || amount <= 0 || amount > 1_000_000_000) return errorResponse(res, 400, "INVALID_DEPOSIT", "Deposit must be a positive amount.");
     try {
@@ -376,14 +444,14 @@ export function createPaperRouter(pool: Pool | null): Router {
       if (!result.rows.length) return errorResponse(res, 409, "PAPER_ACCOUNT_NOT_INITIALIZED", "Create a virtual fund before adding money.");
       return res.json({ ok: true, mode: "PAPER_RESEARCH", deposited: amount, startingCapital: Number(result.rows[0].starting_capital), cash: Number(result.rows[0].cash) });
     } catch (error) {
-      return errorResponse(res, 500, "PAPER_DEPOSIT_FAILED", error instanceof Error ? error.message : "deposit_failed");
+      return failureResponse(res, error, "PAPER_DEPOSIT_FAILED");
     }
   });
 
   // Clear the research ledger. "trades" wipes orders + open positions and restores cash to
   // the starting fund; "all" also removes the account so a fresh fund can be opened.
   router.post("/reset", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const mode = String(req.body?.mode ?? "trades").trim().toLowerCase() === "all" ? "all" : "trades";
     try {
       await ensurePaperSchema(pool);
@@ -410,7 +478,7 @@ export function createPaperRouter(pool: Pool | null): Router {
       } catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
       return res.json({ ok: true, mode: "PAPER_RESEARCH", reset: mode });
     } catch (error) {
-      return errorResponse(res, 500, "PAPER_RESET_FAILED", error instanceof Error ? error.message : "reset_failed");
+      return failureResponse(res, error, "PAPER_RESET_FAILED");
     }
   });
 
@@ -428,7 +496,7 @@ export function createPaperRouter(pool: Pool | null): Router {
   });
 
   router.post("/orders", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const symbol = validSymbol(req.body?.symbol);
     const side = String(req.body?.side ?? "").trim().toUpperCase() as Side;
     const product = validProduct(req.body?.product);
@@ -489,22 +557,22 @@ export function createPaperRouter(pool: Pool | null): Router {
         return res.status(201).json({ ok: true, mode: "PAPER_RESEARCH", order: { id: order.rows[0].id, symbol, product, side, orderType, quantity, fillPrice: live.close, gross: result.gross, charges: result.charges, net: result.net, realizedPnl: result.realized, status: "FILLED", signalSnapshot }, cash: result.cash, quoteTimestamp: live.timestamp, message: `${side} ${product} ${orderType} filled at ${live.close.toFixed(2)} (live); charges ₹${result.charges.total.toFixed(2)}.` });
       } catch (error) { await client.query("rollback"); const code = (error as any)?.code; if (code === "INSUFFICIENT_PAPER_CASH" || code === "INSUFFICIENT_POSITION") return errorResponse(res, 409, code, (error as Error).message); throw error; } finally { client.release(); }
     } catch (error) {
-      return errorResponse(res, 500, "PAPER_ORDER_FAILED", error instanceof Error ? error.message : "order_failed");
+      return failureResponse(res, error, "PAPER_ORDER_FAILED");
     }
   });
 
   router.post("/orders/:id/cancel", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     try {
       await ensurePaperSchema(pool);
       const result = await pool.query(`update paper_orders set status='CANCELLED' where id=$1 and account_id=$2 and status='OPEN' returning id`, [req.params.id, ACCOUNT_ID]);
       if (!result.rows.length) return errorResponse(res, 409, "CANCEL_FAILED", "Only a resting (OPEN) order can be cancelled.");
       return res.json({ ok: true, id: result.rows[0].id, status: "CANCELLED" });
-    } catch (error) { return errorResponse(res, 500, "PAPER_CANCEL_FAILED", error instanceof Error ? error.message : "cancel_failed"); }
+    } catch (error) { return failureResponse(res, error, "PAPER_CANCEL_FAILED"); }
   });
 
   router.get("/analytics", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const days = Math.max(1, Math.min(3650, Math.round(Number(req.query.days) || 90)));
     try {
       await ensurePaperSchema(pool);
@@ -517,11 +585,11 @@ export function createPaperRouter(pool: Pool | null): Router {
       ]);
       const row = summary.rows[0];
       return res.json({ ok: true, periodDays: days, since, summary: { actions: Number(row.actions), trades: Number(row.trades), winningTrades: Number(row.winning_trades), winRate: Number(row.trades) ? Number(row.winning_trades) / Number(row.trades) : null, realizedPnl: Number(row.realized_pnl), notional: Number(row.notional), costs: Number(row.costs ?? 0) }, bySymbol: bySymbol.rows.map(item => ({ symbol: item.symbol, actions: Number(item.actions), buys: Number(item.buys), sells: Number(item.sells), realizedPnl: Number(item.realized_pnl), notional: Number(item.notional) })), byAction: byAction.rows.map(item => ({ side: item.side, actions: Number(item.actions), realizedPnl: Number(item.realized_pnl), averageClosedPnl: Number(item.average_closed_pnl) })), byModelDirection: byModelDirection.rows.map(item => ({ direction: item.direction, actions: Number(item.actions), realizedPnl: Number(item.realized_pnl), winningTrades: Number(item.winning_trades) })), disclaimer: "Attribution is descriptive, not proof of predictive skill. Realized P&L is net of modeled charges. HOLD actions and unclosed positions are not treated as wins or losses." });
-    } catch (error) { return errorResponse(res, 500, "PAPER_ANALYTICS_FAILED", error instanceof Error ? error.message : "analytics_failed"); }
+    } catch (error) { return failureResponse(res, error, "PAPER_ANALYTICS_FAILED"); }
   });
 
   router.get("/export.csv", async (req, res) => {
-    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED");
+    if (!pool) return errorResponse(res, 503, "DATABASE_NOT_CONFIGURED", "The local API is running without a database connection.", { retryable: false });
     const days = Math.max(1, Math.min(3650, Math.round(Number(req.query.days) || 3650)));
     const csvCell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
     try {
@@ -533,7 +601,7 @@ export function createPaperRouter(pool: Pool | null): Router {
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="dpredict-paper-trades-${days}d.csv"`);
       return res.send(`${lines.join("\n")}\n`);
-    } catch (error) { return errorResponse(res, 500, "PAPER_EXPORT_FAILED", error instanceof Error ? error.message : "export_failed"); }
+    } catch (error) { return failureResponse(res, error, "PAPER_EXPORT_FAILED"); }
   });
 
   return router;

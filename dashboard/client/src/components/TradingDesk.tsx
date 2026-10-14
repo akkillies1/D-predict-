@@ -9,6 +9,7 @@ import {
   getLiveQuote,
   getPaperEstimate,
   getPaperState,
+  LocalApiError,
   paperExportUrl,
   paperLiveUrl,
   placePaperOrder,
@@ -19,6 +20,7 @@ import type { ChargeBreakdown, LiveMessage, MarketOverview, PaperOrder, PaperPro
 import MarketSessionClock from "@/components/MarketSessionClock";
 
 const money = (value?: number | null) => value == null ? "—" : `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
+const DESK_REQUEST_TIMEOUT_MS = 20_000;
 const num = (value?: number | null) => value == null ? "—" : value.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const pct = (value?: number | null) => value == null ? "—" : `${(value * 100).toFixed(2)}%`;
 const tone = (value: number) => value > 0 ? "text-[#c8f169]" : value < 0 ? "text-[#ff9d91]" : "text-[#9fb4a8]";
@@ -54,12 +56,62 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
   symbolRef.current = symbol;
   orderTypeRef.current = orderType;
   const [connected, setConnected] = useState(false);
+  const [loadError, setLoadError] = useState<{ code: string; message: string; retryable: boolean } | null>(null);
 
-  const refresh = useCallback(async () => {
-    try { setState(await getPaperState()); } catch (error) { toast.error(error instanceof Error ? error.message : "Paper state unavailable"); }
+  const inFlight = useRef<Promise<void> | null>(null);
+  const pollFailures = useRef(0);
+  const alive = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // One request at a time, and never a state update from a desk that has unmounted. A failed
+  // poll is an error state of its own — it must not read as "you have no trades yet".
+  const reportOutage = useCallback((code: string, message: string, retryable: boolean) => {
+    // Say it once per outage: the desk retries on its own and a notice per poll is noise.
+    if (pollFailures.current === 0) toast.error(message);
+    pollFailures.current += 1;
+    setLoadError({ code, message, retryable });
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useCallback(async () => {
+    if (inFlight.current) return inFlight.current;
+    const request = (async () => {
+      // Every attempt gets its own controller and a deadline: a request that never settles
+      // would hold the single-flight lock open and the desk would stop retrying entirely.
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let timedOut = false;
+      const deadline = window.setTimeout(() => { timedOut = true; controller.abort(); }, DESK_REQUEST_TIMEOUT_MS);
+      try {
+        const next = await getPaperState(controller.signal);
+        if (!alive.current) return;
+        pollFailures.current = 0;
+        setState(next);
+        setLoadError(null);
+      } catch (error) {
+        if (!alive.current) return;
+        const apiError = error instanceof LocalApiError ? error : null;
+        if ((error as Error)?.name === "AbortError" && !timedOut) return;
+        if (timedOut) reportOutage("PAPER_STATE_TIMEOUT", "The desk is still waiting on the local database. Retrying.", true);
+        else reportOutage(apiError?.code ?? "PAPER_STATE_UNAVAILABLE", apiError?.message ?? "Paper state unavailable", apiError?.retryable ?? true);
+      } finally {
+        window.clearTimeout(deadline);
+        if (abortRef.current === controller) abortRef.current = null;
+        inFlight.current = null;
+      }
+    })();
+    inFlight.current = request;
+    return request;
+  }, [reportOutage]);
+
+  useEffect(() => {
+    alive.current = true;
+    void refresh();
+    return () => {
+      alive.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, [refresh]);
 
   // Live updates arrive over a WebSocket (server pushes state + watched quotes). Orders
   // are matched against the live market server-side, so a fill surfaces the moment the
@@ -69,37 +121,50 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
     let reconnect: number | undefined;
     let fallback: number | undefined;
     let closed = false;
+    let attempts = 0;
 
     const startFallback = () => {
       if (fallback) return;
-      fallback = window.setInterval(async () => {
+      const tick = async () => {
         void refresh();
-        try { const q = await getLiveQuote(symbolRef.current); setQuote(q); if (orderTypeRef.current === "MARKET" && q?.close != null) setLimitPrice(String(q.close)); } catch { /* keep last quote */ }
-      }, 6000);
+        try { const q = await getLiveQuote(symbolRef.current); if (!alive.current) return; setQuote(q); if (orderTypeRef.current === "MARKET" && q?.close != null) setLimitPrice(String(q.close)); } catch { /* keep last quote */ }
+        if (!alive.current) return;
+        // Back off while the desk keeps failing (6s → 12s → 24s → 60s cap) instead of hammering
+        // a database that is still starting, then return to the fast cadence once it answers.
+        fallback = window.setTimeout(tick, Math.min(60_000, 6_000 * 2 ** Math.min(3, pollFailures.current)));
+      };
+      fallback = window.setTimeout(tick, 6_000);
     };
-    const stopFallback = () => { if (fallback) { window.clearInterval(fallback); fallback = undefined; } };
+    const stopFallback = () => { if (fallback) { window.clearTimeout(fallback); fallback = undefined; } };
 
     const connect = () => {
       if (closed) return;
       try { socket = new WebSocket(paperLiveUrl()); } catch { startFallback(); return; }
       socketRef.current = socket;
-      socket.onopen = () => { setConnected(true); stopFallback(); socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current })); };
+      socket.onopen = () => { if (!alive.current) return; setConnected(true); stopFallback(); socket?.send(JSON.stringify({ type: "watch", symbol: symbolRef.current })); };
       socket.onmessage = (event) => {
+        if (!alive.current) return;
         let message: LiveMessage; try { message = JSON.parse(event.data) as LiveMessage; } catch { return; }
-        if (message.type === "state") setState((message as Extract<LiveMessage, { type: "state" }>).state);
+        if (message.type === "state") { attempts = 0; pollFailures.current = 0; setLoadError(null); setState((message as Extract<LiveMessage, { type: "state" }>).state); }
+        else if (message.type === "unavailable") {
+          // The socket is open but the desk behind it cannot read the database: say so instead
+          // of leaving the last pushed equity number on screen as if it were current.
+          const envelope = message as Extract<LiveMessage, { type: "unavailable" }>;
+          reportOutage("DATABASE_UNAVAILABLE", envelope.message, true);
+        }
         else if (message.type === "quote") {
           const envelope = message as Extract<LiveMessage, { type: "quote" }>;
           if (envelope.symbol === symbolRef.current) { setQuote(envelope.quote); if (orderTypeRef.current === "MARKET" && envelope.quote?.close != null) setLimitPrice(String(envelope.quote.close)); }
         }
       };
-      const onDown = () => { setConnected(false); startFallback(); if (!closed) reconnect = window.setTimeout(connect, 4000); };
+      const onDown = () => { setConnected(false); startFallback(); if (!closed) { reconnect = window.setTimeout(connect, Math.min(30_000, 4_000 * 2 ** attempts)); attempts += 1; } };
       socket.onclose = onDown;
       socket.onerror = () => { socket?.close(); };
     };
     connect();
 
     return () => { closed = true; if (reconnect) window.clearTimeout(reconnect); stopFallback(); socket?.close(); socketRef.current = null; };
-  }, [refresh]);
+  }, [refresh, reportOutage]);
 
   useEffect(() => { const socket = socketRef.current; if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "watch", symbol })); }, [symbol]);
 
@@ -194,7 +259,22 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-4 py-5 text-[#d7e8d9]">
-      {!account ? (
+      {loadError && !state ? (
+        <div className="rounded-2xl border border-[#5a432a] bg-[#160f0b] p-8 text-center">
+          <ShieldAlert className="mx-auto mb-3 text-[#e5b55f]" size={22} />
+          <h2 className="font-display text-xl font-semibold">Desk data unavailable</h2>
+          <p className="mx-auto mt-2 max-w-md text-xs text-[#c8b582]">{loadError.message}</p>
+          <p className="mx-auto mt-2 max-w-md text-[11px] text-[#789087]">{loadError.retryable ? "The local database is starting up or unreachable. The desk keeps retrying on its own — no order was placed and nothing you saved is lost." : "Open Data & Database to finish local setup, then retry."}</p>
+          <button onClick={() => void refresh()} className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[#345346] px-3 py-1.5 text-[11px] font-semibold text-[#c8f169] hover:bg-[#142a25]"><RefreshCw size={12} /> Try again</button>
+        </div>
+      ) : !state ? (
+        // Loading is its own state: the fund card below is for an account that genuinely
+        // does not exist yet, and flashing it at a returning user reads as lost data.
+        <div className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-8 text-center" role="status">
+          <RefreshCw className="mx-auto mb-3 animate-spin text-[#5f7a6c]" size={18} />
+          <p className="text-xs text-[#789087]">Loading your research desk…</p>
+        </div>
+      ) : !account ? (
         <div className="rounded-2xl border border-[#29463b] bg-[#0b1714] p-8 text-center">
           <h2 className="font-display text-xl font-semibold">Open a research fund</h2>
           <p className="mx-auto mt-2 max-w-md text-xs text-[#789087]">Virtual funds only. Orders fill from real persisted prices and never reach a broker. No demo trades are preloaded.</p>
@@ -205,6 +285,12 @@ export default function TradingDesk({ embedded = false }: { embedded?: boolean }
         </div>
       ) : (
         <>
+          {loadError && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#5a432a] bg-[#160f0b] px-3 py-2 text-[11px] text-[#e5b55f]">
+              <span className="inline-flex items-center gap-1.5"><ShieldAlert size={12} /> {loadError.retryable ? "Showing the last loaded desk state — the local database is temporarily unavailable and the desk is retrying." : loadError.message}</span>
+              <button onClick={() => void refresh()} className="rounded border border-[#5a432a] px-2 py-0.5 text-[10px] text-[#e5b55f] hover:bg-[#291817]">Retry now</button>
+            </div>
+          )}
           {/* Toolbar: add funds + clear ledger */}
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#789087]">
