@@ -30,7 +30,7 @@ jobs:
             $sourceRef = $tag
           } else {
             $tag = 'v${{ github.event.inputs.version }}'
-            # Pin installed source to the immutable release tag. The release is
+            # Pin installed source to the versioned release tag. The release is
             # created later in this job at github.sha, so this tag will exist
             # before anyone can install the published asset.
             $sourceRef = $tag
