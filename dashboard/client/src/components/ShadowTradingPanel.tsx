@@ -150,14 +150,16 @@ function StatCard({ label, value, tone, sub }: { label: string; value: string; t
   );
 }
 
-function KpiStrip({ summary, stats }: { summary: Summary | null; stats: Stats | null }) {
+function KpiStrip({ summary, stats, note }: { summary: Summary | null; stats: Stats | null; note?: string | null }) {
   const equity = summary?.equity ?? null;
   const capital = summary?.startingCapital ?? stats?.equity?.startingCapital ?? null;
   const returnPct = equity != null && capital ? (equity - capital) / capital : null;
   const realized = summary?.realizedPnl ?? 0;
   const unrealized = stats?.open?.unrealizedPnl ?? summary?.unrealizedPnl ?? 0;
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+    <div className="space-y-2">
+      {note && <div className="rounded-lg border border-yellow-600/40 bg-yellow-600/10 p-2 text-[11px] text-yellow-200/90">{note}</div>}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
       <StatCard label="Equity" value={money(equity)} sub={returnPct == null ? undefined : `${returnPct >= 0 ? "+" : ""}${pct(returnPct)} on capital`} />
       <StatCard label="Realized P&L" value={money(realized, true)} tone={pnlClass(realized)} sub="net of fees" />
       <StatCard label="Open P&L" value={money(unrealized, true)} tone={pnlClass(unrealized)} />
@@ -166,6 +168,7 @@ function KpiStrip({ summary, stats }: { summary: Summary | null; stats: Stats | 
       <StatCard label="Expectancy" value={money(stats?.closed.expectancy ?? null, true)} tone={pnlClass(stats?.closed.expectancy ?? 0)} sub="per closed trade" />
       <StatCard label="Max drawdown" value={stats ? money(stats.equity.maxDrawdown, true) : (summary ? money(-summary.drawdown, true) : "—")} tone={pnlClass(stats ? stats.equity.maxDrawdown : summary ? -summary.drawdown : 0)} />
       <StatCard label="Positions" value={String(stats?.open.positions ?? summary?.openTrades ?? 0)} sub={`${stats?.closed.trades ?? summary?.closedTrades ?? 0} closed`} />
+      </div>
     </div>
   );
 }
@@ -460,6 +463,7 @@ function DetailDialog({ tradeId, source, onClose }: { tradeId: string | null; so
 
 export default function ShadowTradingPanel() {
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [portfolioNote, setPortfolioNote] = useState<string | null>(null);
   const [trades, setTrades] = useState<BlotterTrade[]>([]);
   const [curve, setCurve] = useState<CurvePoint[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -480,7 +484,11 @@ export default function ShadowTradingPanel() {
         return;
       }
       const [portfolio, blotter, equity, statsBody] = await Promise.all([
-        getShadowResource<{ summary: Summary }>("/portfolio").catch(() => null),
+        getShadowResource<{ summary: Summary }>("/portfolio")
+          // A rejected portfolio is a state to explain (shadow capital not configured, or the
+          // database still starting), not an empty ledger — keep the reason for the panel.
+          .then((body) => { setPortfolioNote(null); return body; })
+          .catch((err: unknown) => { setPortfolioNote(err instanceof Error ? err.message : "Shadow portfolio unavailable"); return null; }),
         getShadowResource<{ trades: BlotterTrade[] }>("/blotter"),
         getShadowResource<{ points: CurvePoint[] }>(`/equity-curve?days=${days}`),
         getShadowResource<Stats>(`/stats?days=${days}`),
@@ -557,7 +565,7 @@ export default function ShadowTradingPanel() {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
-            <KpiStrip summary={summary} stats={stats} />
+            <KpiStrip summary={summary} stats={stats} note={portfolioNote} />
             <EquityChart points={curve} baseline={stats?.equity?.startingCapital ?? summary?.startingCapital ?? null} />
             {curve.length === 0 && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
