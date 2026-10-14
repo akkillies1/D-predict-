@@ -8,6 +8,7 @@
 // the class of bug that broke the desk once a research fund existed.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
 import express from "express";
 
 // Each case loads its own module instances: the route modules memoize their one-shot schema
@@ -343,6 +344,91 @@ async function testPaperAccountIsPostOnly() {
   } finally { await close(); }
 }
 
+// The AI advisor memoizes its own one-shot migration. A transient outage during that first
+// attempt used to be replayed forever, leaving AI configuration unavailable until a restart,
+// and a save failure during an outage read as a 500 fault. Both must now self-heal.
+async function testAiSchemaFailureIsNotCached() {
+  caseId += 1;
+  const { createAiRouter } = await import(`../dist/aiRoutes.js?case=${caseId}`);
+  // Once healthy, the stub answers the settings read with the saved row, so the recovered
+  // response has to carry the real configuration instead of the outage fallback.
+  const savedSettings = [{ base_url: "https://integrate.api.nvidia.com/v1", api_key: "nvapi-availability-probe-000000000000", model: null, enabled: true }];
+  const pool = makePool([{ match: /select base_url, api_key, model, enabled from ai_settings/, rows: savedSettings }], { healthy: false });
+  const app = express();
+  app.use(express.json());
+  app.use("/api/ai", createAiRouter(pool));
+  const server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+  const save = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/ai/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      // A structurally valid placeholder, never a real credential: the point is to get past
+      // shape validation so the database is the only thing that can fail here.
+      body: JSON.stringify({ apiKey: "nvapi-availability-probe-000000000000" }),
+    });
+    return { status: response.status, body: await response.json().catch(() => null) };
+  };
+  const status = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/ai/status`);
+    return { status: response.status, body: await response.json().catch(() => null) };
+  };
+  try {
+    const outage = await save();
+    assert.equal(outage.status, 503, "a starting database is not an AI configuration fault");
+    assert.equal(outage.body?.error, "DATABASE_UNAVAILABLE");
+    assert.equal(outage.body?.retryable, true);
+    assert.doesNotMatch(JSON.stringify(outage.body ?? ""), /ECONNREFUSED|172\.19\.0\.3|:5432/, "no connection internals in the response");
+    // The read side must not launder an outage into "no key is saved": the settings panel
+    // would then offer to overwrite it, and a save that omits the key deletes the stored one.
+    const outageStatus = await status();
+    assert.equal(outageStatus.status, 503, "an unreachable database is not an unconfigured assistant");
+    assert.equal(outageStatus.body?.error, "DATABASE_UNAVAILABLE");
+    assert.equal(outageStatus.body?.retryable, true);
+    pool.setHealthy(true);
+    const recovered = await save();
+    assert.equal(recovered.status, 200, "the rejected migration must not be replayed after the database returns");
+    const recoveredStatus = await status();
+    assert.equal(recoveredStatus.status, 200, "the assistant reports its real configuration once the database is back");
+    assert.equal(recoveredStatus.body?.configured, true);
+    assert.equal(recoveredStatus.body?.source, "saved");
+    assert.doesNotMatch(JSON.stringify(recoveredStatus.body ?? ""), /nvapi-availability-probe/, "the saved key is masked, never echoed in full");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+// The data, market, options, watchlist, signal, alert and AI routes kept their own raw 500
+// responses, so an outage still looked like a fault there. Assert the wiring, not just the
+// classifier: every one of these codes must go through the shared availability response.
+const SHARED_FAILURE_CODES = [
+  "PREDICTION_PERFORMANCE_FAILED", "INSTRUMENT_QUERY_FAILED", "INSTRUMENT_CREATE_FAILED",
+  "MARKET_QUERY_FAILED", "HISTORY_QUERY_FAILED", "BACKTEST_QUERY_FAILED", "COVERAGE_QUERY_FAILED",
+  "PERFORMANCE_QUERY_FAILED", "WATCHLIST_QUERY_FAILED", "WATCHLIST_ADD_FAILED", "WATCHLIST_REMOVE_FAILED",
+  "SIGNAL_QUERY_FAILED", "OPTION_QUERY_FAILED", "OPTION_INTELLIGENCE_FAILED", "UPDATE_CHECK_FAILED",
+  "FORECAST_FAILED", "MARKET_SCAN_FAILED", "ALERTS_QUERY_FAILED", "ALERT_ACK_FAILED",
+  "CANDIDATE_FAILED", "CANDIDATE_SCAN_FAILED", "AI_CONFIG_SAVE_FAILED", "AI_CONFIG_CLEAR_FAILED",
+  "AI_STATUS_FAILED", "AI_MODELS_CONFIG_FAILED", "AI_CHAT_CONFIG_FAILED", "AI_AGENT_CONFIG_FAILED",
+];
+
+async function testFailuresUseTheSharedAvailabilityResponse() {
+  const compiled = {
+    "server.js": await readFile(new URL("../dist/server.js", import.meta.url), "utf8"),
+    "aiRoutes.js": await readFile(new URL("../dist/aiRoutes.js", import.meta.url), "utf8"),
+  };
+  for (const code of SHARED_FAILURE_CODES) {
+    const inAny = Object.entries(compiled).filter(([, source]) => source.includes(`failureResponse(res, error, "${code}")`));
+    assert.equal(inAny.length, 1, `${code} must be routed through failureResponse exactly once per site`);
+  }
+  for (const [name, source] of Object.entries(compiled)) {
+    assert.doesNotMatch(source, /status\(500\)/, `${name} still answers a raw 500, hiding an outage as a fault`);
+  }
+  // #20's connection recycling and #25's bound connect + pool listener must coexist on main.
+  for (const option of ["connectionTimeoutMillis", "idleTimeoutMillis", "maxLifetimeSeconds", "keepAlive", "keepAliveInitialDelayMillis"]) {
+    assert.match(compiled["server.js"], new RegExp(option), `pool option ${option} must be configured`);
+  }
+  assert.match(compiled["server.js"], /attachPoolAvailabilityHandler\(pool\)/, "the idle-client listener must stay attached");
+}
+
 await testOutageClassifier();
 await testOutageIsUnavailableNotFailure();
 await testSchemaFailureStaysVisible();
@@ -352,5 +438,7 @@ await testShadowCapitalStaysUnconfigured();
 await testPoolIdleErrorKeepsTheApiAlive();
 await testHubAnnouncesOutage();
 await testPaperAccountIsPostOnly();
+await testAiSchemaFailureIsNotCached();
+await testFailuresUseTheSharedAvailabilityResponse();
 
 console.log("paper/shadow availability test passed");
