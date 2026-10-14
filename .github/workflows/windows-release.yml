@@ -43,6 +43,31 @@ jobs:
           # itself, which GitHub will not accept as target_commitish.
           "target=${{ github.sha }}" >> $env:GITHUB_OUTPUT
 
+      - name: Validate release source and launcher integrity
+        shell: powershell
+        run: |
+          $required = @(
+            'backend/src/decisionEngine.ts',
+            'backend/src/updateService.ts',
+            'backend/package.json',
+            'docker-compose.yml',
+            'd-predict.cmd',
+            'd-predict.ps1',
+            'run.ps1',
+            'dp.ps1',
+            'launch-dpredict.ps1',
+            'install-dpredict.ps1',
+            'update-dpredict.ps1',
+            'bootstrap-windows.ps1',
+            'database-setup.ps1',
+            '.env.example'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing release source or launcher input: $file" }
+          }
+          $cmd = Get-Content 'd-predict.cmd' -Raw
+          if ($cmd -notmatch 'd-predict\.ps1') { throw 'd-predict.cmd does not invoke the expected d-predict.ps1 entrypoint.' }
+
       - name: Install Inno Setup
         shell: powershell
         run: choco install innosetup -y --no-progress
