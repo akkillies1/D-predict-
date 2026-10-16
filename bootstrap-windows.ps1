@@ -194,17 +194,51 @@ function Assert-DatabaseConfiguration {
     throw "Invalid or missing DATABASE_MODE in $envFile. Run the database setup wizard before starting the bootstrap."
 }
 
+# Everything an installed tree needs to start, repair or update itself. The setup
+# package stages these, Sync-Source re-downloads them, and an uninstall can remove
+# them while leaving the cloned repository behind - so both paths check this list
+# instead of trusting that a directory existing means the install is whole.
+$RequiredSourceFiles = @(
+    'docker-compose.yml',
+    '.env.example',
+    'install-dpredict.ps1',
+    'bootstrap-windows.ps1',
+    'update-dpredict.ps1',
+    'database-setup.ps1',
+    'launch-dpredict.ps1',
+    'stop-d-predict.ps1',
+    'run.ps1',
+    'dp.ps1',
+    'd-predict.ps1',
+    'backend/package.json',
+    'dashboard/package.json',
+    'collector/requirements.txt'
+)
+
+function Get-MissingSourceFiles {
+    $found = @()
+    foreach ($relative in $RequiredSourceFiles) {
+        $candidate = $relative.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path (Join-Path $InstallDir $candidate))) { $found += $relative }
+    }
+    return $found
+}
+
+function Assert-SourceComplete([string]$Stage) {
+    $missing = Get-MissingSourceFiles
+    if ($missing.Count -eq 0) { return }
+    throw "D-Predict $Stage is incomplete: $($missing -join ', '). Close D-Predict and run the setup package again. See $LogFile"
+}
+
 function Sync-Source([string]$RequestedRef) {
-    $trainingMarker = Join-Path $InstallDir 'training'
-    $envExample = Join-Path $InstallDir '.env.example'
     $installedRef = Read-StateValue 'source-ref.txt'
-    $sourceMissing = (-not (Test-Path $trainingMarker)) -or (-not (Test-Path $envExample))
+    $missing = Get-MissingSourceFiles
     $refChanged = [bool]$RequestedRef -and ($installedRef -ne $RequestedRef)
-    if (-not $sourceMissing -and -not $refChanged -and -not $RefreshSource) {
+    if ($missing.Count -eq 0 -and -not $refChanged -and -not $RefreshSource) {
         Log "Source already present at requested ref: $installedRef"
         return
     }
-    $reason = if ($sourceMissing) { 'source is missing/incomplete' } else { "source ref changed from '$installedRef' to '$RequestedRef'" }
+    $reason = if ($missing.Count) { 'installed source is incomplete' } elseif ($refChanged) { "source ref changed from '$installedRef' to '$RequestedRef'" } else { 'refresh requested' }
     Step "Synchronizing D-Predict source ($reason)"
     $staging = "$InstallDir.__source"
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
@@ -234,11 +268,24 @@ function Sync-Source([string]$RequestedRef) {
             return
         }
         $target = Join-Path $InstallDir $_.Name
-        Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $target) {
+            Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+            # Copy-Item -Recurse into an existing directory nests the new tree one
+            # level down instead of replacing it, which silently leaves the old
+            # source in charge. A leftover target means something still holds it.
+            if (Test-Path $target) {
+                Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+                # This attempt may already have deleted part of the old tree, and the
+                # surviving files can still satisfy the manifest, so forget the ref to
+                # make the next run re-synchronize instead of skipping.
+                Remove-Item (Join-Path $StateRoot 'source-ref.txt') -Force -ErrorAction SilentlyContinue
+                throw "Could not replace '$target' because it is still in use. Exit D-Predict and stop its containers, then run Setup & Repair again. See $LogFile"
+            }
+        }
         Copy-Item $_.FullName $target -Recurse -Force
     }
     Remove-Item $staging -Recurse -Force
-    if (-not (Test-Path $envExample)) { throw 'Downloaded D-Predict source is incomplete: .env.example is missing.' }
+    Assert-SourceComplete 'source'
     if ($RequestedRef) { Set-Content -Path (Join-Path $StateRoot 'source-ref.txt') -Value $RequestedRef -Encoding UTF8 }
     Log "Source synchronization completed at ref: $RequestedRef"
 }
@@ -272,7 +319,7 @@ try {
     Ensure-Docker
     Sync-Source $SourceRef
     Set-Location $InstallDir
-    if (-not (Test-Path (Join-Path $InstallDir '.env.example'))) { throw 'D-Predict source is incomplete: .env.example is missing.' }
+    Assert-SourceComplete 'installation'
     $venv = Join-Path $InstallDir 'collector\.venv'
     $python = Join-Path $venv 'Scripts\python.exe'
     if (-not (Test-Path $python)) { Invoke-Native 'Creating Python environment' { py -3.12 -m venv $venv } }

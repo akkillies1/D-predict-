@@ -7,11 +7,16 @@ on:
       - 'installer/**'
       - 'install-dpredict.ps1'
       - 'update-dpredict.ps1'
-      - 'database-setup.ps1'
       - 'bootstrap-windows.ps1'
-      - 'dp.ps1'
-      - 'run.ps1'
+      - 'database-setup.ps1'
       - 'launch-dpredict.ps1'
+      - 'stop-d-predict.ps1'
+      - 'run.ps1'
+      - 'dp.ps1'
+      - 'd-predict.ps1'
+      - '.env.example'
+      - 'docker-compose.yml'
+      - 'backend/test/installerBundle.test.mjs'
       - '.github/workflows/windows-installer.yml'
   push:
     branches: [main]
@@ -20,9 +25,15 @@ on:
       - 'install-dpredict.ps1'
       - 'update-dpredict.ps1'
       - 'bootstrap-windows.ps1'
-      - 'dp.ps1'
-      - 'run.ps1'
+      - 'database-setup.ps1'
       - 'launch-dpredict.ps1'
+      - 'stop-d-predict.ps1'
+      - 'run.ps1'
+      - 'dp.ps1'
+      - 'd-predict.ps1'
+      - '.env.example'
+      - 'docker-compose.yml'
+      - 'backend/test/installerBundle.test.mjs'
       - '.github/workflows/windows-installer.yml'
 
 permissions:
@@ -49,15 +60,22 @@ jobs:
             'install-dpredict.ps1',
             'update-dpredict.ps1',
             'bootstrap-windows.ps1',
-            'dp.ps1',
-            'run.ps1',
-            'launch-dpredict.ps1',
             'database-setup.ps1',
+            'launch-dpredict.ps1',
+            'stop-d-predict.ps1',
+            'run.ps1',
+            'dp.ps1',
+            'd-predict.ps1',
             '.env.example',
             'docker-compose.yml',
             'backend/src/decisionEngine.ts',
             'backend/src/updateService.ts',
-            'backend/package.json'
+            'backend/package.json',
+            'dashboard/package.json',
+            'collector/requirements.txt',
+            'README.md',
+            'LOCAL_INSTALL_GUIDE.md',
+            'WINDOWS.md'
           )
           foreach ($file in $required) {
             if (-not (Test-Path $file)) { throw "Missing installer input: $file" }

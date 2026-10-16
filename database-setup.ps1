@@ -20,6 +20,70 @@ function Read-State {
   return $null
 }
 
+function Read-EnvValue([string]$Path, [string]$Key) {
+  if (-not (Test-Path $Path)) { return $null }
+  foreach ($line in (Get-Content $Path -ErrorAction SilentlyContinue)) {
+    $text = "$line".Trim()
+    if (-not $text -or $text.StartsWith('#') -or -not $text.Contains('=')) { continue }
+    $parts = $text.Split('=', 2)
+    if ($parts[0].Trim() -eq $Key) { return ($parts[1].Trim().Trim('"')) }
+  }
+  return $null
+}
+
+function Test-PostgresFolder([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+  $normalized = $Path.Replace('/', [IO.Path]::DirectorySeparatorChar)
+  return (Test-Path (Join-Path $normalized 'PG_VERSION')) -and (Test-Path (Join-Path $normalized 'base'))
+}
+
+function Get-MountedPostgresFolder {
+  # Compose bind-mounts the data root into the postgres container, so a machine
+  # that lost its configuration folder can still find its own database.
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $null }
+  $previousPreference = $ErrorActionPreference
+  try {
+    # Docker writes progress and "no such object" notices to stderr, which Windows
+    # PowerShell 5.1 would otherwise raise as terminating errors.
+    $ErrorActionPreference = 'Continue'
+    $names = @(& docker ps -a --format '{{.Names}}' --filter 'name=d-predict-postgres' 2>$null |
+      ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    foreach ($name in $names) {
+      $line = & docker inspect --format '{{range .Mounts}}{{.Source}};{{end}}' $name 2>$null | Select-Object -First 1
+      foreach ($source in @("$line" -split ';')) {
+        $candidate = $source.Trim().Trim('"')
+        if (Test-PostgresFolder $candidate) { return $candidate }
+      }
+    }
+    return $null
+  } catch {
+    return $null
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+}
+
+function Find-PreviousDataRoot {
+  # Order matters: an explicit saved value beats the live container, which beats a
+  # folder scan. Without this a reinstall after the configuration folder was
+  # removed would create an empty cluster and make old paper history look deleted.
+  foreach ($candidate in @(
+      (Read-EnvValue $ComposeEnvFile 'D_PREDICT_DATA_DIR'),
+      (Read-EnvValue $EnvFile 'D_PREDICT_DATA_DIR'),
+      (Get-MountedPostgresFolder))) {
+    if (Test-PostgresFolder $candidate) { return [IO.Path]::GetFullPath($candidate.Replace('/', [IO.Path]::DirectorySeparatorChar)) }
+  }
+  $scanned = @()
+  foreach ($drive in @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -match '^[A-Za-z]:\\$' })) {
+    foreach ($name in @('D-PredictData', 'D-Predict-Data', 'dpredictdata')) {
+      $candidate = Join-Path $drive.Root $name
+      if (Test-PostgresFolder $candidate) { $scanned += [IO.Path]::GetFullPath($candidate) }
+    }
+  }
+  if ($scanned.Count -eq 1) { return $scanned[0] }
+  return $null
+}
+
 function Add-WinForms {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
@@ -191,11 +255,29 @@ $common = @{
 }
 
 if ($mode -eq 'local_postgres') {
-  if ($NonInteractive) {
-    $dataRoot = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { Join-Path $env:USERPROFILE 'D-PredictData' }
+  $savedRoot = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { $null }
+  $defaultRoot = Join-Path $env:USERPROFILE 'D-PredictData'
+  if ($savedRoot) {
+    $dataRoot = if ($NonInteractive) { $savedRoot } else { Select-DataFolder $savedRoot }
   } else {
-    $default = if ($existing -and $existing.dataRoot) { $existing.dataRoot } else { Join-Path $env:USERPROFILE 'D-PredictData' }
-    $dataRoot = Select-DataFolder $default
+    # With no saved configuration this wizard would otherwise offer a brand-new
+    # folder and start an empty cluster, making an existing paper history look
+    # deleted. Find the database the machine already has and confirm it instead.
+    $previous = Find-PreviousDataRoot
+    if ($NonInteractive) {
+      $dataRoot = if ($previous) { $previous } else { $defaultRoot }
+    } elseif ($previous) {
+      Add-WinForms
+      $found = [System.Windows.Forms.MessageBox]::Show(
+        "D-Predict found an existing database folder on this machine:`n`n$previous`n`nYes uses that database and keeps its data.`nNo lets you choose or create a different folder.",
+        'D-Predict Database Configuration',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button1)
+      $dataRoot = if ($found -eq [System.Windows.Forms.DialogResult]::Yes) { $previous } else { Select-DataFolder $previous }
+    } else {
+      $dataRoot = Select-DataFolder $defaultRoot
+    }
   }
   if ([string]::IsNullOrWhiteSpace($dataRoot)) { throw 'A local PostgreSQL data folder is required.' }
   $dataRoot = [IO.Path]::GetFullPath($dataRoot)

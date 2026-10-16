@@ -119,24 +119,55 @@ begin
   end;
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+function RecordedDataRoot(): String;
 var
-  DataDir: String;
-  Answer: Integer;
+  Lines: TArrayOfString;
+  Index: Integer;
+  Line: String;
 begin
-  if CurUninstallStep = usUninstall then begin
-    DataDir := ExpandConstant('{localappdata}\D-Predict');
-    if DirExists(DataDir) then begin
-      Answer := MsgBox(
-        'D-Predict stores your local database and model data in:' + #13#10 +
-        DataDir + #13#10#13#10 +
-        'Do you want to DELETE this data?' + #13#10 +
-        'Choose No to keep your data for a future reinstall.',
-        mbConfirmation, MB_YESNO);
-      if Answer = IDYES then
-        DelTree(DataDir, True, True, True);
+  Result := '';
+  if not LoadStringsFromFile(ExpandConstant('{localappdata}\D-Predict\.env'), Lines) then Exit;
+  for Index := 0 to GetArrayLength(Lines) - 1 do begin
+    Line := Trim(Lines[Index]);
+    if Copy(Line, 1, 18) = 'D_PREDICT_DATA_DIR=' then begin
+      Result := RemoveQuotes(Trim(Copy(Line, 19, Length(Line))));
+      if Result <> '' then Exit;
     end;
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  StateRoot, DatabaseRoot, Message, Question: String;
+  Answer, ExecResult: Integer;
+begin
+  if CurUninstallStep <> usUninstall then Exit;
+
+  // The application runs as a Docker stack, so files can be removed while its
+  // containers keep serving the dashboard: an install that works until the next
+  // reboot and then has no launcher left. Ask the host to stop it first, and only
+  // when the saved configuration is intact, because the launcher would otherwise
+  // open the database wizard in the middle of an uninstall.
+  if FileExists(ExpandConstant('{app}\run.ps1')) and
+     FileExists(ExpandConstant('{localappdata}\D-Predict\.env')) then
+    Exec('powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\run.ps1') + '" stop',
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExecResult);
+
+  StateRoot := ExpandConstant('{localappdata}\D-Predict');
+  if not DirExists(StateRoot) then Exit;
+
+  DatabaseRoot := RecordedDataRoot();
+  if DatabaseRoot <> '' then
+    Message := 'Your database and model data live in:' + #13#10 + DatabaseRoot + #13#10 + 'This uninstall does not delete that folder.'
+  else
+    Message := 'The database folder you chose during setup is not deleted here.';
+  Question := 'D-Predict keeps its configuration and logs in:' + #13#10 + StateRoot + #13#10#13#10 + Message + #13#10#13#10;
+  Question := Question + 'Delete the configuration and logs listed above?' + #13#10 +
+    'Choose No to keep them so a reinstall reuses them.';
+  Answer := MsgBox(Question, mbConfirmation, MB_YESNO or MB_DEFBUTTON2);
+  if Answer = IDYES then
+    DelTree(StateRoot, True, True, True);
 end;
 
 [Registry]
